@@ -1,0 +1,7 @@
+#include "world.h"
+#include <talus/objectmodel/component/lens/lens.h>
+#include <talus/objectmodel/component/maincamera/maincamera.h>
+#include <talus/objectmodel/trait/authoredcomponents/authoredcomponents.h>
+#include <talus/objectmodel/trait/transientcomponents/transientcomponents.h>
+
+#include <algorithm>

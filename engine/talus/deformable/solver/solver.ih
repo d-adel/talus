@@ -1,0 +1,22 @@
+#include "solver.h"
+
+#include <talus/deformable/factor/factor.h>
+#include <talus/deformable/material/material.h>
+
+#include <Eigen/Core>
+#include <Eigen/Eigenvalues>
+#include <Eigen/Geometry>
+
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/component_wise.hpp>
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <tuple>
+#include <vector>

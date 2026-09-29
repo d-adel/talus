@@ -1,0 +1,9 @@
+#include "host.h"
+
+#include <nethost.h>
+#include <coreclr_delegates.h>
+#include <hostfxr.h>
+
+#include <windows.h>
+
+#include <cstdint>

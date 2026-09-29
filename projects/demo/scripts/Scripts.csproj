@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Scripts</AssemblyName>
+    <RootNamespace>Demo</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TalusEngineDir)' == ''">
+    <ProjectReference Include="../../../engine/managed/Talus.Engine/Talus.Engine.csproj" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TalusEngineDir)' != ''">
+    <Reference Include="Talus.Engine">
+      <HintPath>$(TalusEngineDir)/Talus.Engine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,4 @@
+#include "scenetarget.h"
+
+#include <algorithm>
+#include <cmath>

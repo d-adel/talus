@@ -1,0 +1,15 @@
+#include "joltlibrary.h"
+
+#include <Jolt/RegisterTypes.h>
+#include <Jolt/Core/Factory.h>
+
+#include <talus/physics/fieldshape/fieldshape.h>
+
+#include <cstdarg>
+#include <cstdio>
+
+#include <algorithm>
+#include <atomic>
+#include <corecrt_malloc.h>
+#include <cstdint>
+#include <cstring>

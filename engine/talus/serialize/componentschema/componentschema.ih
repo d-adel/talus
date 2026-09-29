@@ -1,0 +1,23 @@
+#include "componentschema.h"
+
+#include <talus/serialize/worldmeta/worldmeta.h>
+
+#include <talus/objectmodel/component/body/body.h>
+#include <talus/objectmodel/trait/assetbacked/assetbacked.h>
+#include <talus/objectmodel/trait/authoredcomponents/authoredcomponents.h>
+#include <talus/objectmodel/trait/requires/requires.h>
+#include <talus/objectmodel/trait/selfcontained/selfcontained.h>
+#include <talus/objectmodel/trait/valid/valid.h>
+#include <talus/objectmodel/world/world.h>
+#include <talus/objectmodel/worldcontents/worldcontents.h>
+
+#include <glaze/glaze.hpp>
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <string>
+#include <type_traits>
+#include <utility>

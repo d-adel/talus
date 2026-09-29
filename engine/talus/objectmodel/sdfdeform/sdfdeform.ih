@@ -1,0 +1,6 @@
+#include "sdfdeform.h"
+
+#include <talus/field/deform/deform.h>
+#include <talus/objectmodel/component/deformablebody/deformablebody.h>
+#include <talus/objectmodel/component/rigidbody/rigidbody.h>
+#include <talus/objectmodel/component/staticbody/staticbody.h>

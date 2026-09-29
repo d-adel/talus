@@ -1,0 +1,6 @@
+#include "sdfresidency.h"
+
+#include <talus/objectmodel/component/bakedvolume/bakedvolume.h>
+#include <talus/objectmodel/component/sharedfield/sharedfield.h>
+
+#include <algorithm>

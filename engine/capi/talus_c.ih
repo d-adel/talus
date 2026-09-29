@@ -1,0 +1,27 @@
+#include "talus_c.h"
+
+#include <capi/win32keys/win32keys.h>
+
+#include <talus/script/api/api.h>
+
+#include <capi/session/session.h>
+#include <capi/win32windowsystem/win32windowsystem.h>
+
+#include <talus/objectmodel/worldcontents/worldcontents.h>
+#include <talus/serialize/componentschema/componentschema.h>
+#include <talus/serialize/editorstate/editorstate.h>
+#include <talus/serialize/materialfile/materialfile.h>
+#include <talus/serialize/project/project.h>
+#include <talus/serialize/textfile/textfile.h>
+
+#include <algorithm>
+#include <cstring>
+#include <exception>
+#include <stdexcept>
+#include <memory>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>

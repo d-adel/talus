@@ -1,0 +1,62 @@
+#include "runtime.h"
+
+#include <talus/objectmodel/component/bodyid/bodyid.h>
+#include <talus/objectmodel/component/rigidbody/rigidbody.h>
+#include <talus/objectmodel/component/staticbody/staticbody.h>
+#include <talus/objectmodel/component/support/support.h>
+#include <talus/objectmodel/component/massscale/massscale.h>
+
+#include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Body/BodyManager.h>
+#include <Jolt/Physics/Body/BodyType.h>
+#include <Jolt/Physics/Body/MotionProperties.h>
+#include <Jolt/Physics/Body/MotionQuality.h>
+#include <Jolt/Physics/EActivation.h>
+#include <Jolt/Physics/PhysicsSettings.h>
+
+#include <Jolt/Physics/Collision/BroadPhase/BroadPhase.h>
+#include <Jolt/Physics/Collision/BroadPhase/BroadPhaseQuery.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollideSoftBodyVertexIterator.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
+#include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
+#include <Jolt/Physics/Collision/TransformedShape.h>
+#include <Jolt/Core/StridedPtr.h>
+#include <Jolt/Geometry/AABox.h>
+#include <Jolt/Geometry/Plane.h>
+
+#include <talus/deformable/material/material.h>
+#include <talus/deformable/solver/solver.h>
+#include <talus/objectmodel/component/deformablebody/deformablebody.h>
+#include <talus/objectmodel/impact/impact.h>
+#include <talus/objectmodel/instantiate/instantiate.h>
+#include <talus/physics/fieldshape/fieldshape.h>
+
+#include <talus/core/config/config.h>
+#include <talus/field/analytic/analytic.h>
+#include <talus/field/deform/deform.h>
+#include <talus/objectmodel/component/sharedfield/sharedfield.h>
+
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/component_wise.hpp>
+
+#include <algorithm>
+#include <atomic>
+#include <bit>
+#include <cmath>
+#include <exception>
+#include <functional>
+#include <numeric>
+#include <optional>
+#include <thread>
+
+#include <xmmintrin.h>
+
+#include <limits>
+#include <stdexcept>
+#include <iostream>
+#include <utility>

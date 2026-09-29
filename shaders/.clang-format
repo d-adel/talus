@@ -1,0 +1,14 @@
+# Shaders format with the C++ style from the repo root, plus one addition.
+#
+# clang-format has no GLSL mode and parses these as C++, where
+# "uniform Block { ... } instance;" is not a declaration it recognises: it
+# reads the block as a bare compound statement and strands "instance;" on its
+# own line. Telling it those two qualifiers stand in for "struct" restores the
+# shape it already knows, "struct Name { ... } instance;".
+#
+# Needs clang-format 17 or newer; the Macros key is an error on older ones, so
+# .vscode/settings.json pins the binary rather than taking whatever is on PATH.
+BasedOnStyle: InheritParentConfig
+Macros:
+  - uniform=struct
+  - buffer=struct

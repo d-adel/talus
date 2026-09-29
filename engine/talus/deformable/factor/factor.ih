@@ -1,0 +1,14 @@
+#include "factor.h"
+
+#include <talus/deformable/material/material.h>
+
+#include <Eigen/SparseCholesky>
+#include <Eigen/SparseCore>
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <immintrin.h>
+#include <span>
+#include <vector>

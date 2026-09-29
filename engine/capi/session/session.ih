@@ -1,0 +1,32 @@
+#include "session.h"
+
+#include <talus/objectmodel/component/lens/lens.h>
+#include <talus/objectmodel/worldquery/worldquery.h>
+#include <talus/package/package.h>
+#include <talus/objectmodel/defaultworld/defaultworld.h>
+#include <talus/renderer/bindgroups/bindgroups.h>
+#include <talus/renderer/vertex/vertex.h>
+#include <talus/core/telemetry/telemetry.h>
+#include <talus/objectmodel/component/pose/pose.h>
+#include <talus/serialize/materialfile/materialfile.h>
+#include <talus/serialize/project/project.h>
+#include <talus/serialize/textfile/textfile.h>
+#include <talus/serialize/worldfile/worldfile.h>
+
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/quaternion.hpp>
+
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstring>
+
+#include <optional>
+#include <exception>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <algorithm>
+#include <system_error>
+#include <utility>
+#include <vector>

@@ -1,0 +1,4 @@
+#include "lookthrough.h"
+
+#include <talus/objectmodel/component/lens/lens.h>
+#include <talus/objectmodel/component/pose/pose.h>

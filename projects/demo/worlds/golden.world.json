@@ -1,0 +1,573 @@
+{
+  "version": 1,
+  "entities": [{
+    "pose": {
+      "position": [-1.365, -1.55, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }, {
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0.28725523, -0.15393919, -0.044730455, 1],
+        "shape": [0.35, 0, 0, 0],
+        "shapeConfig": [0, 0, 3, 0],
+        "bounds": [0.28725523, 0.15393919, 0.044730455, 0.35]
+      },
+      "material": 11469614539487796753
+    }, {
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0.12451053, 0.14212155, 0.36053908, 1],
+        "shape": [0.35, 0, 0, 0],
+        "shapeConfig": [0, 0, 3, 0],
+        "bounds": [0.12451053, -0.14212155, -0.36053908, 0.35]
+      },
+      "material": 11469614539487796753
+    }, {
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, 0.038234144, 0.43818238, -0.13419133, 1],
+        "shape": [0.35, 0, 0, 0],
+        "shapeConfig": [0, 0, 3, 0],
+        "bounds": [-0.038234144, -0.43818238, 0.13419133, 0.35]
+      },
+      "material": 11469614539487796753
+    }, {
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, 0.200979, -0.16575688, 0.2710782, 1],
+        "shape": [0.35, 0, 0, 0],
+        "shapeConfig": [0, 0, 3, 0],
+        "bounds": [-0.200979, 0.16575688, -0.2710782, 0.35]
+      },
+      "material": 11469614539487796753
+    }, {
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, 0.36372384, 0.13030386, -0.22365224, 1],
+        "shape": [0.35, 0, 0, 0],
+        "shapeConfig": [0, 0, 3, 0],
+        "bounds": [-0.36372384, -0.13030386, 0.22365224, 0.35]
+      },
+      "material": 11469614539487796753
+    }, {
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0.3735317, 0.42636478, 0.18161729, 1],
+        "shape": [0.35, 0, 0, 0],
+        "shapeConfig": [0, 0, 3, 0],
+        "bounds": [0.3735317, -0.42636478, -0.18161729, 0.35]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [-0.45500004, -1.55, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [0.45499992, -1.55, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [1.365, -1.55, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [-1.365, -0.64, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [-0.45500004, -0.64, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [0.45499992, -0.64, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [1.365, -0.64, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [-1.365, 0.26999998, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [-0.45500004, 0.26999998, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [0.45499992, 0.26999998, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [1.365, 0.26999998, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [-1.365, 1.1800001, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [-0.45500004, 1.1800001, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [0.45499992, 1.1800001, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [1.365, 1.1800001, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [-1.365, 2.09, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [-0.45500004, 2.09, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [0.45499992, 2.09, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [1.365, 2.09, -0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "rigidBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1],
+        "shape": [0.45, 0.45, 0.45, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [0, 0, -0, 0.7794228]
+      },
+      "material": 11469614539487796753
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [0, -2, 0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [128, 128, 128]
+    },
+    "staticBody": {
+
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0.5, -0, 1],
+        "shape": [10, 0.5, 10, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [-0, -0.5, -0, 14.150971]
+      },
+      "material": 5444297618490564435
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [-3.515, -2, 0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "grid": {
+      "resolution": [65, 65, 65]
+    },
+    "staticBody": {
+      
+    },
+    "primitives": [{
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, -0.6, -0, 1],
+        "shape": [0.5, 0.6, 0.5, 0],
+        "shapeConfig": [1, 0, 0, 0],
+        "bounds": [-0, 0.6, -0, 0.92736185]
+      },
+      "material": 5444297618490564435
+    }, {
+      "primitive": {
+        "inverseModel": [1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, -1.47, -0, 1],
+        "shape": [0.45, 0, 0, 0.15],
+        "shapeConfig": [0, 0, 1, 0],
+        "bounds": [-0, 1.47, -0, 0.6]
+      },
+      "material": 3056980637089549575
+    }],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [4.0150003, -1.892, 0],
+      "rotation": [0.35355335, -0.35355335, -0.61237246, -0.61237246]
+    },
+    "mesh": 14245873093005299565,
+    "material": 16364492891285643480,
+    "primitives": [],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [0, 0, 0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "directionalLight": {
+      "direction": [0.4, 1, 0.6],
+      "ambient": 0.06
+    },
+    "primitives": [],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [0, 2.4048538, 6.2418957],
+      "rotation": [0.9848077, -0.17364818, 0, 0]
+    },
+    "lens": {
+      "verticalFov": 70,
+      "nearPlane": 0.1,
+      "farPlane": 10000
+    },
+    "mainCamera": {},
+    "primitives": [],
+    "dynamic": []
+  }, {
+    "pose": {
+      "position": [0, 0, 0],
+      "rotation": [1, 0, 0, 0]
+    },
+    "environment": {
+      "skyTop": [0.385, 0.454, 0.55],
+      "skyHorizon": [0.6463, 0.6558, 0.6708],
+      "groundBottom": [0.2, 0.169, 0.133],
+      "skyCurve": 4,
+      "groundCurve": 30,
+      "ambientEnergy": 0.55,
+      "occlusionStrength": 1.4,
+      "exposure": 1
+    },
+    "primitives": [],
+    "dynamic": []
+  }],
+  "componentTypes": []
+}

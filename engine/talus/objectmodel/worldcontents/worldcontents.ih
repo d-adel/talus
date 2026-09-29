@@ -1,0 +1,6 @@
+#include <talus/objectmodel/worldcontents/worldcontents.h>
+
+#include <talus/objectmodel/trait/authoredcomponents/authoredcomponents.h>
+#include <talus/objectmodel/trait/transientcomponents/transientcomponents.h>
+
+#include <algorithm>

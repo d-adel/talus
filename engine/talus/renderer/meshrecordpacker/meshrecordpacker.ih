@@ -1,0 +1,6 @@
+#include "meshrecordpacker.h"
+
+#include <talus/objectmodel/component/material/material.h>
+#include <talus/objectmodel/component/mesh/mesh.h>
+#include <talus/objectmodel/component/pose/pose.h>
+#include <talus/objectmodel/component/renderpose/renderpose.h>

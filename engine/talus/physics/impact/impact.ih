@@ -1,0 +1,11 @@
+#include "impact.h"
+
+#include <Jolt/Physics/Body/Body.h>
+#include <Jolt/Physics/Collision/EstimateCollisionResponse.h>
+
+#include <talus/field/sampledsdf/sampledsdf.h>
+#include <talus/physics/fieldshape/fieldshape.h>
+
+#include <algorithm>
+#include <cmath>
+#include <utility>

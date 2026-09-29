@@ -1,0 +1,4 @@
+#include "framepacker.h"
+
+#include <talus/objectmodel/component/environment/environment.h>
+#include <talus/objectmodel/worldquery/worldquery.h>

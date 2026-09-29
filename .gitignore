@@ -1,0 +1,15 @@
+/build-dev
+/build-release
+build/
+build-*/
+out/
+.vs/
+
+bin/
+obj/
+
+*.user
+
+projects/*/scripts/Scripts.dll
+projects/*/scripts/Scripts.pdb
+worktrees/

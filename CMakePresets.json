@@ -1,0 +1,76 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "ninja-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_MSVC_DEBUG_INFORMATION_FORMAT": "Embedded"
+      }
+    },
+    {
+      "name": "dev",
+      "displayName": "Dev (build-dev)",
+      "description": "Validation layers on, checked iterators on. The tree the goldens and IntelliSense are wired to.",
+      "inherits": "ninja-base",
+      "binaryDir": "${sourceDir}/build-dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release (build-release)",
+      "description": "Optimised, no validation layers. The only tree any performance number should ever come from.",
+      "inherits": "ninja-base",
+      "binaryDir": "${sourceDir}/build-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "displayName": "Dev",
+      "configurePreset": "dev"
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "configurePreset": "release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "displayName": "Dev",
+      "configurePreset": "dev",
+      "execution": {
+        "jobs": 16
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "Goldens included: they pass here too, and the suite runs in a quarter of the time.",
+      "configurePreset": "release",
+      "execution": {
+        "jobs": 16
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

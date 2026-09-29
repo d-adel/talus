@@ -1,0 +1,6 @@
+#include "analytic.h"
+
+#include <talus/field/shapekind/shapekind.h>
+
+#include <algorithm>
+#include <cmath>

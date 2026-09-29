@@ -1,0 +1,96 @@
+#version 450
+
+const int MAX_SDF_VOLUMES = TALUS_MAX_SDF_VOLUMES;
+const uint BRICK_CELLS = TALUS_BRICK_CELLS;
+
+layout(r32f,
+       set = 0,
+       binding = 4) uniform readonly image3D distanceVolume[MAX_SDF_VOLUMES];
+
+layout(std430, set = 0, binding = 6) buffer BrickBounds {
+  float values[];
+} brickBounds;
+
+layout(push_constant) uniform BakeParams {
+  vec4 origin;
+  vec4 voxelSize;
+  uvec4 resolution;
+  uvec4 volume;
+} params;
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+void main() {
+  const uvec3 cells = params.resolution.xyz - 1u;
+  const uvec3 brickResolution = (cells + BRICK_CELLS - 1u) / BRICK_CELLS;
+
+  if (params.volume.w == 1u) {
+    if (any(greaterThan(gl_GlobalInvocationID, uvec3(0u)))) {
+      return;
+    }
+
+    const uint count =
+      brickResolution.x * brickResolution.y * brickResolution.z;
+
+    float worst = 0.0;
+
+    for (uint i = 0u; i < count; ++i) {
+      worst = max(worst, brickBounds.values[params.volume.z + 1u + i]);
+    }
+
+    brickBounds.values[params.volume.z] = worst;
+
+    return;
+  }
+
+  const uvec3 brick = gl_GlobalInvocationID;
+
+  if (any(greaterThanEqual(brick, brickResolution))) {
+    return;
+  }
+
+  const uvec3 base = brick * BRICK_CELLS;
+
+  const uvec3 start = max(base, uvec3(1u)) - 1u;
+  const uvec3 end = min(base + BRICK_CELLS + 1u, cells);
+
+  const uint volume = params.volume.x;
+
+  float worst = 0.0;
+
+  for (uint z = start.z; z < end.z; ++z) {
+    for (uint y = start.y; y < end.y; ++y) {
+      for (uint x = start.x; x < end.x; ++x) {
+        float corner[8];
+
+        for (uint i = 0u; i < 8u; ++i) {
+          const uvec3 offset = uvec3(i & 1u, (i >> 1) & 1u, (i >> 2) & 1u);
+
+          corner[i] =
+            imageLoad(distanceVolume[volume], ivec3(uvec3(x, y, z) + offset)).r;
+        }
+
+        vec3 slope = vec3(0.0);
+
+        for (uint i = 0u; i < 8u; ++i) {
+          if ((i & 1u) == 0u) {
+            slope.x = max(slope.x, abs(corner[i | 1u] - corner[i]));
+          }
+          if ((i & 2u) == 0u) {
+            slope.y = max(slope.y, abs(corner[i | 2u] - corner[i]));
+          }
+          if ((i & 4u) == 0u) {
+            slope.z = max(slope.z, abs(corner[i | 4u] - corner[i]));
+          }
+        }
+
+        worst = max(worst, length(slope / params.voxelSize.xyz));
+      }
+    }
+  }
+
+  const uint index =
+    brick.x + brickResolution.x * (brick.y + brickResolution.y * brick.z);
+
+  brickBounds.values[params.volume.z + 1u + index] = worst;
+}
