@@ -1,7 +1,7 @@
 FetchContent_Declare(
   Catch2
-  GIT_REPOSITORY https://github.com/catchorg/Catch2
-  GIT_TAG        v3.7.1
+  URL https://github.com/catchorg/Catch2/archive/refs/tags/v3.7.1.tar.gz
+  URL_HASH SHA256=c991b247a1a0d7bb9c39aa35faf0fe9e19764213f28ffba3109388e62ee0269c
   SYSTEM
 )
 
@@ -121,7 +121,6 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/investigations")
         PROPERTIES
             LABELS tools
             TIMEOUT 600
-            RUN_SERIAL TRUE
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
     )
 
@@ -135,7 +134,6 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/investigations")
         PROPERTIES
             LABELS tools
             TIMEOUT 600
-            RUN_SERIAL TRUE
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
     )
 endif()
@@ -385,7 +383,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -399,7 +396,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -413,7 +409,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -427,7 +422,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -441,7 +435,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -455,7 +448,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -469,7 +461,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -483,7 +474,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -497,7 +487,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -511,7 +500,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -525,7 +513,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -539,7 +526,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -553,7 +539,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -567,7 +552,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -581,7 +565,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -595,7 +578,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -609,7 +591,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -623,7 +604,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -637,7 +617,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -651,7 +630,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -665,7 +643,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -679,7 +656,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -693,7 +669,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -707,7 +682,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -721,7 +695,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -735,7 +708,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -749,7 +721,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -763,7 +734,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -777,7 +747,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -791,7 +760,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -805,7 +773,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -819,7 +786,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -833,7 +799,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -847,7 +812,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -861,7 +825,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -875,7 +838,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -889,7 +851,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -903,7 +864,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -917,7 +877,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -931,7 +890,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -945,7 +903,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -959,7 +916,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -973,7 +929,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -987,7 +942,6 @@ set_tests_properties(
     PROPERTIES
         LABELS tools
         TIMEOUT 600
-        RUN_SERIAL TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
 )
 
@@ -1016,7 +970,6 @@ foreach(WINDOW_CASE
         PROPERTIES
             LABELS tools
             TIMEOUT 1200
-            RUN_SERIAL TRUE
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:talus_c>"
     )
 endforeach()

@@ -16,8 +16,8 @@ endif()
 include(FetchContent)
 FetchContent_Declare(
   glfw
-  GIT_REPOSITORY https://github.com/glfw/glfw
-  GIT_TAG        3.4
+  URL https://github.com/glfw/glfw/archive/refs/tags/3.4.tar.gz
+  URL_HASH SHA256=c038d34200234d071fae9345bc455e4a8f2f544ab60150765d7704e08f3dac01
 )
 set(GLFW_BUILD_DOCS OFF)
 set(GLFW_BUILD_TESTS OFF)
@@ -79,18 +79,18 @@ file(GLOB SHADER_INCLUDES CONFIGURE_DEPENDS "${SHADER_SOURCE_DIR}/*.glsl")
 string(JOIN " " SHADER_DEFINES_ARGS ${SHADER_DEFINES})
 FetchContent_Declare(
   glm
-  GIT_REPOSITORY https://github.com/g-truc/glm
-  GIT_TAG        0af55ccecd98d4e5a8d1fad7de25ba429d60e863
+  URL https://github.com/g-truc/glm/archive/0af55ccecd98d4e5a8d1fad7de25ba429d60e863.tar.gz
+  URL_HASH SHA256=e7f187d83523f505eb38dd25d297ea6c0d4ed856d733e808f18253f5a8fa88a0
 )
 FetchContent_Declare(
     stb
-    GIT_REPOSITORY  https://github.com/nothings/stb
-    GIT_TAG         31c1ad37456438565541f4919958214b6e762fb4
+    URL https://github.com/nothings/stb/archive/31c1ad37456438565541f4919958214b6e762fb4.tar.gz
+    URL_HASH SHA256=e4e3bba9c572a4a4148373a914d88ea0f0d11de8cc2c66739926e7eca0223319
 )
 FetchContent_Declare(
     tinyobjloader
-    GIT_REPOSITORY  https://github.com/tinyobjloader/tinyobjloader
-    GIT_TAG         e60d33385e2e4f7fa891513150f2532b5bbcb093
+    URL https://github.com/tinyobjloader/tinyobjloader/archive/e60d33385e2e4f7fa891513150f2532b5bbcb093.tar.gz
+    URL_HASH SHA256=e6729d1f8825728574c013884c2e5d7512d89b8a702286e134221b6a57084f91
     SOURCE_SUBDIR  cmake_disabled
 )
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF)
@@ -99,24 +99,24 @@ set(OVERRIDE_CXX_FLAGS OFF)
 
 FetchContent_Declare(
     JoltPhysics
-    GIT_REPOSITORY  https://github.com/jrouwe/JoltPhysics
-    GIT_TAG         v5.6.0
+    URL https://github.com/jrouwe/JoltPhysics/archive/refs/tags/v5.6.0.tar.gz
+    URL_HASH SHA256=6e069ee0172478cc78182047aac87e5310ba14a67a53348ae14cc37801fd3f8e
     SOURCE_SUBDIR   Build
 )
 FetchContent_Declare(
     EnTT
-    GIT_REPOSITORY  https://github.com/skypjack/entt
-    GIT_TAG         v4.0.0
+    URL https://github.com/skypjack/entt/archive/refs/tags/v4.0.0.tar.gz
+    URL_HASH SHA256=32a2ff2c72cb047dfd57306006ef238820b70da7c6ce4e7e8a507ac63365212e
 )
 FetchContent_Declare(
     glaze
-    GIT_REPOSITORY  https://github.com/stephenberry/glaze
-    GIT_TAG         v8.3.0
+    URL https://github.com/stephenberry/glaze/archive/refs/tags/v8.3.0.tar.gz
+    URL_HASH SHA256=6a8f97f5cdb8df5c87f1b32710679585f3f1a577b67bb66150f2516072e00317
 )
 FetchContent_Declare(
     Eigen
-    GIT_REPOSITORY  https://gitlab.com/libeigen/eigen
-    GIT_TAG         3.4.0
+    URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
+    URL_HASH SHA256=8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72
     SOURCE_SUBDIR   cmake_disabled
 )
 FetchContent_MakeAvailable(glfw glm stb tinyobjloader JoltPhysics EnTT glaze Eigen)
