@@ -23,4 +23,8 @@ expected failure, and 818,195 assertions. The headless example and a separate
 installed-package consumer pass. All 76 public headers compile through the
 exported CMake target. A host project also configures with add_subdirectory,
 without enabling tests or downloading dependencies. 37 deterministic hash records match the original implementation on Windows.
-Linux validation is pending. The private campaign archive is not published with this library.
+Linux/GCC 14.2 Release also passes all 556 cases with the same known expected
+failure (818,194 assertions). All 37 deterministic records agree with Windows.
+The public verification uses the exact runtime source commit 9af39ac3; later
+migration documentation changes do not alter the solver. Independent review
+found no blocking issues. The private campaign archive is not published with this library.

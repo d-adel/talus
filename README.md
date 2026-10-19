@@ -49,8 +49,8 @@ ctest --preset release
 
 This builds the static library, physics tests and `talus_headless`, a console
 example that drops a box onto a floor. There is no GUI or GPU requirement.
-The `dev` preset selects Debug. Windows/MSVC is checked locally; Linux compiler
-qualification is recorded separately in [physics status](docs/physics-status.md).
+The `dev` preset selects Debug. Windows/MSVC and Linux/GCC 14 x86-64 builds are checked; results and known
+limitations are recorded in [physics status](docs/physics-status.md).
 
 When embedded through `add_subdirectory`, tests and examples default to off.
 They can also be disabled explicitly with `TALUS_BUILD_TESTS=OFF` and
