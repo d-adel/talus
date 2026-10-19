@@ -9,6 +9,54 @@ Talus owns physical state and returns motion, contacts and destruction events.
 The former standalone game engine, renderer, editor, player and C# runtime are
 removed from the current tree.
 
+## Features
+
+### Rigid bodies and collision
+
+- Boxes, spheres, compound bodies and sampled signed-distance-field shapes.
+- Broad-phase collision detection, persistent contact manifolds, speculative
+  contacts and continuous collision handling for moving bodies.
+- Friction, restitution, sleeping, impulses and runtime body or shape edits.
+- Compound-child removal and splitting, with mass and inertia recomputed for
+  the resulting pieces.
+
+### Deformation and material history
+
+- Finite-element deformation with elastic recovery, plastic flow and hardening.
+- Material parameters for density, stiffness, damping, yield and tearing.
+- Persistent plastic deformation and mesh tearing, including updated surfaces
+  and collision geometry.
+- Transitions between rigid and deformable representations, retaining supported
+  deformation history when a body returns to rigid motion.
+- CPU signed-distance-field construction, material queries and field updates.
+
+### Structural fracture and destruction
+
+- Connected chunks with stress-based compression, tension and shear failure.
+- Intact, cracked and broken bonds, including frictional bearing after cracking.
+- Concrete, reinforced concrete, brick, timber, glass and steel material presets,
+  with support for direction-dependent strength and material variation.
+- Chunk removal, material-based subdivision and separation into moving compound
+  bodies when connections fail.
+- Contact loads, blasts and scheduled destruction actions.
+
+### Simulation and integration
+
+- Fixed-step simulation, with a default timestep of 1/60 second.
+- Multithreaded CPU stepping, runtime SIMD selection and optional host task
+  callbacks for integration with an existing scheduler.
+- Sleeping and freezing/thawing mechanisms, plus a workload controller for
+  deferring structural work.
+- Ray queries, contact-hit and destruction reports, workload counters and
+  per-stage timing data.
+- Determinism regression coverage across the tested Windows/MSVC and Linux/GCC
+  builds, worker counts and SIMD widths.
+- CMake embedding or an installed `Talus::Physics` package, with headless examples.
+
+Current performance, contact and fracture limitations are documented in
+[physics status](docs/physics-status.md). The workload controller is not a hard
+real-time guarantee, and game-engine adapters remain separate work.
+
 ## Use from another CMake project
 
 ```cmake
