@@ -1,6 +1,0 @@
-#include "sdfbaker.h"
-#include <talus/gpu/oneshot/oneshotcommand.h>
-#include <talus/field/sampledsdf/sampledsdf.h>
-
-#include <chrono>
-#include <iostream>

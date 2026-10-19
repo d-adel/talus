@@ -1,8 +1,0 @@
-#include "editorstate.h"
-
-#include <talus/serialize/textfile/textfile.h>
-
-#include <glaze/glaze.hpp>
-
-#include <algorithm>
-#include <optional>

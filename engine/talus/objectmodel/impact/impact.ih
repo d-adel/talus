@@ -1,4 +1,0 @@
-#include "impact.h"
-
-#include <algorithm>
-#include <cstdint>

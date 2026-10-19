@@ -1,3 +1,0 @@
-#include "telemetry.h"
-
-#include <algorithm>

@@ -1,5 +1,0 @@
-#include "shadowgrid.h"
-
-#include <algorithm>
-#include <cmath>
-#include <limits>

@@ -1,5 +1,0 @@
-#include "shadermodule.h"
-
-#include <cstdint>
-#include <fstream>
-#include <stdexcept>

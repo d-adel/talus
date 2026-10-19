@@ -1,8 +1,0 @@
-#include "sdfprimitivestore.h"
-
-#include <talus/core/config/config.h>
-#include <talus/objectmodel/component/sdfgrid/sdfgrid.h>
-
-#include <entt/entity/registry.hpp>
-
-#include <algorithm>

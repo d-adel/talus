@@ -7,70 +7,65 @@
   },
   "configurePresets": [
     {
-      "name": "ninja-base",
-      "hidden": true,
+      "name": "release",
       "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-release",
       "cacheVariables": {
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_MSVC_DEBUG_INFORMATION_FORMAT": "Embedded"
+        "CMAKE_BUILD_TYPE": "Release"
       }
     },
     {
       "name": "dev",
-      "displayName": "Dev (build-dev)",
-      "description": "Validation layers on, checked iterators on. The tree the goldens and IntelliSense are wired to.",
-      "inherits": "ninja-base",
+      "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-dev",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
-      }
-    },
-    {
-      "name": "release",
-      "displayName": "Release (build-release)",
-      "description": "Optimised, no validation layers. The only tree any performance number should ever come from.",
-      "inherits": "ninja-base",
-      "binaryDir": "${sourceDir}/build-release",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
       }
     }
   ],
   "buildPresets": [
     {
-      "name": "dev",
-      "displayName": "Dev",
-      "configurePreset": "dev"
+      "name": "release",
+      "configurePreset": "release"
     },
     {
-      "name": "release",
-      "displayName": "Release",
-      "configurePreset": "release"
+      "name": "dev",
+      "configurePreset": "dev"
     }
   ],
   "testPresets": [
     {
-      "name": "dev",
-      "displayName": "Dev",
-      "configurePreset": "dev",
-      "execution": {
-        "jobs": 16
-      },
+      "name": "release",
+      "configurePreset": "release",
       "output": {
         "outputOnFailure": true
       }
     },
     {
-      "name": "release",
-      "displayName": "Release",
-      "description": "Goldens included: they pass here too, and the suite runs in a quarter of the time.",
-      "configurePreset": "release",
-      "execution": {
-        "jobs": 16
-      },
+      "name": "dev",
+      "configurePreset": "dev",
       "output": {
         "outputOnFailure": true
       }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "verify",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "release"
+        },
+        {
+          "type": "build",
+          "name": "release"
+        },
+        {
+          "type": "test",
+          "name": "release"
+        }
+      ]
     }
   ]
 }

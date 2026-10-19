@@ -1,165 +1,91 @@
-# talus
+# Talus Physics
 
-A game engine for deformable worlds, in C++23 on Vulkan and Jolt.
+Talus is a C++23 physics library for integration into game engines. It provides
+rigid bodies, compound collision shapes, deformable bodies, plastic deformation,
+tearing, material-driven structural fracture and a fixed-step simulation pipeline.
 
-Objects are signed distance fields sampled onto a per-object grid rather than
-triangle meshes. The renderer sphere-traces the grid, physics collides against
-the same grid, and a body whose material can yield is stepped by finite
-elements when an impact would yield it. Triangle meshes are supported on their
-own pipeline.
+The host engine owns scenes, rendering, input, audio, networking and game logic.
+Talus owns physical state and returns motion, contacts and destruction events.
+The former standalone game engine, renderer, editor, player and C# runtime are
+removed from the current tree.
 
-## Status
+## Use from another CMake project
 
-Work in progress, built by one person. The editor is a separate project and is
-not public. The demo project has one world, `main`: rigid field bodies, two
-static bodies and a mesh. Deformation runs in the tests rather than in the
-demo.
-
-## Features
-
-### Fields
-
-- Analytic SDFs built from primitives and CSG operations
-- Sampled fields baked on the GPU onto a grid in the object's own space, and
-  checked against the CPU bake
-- Per-brick value ranges and Lipschitz bounds, reduced by a compute shader
-- Objects with the same shape share one sampled field
-
-### Rendering
-
-- Vulkan 1.4: dynamic rendering, synchronization2, frames in flight
-- Sphere tracing of the analytic or the sampled form
-- OBJ meshes with textures, depth and diffuse lighting
-- One material table for fields and meshes
-- Shadow casters binned across the light, so the shadow cost stays flat as
-  objects are added
-- Golden image tests
-
-### Physics
-
-- Jolt at a fixed 60 Hz step
-- A Jolt shape backed by the field: contacts seeded from surface bricks, shape
-  casts against the field, and a convex hull for convex fields
-- Mass, centre of mass and inertia integrated from the field
-- Explicit finite elements for yielding materials: a body stays rigid until an
-  impact would yield it, is stepped by 8-point corotated J2 hexahedra at the
-  material's stable step inside an impact window, and returns to Jolt with its
-  linear and angular momentum kept
-- Energy and momentum monitors on every impact window and every transition
-
-### System
-
-- C++23, `/W4 /WX`, zero warnings
-- Twenty-three libraries, each depending only on the ones below it
-- EnTT object model; projects, worlds and materials are JSON on disk
-- Every target declares a tier (Runtime, Developer or Editor), and configure
-  fails if one links above its tier
-- Game code is C# in the project, loaded over a C ABI
-
-## Layout
-
-| | |
-| --- | --- |
-| `engine/` | the `talus::` libraries, the C ABI, the player, the packager |
-| `projects/demo/` | the demo project: one world, materials, a mesh, C# scripts |
-| `shaders/` | GLSL, compiled by `glslc` during the build |
-| `tests/` | Catch2 unit tests and the golden image tests |
-
-The libraries, bottom to top:
-
-| | |
-| --- | --- |
-| `talus::core` | configuration, events, telemetry |
-| `talus::field` | primitives, CSG, baking, ray casting |
-| `talus::platform` | window and input, currently GLFW |
-| `talus::imagecompare` | image load, save and compare (Developer) |
-| `talus::gpu` | Vulkan devices, swapchains, buffers, images, pipelines, descriptors |
-| `talus::objectmodel` | what exists in a world and where it is |
-| `talus::serialize` | the on-disk format for projects, worlds and materials |
-| `talus::deformable` | finite element materials, meshes, contact and impact windows |
-| `talus::physics` | Jolt and the field shape |
-| `talus::systems` | input state and the ordered systems a frame runs |
-| `talus::script` | the C ABI game code is written against, and its .NET host |
-| `talus::query` | ray casts, overlaps and lookups on a world |
-| `talus::view` | cameras and views; a view names the target it draws |
-| `talus::renderer` | sphere tracing, mesh drawing, volume residency, shadows |
-| `talus::debugdraw` | lines and shapes drawn over a frame |
-| `talus::assets` | meshes, textures and materials, loaded once and shared |
-| `talus::runtime` | play mode: instantiation, bodies, deformation |
-| `talus::engine` | one frame of all of the above |
-| `talus::undo`, `talus::gizmos`, `talus::package` | edit history, handles, packaging (Editor) |
-| `talus_c` | the C ABI a front end loads (Editor) |
-
-`talus::gpu` does not know what a field is, and `talus::objectmodel` does not
-know how anything is drawn. `talus::engine` is the only place they meet; the
-player and the editor drive the same one.
-
-## Building
-
-Requirements:
-
-- Windows and a Vulkan 1.4 GPU. The goldens were recorded on an RTX 4060.
-- The [LunarG Vulkan SDK](https://vulkan.lunarg.com/), with `VULKAN_SDK` set
-- CMake 3.28 or newer, and Ninja
-- Visual Studio Build Tools 2022 (MSVC)
-- The [.NET 10 SDK](https://dotnet.microsoft.com/en-us/download), for the C#
-  scripts
-
-Every other dependency is fetched by CMake.
-
-```sh
-git clone https://github.com/d-adel/talus.git
-cd talus
-cmake --preset dev
-cmake --build --preset dev
-ctest --preset dev
+```cmake
+add_subdirectory(external/talus)
+target_link_libraries(my_adapter PRIVATE Talus::Physics)
 ```
 
-Run these from a Developer Command Prompt for VS so `cl.exe` and `ninja` are
-on `PATH`. `dev` is Debug with the validation layers on; `release` is the
-preset for performance numbers.
+```cpp
+#include <talus/talus.h>
 
-## Running
-
-```sh
-build-dev/TalusPlayer --project projects/demo
+talus::World world;
+world.dynamics.workerCount = 8;
+// Add bodies, then call once per fixed physics tick.
+auto report = world.step();
 ```
 
-Left mouse or F shoots a ball, R restarts the world.
+The library requires GLM, Eigen and system threading. CMake can fetch the pinned
+header dependencies when they are not installed. It requires no graphics API,
+windowing library, ECS, .NET runtime or other physics engine. Tests additionally
+fetch Catch2. See [third-party notices](THIRD_PARTY_NOTICES.md).
 
-| | |
-| --- | --- |
-| `--project DIR` | project to open, default `projects/demo` |
-| `--world NAME` | world to load, default `main` |
-| `--frames N` | run N frames, then exit |
-| `--fixed-step SECONDS` | step at a fixed timestep |
-| `--analytic` | trace the analytic field instead of the sampled one |
-| `--screenshot PATH` | render one frame to a file and exit |
-| `--golden PATH` | render one frame and compare it against a reference |
-| `--capture DIR` | write every frame, at a fixed timestep |
-| `--verify-bake` | check the GPU bake against the CPU bake |
-| `-- ARGS` | pass the rest to the scripts |
+The initial integration API is C++; it is not a stable binary ABI. Godot, Unity
+and Unreal adapters are not included yet. See [integration](docs/integration.md)
+for ownership, timing and packaging requirements.
 
-## Why I am building it
+## Build and test
 
-I am building talus because I want to make games with worlds that can respond to the player in many different ways and support new types of interaction. I also like the idea that someone much more creative than me could eventually use the same systems to make something I would never have thought of.
+Use CMake 3.28+, Ninja and a C++23 compiler on x86-64. On Windows, use an x64
+Developer Command Prompt for Visual Studio 2022 so the compiler and SDK are set up.
 
-Building the engine myself gives me control over how its systems fit together and lets me shape the technology around those kinds of games. A big part of the project is also just learning  (which I've already done an unreasonable amount of) from this thing, and I am nowhere near done.
+```sh
+cmake --preset release
+cmake --build --preset release
+ctest --preset release
+```
 
-## How it is built
+`cmake --workflow --preset verify` runs those three stages in sequence.
 
-I set the goals, decide the architecture and review the work. Most of the code,
-tests and measurements are written by Claude, Anthropic's model, working as a
-coding agent under [doctrine](https://github.com/d-adel/doctrine), the process
-I built for it: each change is a task with a frozen design and acceptance
-criteria, each claim rests on a check that ran, and each decision records who
-made it.
+This builds the static library, physics tests and `talus_headless`, a console
+example that drops a box onto a floor. There is no GUI or GPU requirement.
+The `dev` preset selects Debug. Windows/MSVC and Linux/GCC 14 x86-64 builds are checked; results and known
+limitations are recorded in [physics status](docs/physics-status.md).
 
-## Contributing
+When embedded through `add_subdirectory`, tests and examples default to off.
+They can also be disabled explicitly with `TALUS_BUILD_TESTS=OFF` and
+`TALUS_BUILD_EXAMPLES=OFF`. Set `TALUS_FETCH_DEPENDENCIES=OFF` to require installed
+dependencies instead of downloading them.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+## Installed package
+
+```sh
+cmake --install build-release --prefix /path/to/talus-sdk
+```
+
+Consumers need GLM 1.x and Eigen 3.4+ installed as CMake packages:
+
+```cmake
+find_package(Talus CONFIG REQUIRED)
+target_link_libraries(my_adapter PRIVATE Talus::Physics)
+```
+
+`examples/consumer` is a separate application using that installed package.
+
+## Repository layout
+
+- `src/talus/`: engine-neutral physics implementation and headers.
+- `tests/`: physics regressions and integration checks; district geometry is a test fixture.
+- `examples/`: headless embedding and installed-package examples.
+- `cmake/`: source list and package configuration.
+- `docs/`: integration contract and known limitations.
+
+The solver kernels are carried over from the current Talus implementation.
+Physics data types have been extracted from the old object model; scene and
+rendering dependencies have been removed. This reorganization does not resolve
+existing performance or physical-behavior limitations. See
+[physics status](docs/physics-status.md).
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Third-party code and assets are listed in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+MIT. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

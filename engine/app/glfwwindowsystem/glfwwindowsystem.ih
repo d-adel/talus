@@ -1,8 +1,0 @@
-#include "glfwwindowsystem.h"
-
-#include <vulkan/vk_enum_string_helper.h>
-
-#include <GLFW/glfw3.h>
-
-#include <stdexcept>
-#include <string>

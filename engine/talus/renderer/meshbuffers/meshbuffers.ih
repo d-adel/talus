@@ -1,4 +1,0 @@
-#include "meshbuffers.h"
-#include <tiny_obj_loader.h>
-#include <stdexcept>
-#include <unordered_map>
