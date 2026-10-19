@@ -9,6 +9,10 @@ Talus owns physical state and returns motion, contacts and destruction events.
 The former standalone game engine, renderer, editor, player and C# runtime are
 removed from the current tree.
 
+![Three-storey building collapsing](docs/media/single-building-collapse.gif)
+
+Three-storey concrete-frame collapse, rendered with the original Talus testbed.
+
 ## Features
 
 ### Rigid bodies and collision
