@@ -1,3 +1,0 @@
-#include "asset.h"
-
-#include <stdexcept>

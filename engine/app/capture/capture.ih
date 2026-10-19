@@ -1,9 +1,0 @@
-#include "capture.h"
-
-#include <talus/gpu/buffer/buffer.h>
-#include <talus/gpu/oneshot/oneshotcommand.h>
-
-#include <algorithm>
-#include <cstring>
-#include <stdexcept>
-#include <string>

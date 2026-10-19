@@ -1,7 +1,0 @@
-#include "renderer.h"
-#include <talus/gpu/device/device.h>
-#include <talus/field/field.h>
-#include <chrono>
-#include <stdexcept>
-#include <array>
-#include <glm/glm.hpp>

@@ -1,7 +1,0 @@
-#include "sdfgrid.h"
-
-#include <algorithm>
-#include <talus/core/config/config.h>
-#include <talus/field/sampledsdf/sampledsdf.h>
-
-#include <optional>

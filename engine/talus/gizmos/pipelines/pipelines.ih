@@ -1,4 +1,0 @@
-#include "pipelines.h"
-
-#include <talus/gizmos/grid/grid.h>
-#include <talus/gizmos/outline/outline.h>

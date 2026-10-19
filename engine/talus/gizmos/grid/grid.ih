@@ -1,6 +1,0 @@
-#include <talus/gizmos/grid/grid.h>
-
-#include <algorithm>
-#include <utility>
-#include <cmath>
-#include <cstddef>

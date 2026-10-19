@@ -1,3 +1,0 @@
-#include "runner.h"
-
-#include <talus/script/api/api.h>

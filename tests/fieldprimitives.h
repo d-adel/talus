@@ -1,6 +1,6 @@
 #pragma once
 
-#include <talus/core/config/config.h>
+#include <talus/field/constants.h>
 #include <talus/field/analytic/analytic.h>
 #include <talus/field/field.h>
 
@@ -17,7 +17,7 @@ inline constexpr uint32_t BOX_KIND = 1u;
 inline talus::field::Primitive sphere(
   const glm::vec3& centre,
   float radius,
-  uint32_t operation = talus::core::FIELD_OP_UNION
+  uint32_t operation = talus::field::FIELD_OP_UNION
 ) {
   talus::field::Primitive primitive{};
 
@@ -34,7 +34,7 @@ inline talus::field::Primitive sphere(
 inline talus::field::Primitive box(
   const glm::vec3& centre,
   const glm::vec3& half,
-  uint32_t operation = talus::core::FIELD_OP_UNION
+  uint32_t operation = talus::field::FIELD_OP_UNION
 ) {
   talus::field::Primitive primitive{};
 

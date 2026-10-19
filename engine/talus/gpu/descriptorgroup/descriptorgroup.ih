@@ -1,8 +1,0 @@
-#include "descriptorgroup.h"
-#include <talus/core/config/config.h>
-
-#include <cassert>
-#include <cstring>
-#include <stdexcept>
-#include <utility>
-#include <algorithm>

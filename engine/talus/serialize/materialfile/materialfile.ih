@@ -1,9 +1,0 @@
-#include "materialfile.h"
-
-#include <talus/serialize/glmmeta/glmmeta.h>
-
-#include <glaze/glaze.hpp>
-
-#include <cmath>
-#include <limits>
-#include <optional>

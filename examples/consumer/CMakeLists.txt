@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.28)
+project(TalusConsumer LANGUAGES CXX)
+find_package(Talus CONFIG REQUIRED)
+add_executable(consumer ../headless.cc)
+target_link_libraries(consumer PRIVATE Talus::Physics)
