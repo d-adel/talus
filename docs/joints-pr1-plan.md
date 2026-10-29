@@ -23,6 +23,7 @@
 - Joint ids start at 1. 0 means invalid. Bodies are referenced by `RigidBody::id`, never by vector index.
 - Body A may be `noBody`, which means the world. Statics are always the world.
 - Defaults: row hertz 60, damping ratio 2, both clamped to a quarter of the substep rate. Rigid limit correction speed is capped at 3 rad/s.
+- Islands that contain a joint step with `IntegrationParameters::jointSubsteps` (default 16); every other island keeps `softstepSubsteps` (4). Joint rows follow Box3D's row maths. Limit tolerance 0.03 rad (owner's decision 2026-10-30).
 - Ported Box3D code keeps Box3D's MIT notice in `THIRD_PARTY_NOTICES.md` (source: commit 5d83df83, copy at `C:\Users\dilan\Documents\GitHub\reflex\build-dev\_deps\box3d-src`).
 - **BUILD**, in PowerShell: `cmd /c '"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" && cd /d C:\Users\dilan\Documents\GitHub\talus && cmake --preset release && cmake --build --preset release'`
 - **TEST tag**: `C:\Users\dilan\Documents\GitHub\talus\build-release\tests\talus_tests.exe "<tag>"`. The full suite is `cmake --workflow --preset verify` inside the same vcvars call.
@@ -180,6 +181,16 @@
   Expected: the new tests pass and the hashes equal `baseline-hashes.txt`.
 - [ ] **Step 5: Commit** `Solve ball joints in softstep with shared row templates`.
 
+### Task 4a: Per-island substeps for jointed islands
+
+**Files:** modify `src/talus/dynamics/integrationparameters/integrationparameters.h` (`uint32_t jointSubsteps = 16u;`), `src/talus/dynamics/pipeline/pipeline.cc` (softstep islands with a joint are solved in their own `solveSoftstep` call at `jointSubsteps`; the rest as today), tests in `tests/dynamics_joint_tests.cc`.
+
+- [ ] **Step 1: Write the failing tests:** `"jointed islands step at the joint substep count"` (a scene with one ball-jointed pair and one free box: the jointed island's solve reports `jointSubsteps` substeps and the free box's island reports 4, through a counter exposed in `StepReport`); `"worlds without joints step exactly as before"` (the eight hidden hash tags equal the baseline — run, not asserted in code).
+- [ ] **Step 2: Run** BUILD and TEST `[joints]`. Expected: the new case fails.
+- [ ] **Step 3: Implement.** Islands are split deterministically by whether any member has a joint; the jointed call runs first; with no joints there is one call exactly as before.
+- [ ] **Step 4: Run** TEST `[joints]`, the full binary, and the eight hidden hash tags. Expected: pass, hashes equal baseline.
+- [ ] **Step 5: Commit** `Step jointed islands at their own substep count`.
+
 ### Task 4: Hinge with rigid limits and a physical drive
 
 **Files:** modify `jointrows.h`. Test: `tests/dynamics_joint_tests.cc`.
@@ -198,7 +209,7 @@
   - `"a hinge drive rings at sqrt(k over I) for any mass ratio"`: the parent is a dynamic box of mass M, the child 1 kg, with M in {1, 10, 75} kg and c = 0. After a 0.05 rad offset, the oscillation frequency is within 5 % of √(k/I_r)/(2π).
     - I_r is the reduced inertia of the two bodies about the hinge axis through the anchor.
   - `"hinge drive torque respects per-direction bounds and the cap"`: with minTorque −5 and maxTorque 2, a target 1 rad away gives a measured `driveTorque.x` within [−5, 2] N·m, and the cap 1 limits it to [−1, 1].
-  - `"a hinge limit holds at the drive cap"`: a 1 kg child, limit [−0.5, 0.5] rad, drive target 2 rad with k = 10⁵ and cap 150 N·m. Over 2 s the angle never exceeds 0.52 rad.
+  - `"a hinge limit holds at the drive cap"`: a 1 kg child, limit [−0.5, 0.5] rad, drive target 2 rad with k = 10⁵ and cap 150 N·m. Over 2 s the angle never exceeds 0.53 rad.
 - [ ] **Step 2: Run** BUILD, then TEST `[joints]`.
   Expected: these cases fail, because the hinge branch is missing.
 - [ ] **Step 3: Implement** the hinge rows.
@@ -217,8 +228,8 @@
 - The drive has three soft rows about frame B's x, y and z, with Task 4's per-axis softness, bounds, cap and feed-forward.
 
 - [ ] **Step 1: Write the failing tests:**
-  - `"a swing-twist cone holds an ellipse"`: half-angles 0.6 and 0.3 rad with centre (0.1, 0). The drive pushes at a 100 N·m cap toward each of 8 directions at 2 rad. The ellipse value never exceeds (1 + 0.02/0.3)².
-  - `"a swing-twist twist range holds"`: range [−0.4, 0.2] rad, driven at the cap past each end. The overshoot stays at or below 0.02 rad.
+  - `"a swing-twist cone holds an ellipse"`: half-angles 0.6 and 0.3 rad with centre (0.1, 0). The drive pushes at a 100 N·m cap toward each of 8 directions at 2 rad. The ellipse value never exceeds (1 + 0.03/0.3)².
+  - `"a swing-twist twist range holds"`: range [−0.4, 0.2] rad, driven at the cap past each end. The overshoot stays at or below 0.03 rad.
   - `"a swing-twist drive deflects per axis"`: k = (100, 200, 400) N·m/rad. A 10 N·m feed-forward about each axis in turn settles at 10/k within 2 % on that axis and below 0.002 rad on the others.
 - [ ] **Step 2: Run** BUILD, then TEST `[joints]`.
   Expected: these cases fail.
@@ -239,7 +250,7 @@
 - Produces `Humanoid addHumanoid(talus::dynamics::World&, const glm::dvec3& pelvis, bool pinPelvis);`
 
 - [ ] **Step 1: Write the failing tests:**
-  - `"every humanoid limit holds with its drive at the cap"`: the pelvis is pinned (mass 0) under gravity. Each joint is driven toward a target 1 rad beyond its upper limit on every limited axis, with k = 10⁵, c = 10³ and the rig's `maxTorqueNm` cap. Over 2 s no hinge, twist or cone limit is exceeded by more than 0.02 rad. Then the same toward the lower limits.
+  - `"every humanoid limit holds with its drive at the cap"`: the pelvis is pinned (mass 0) under gravity. Each joint is driven toward a target 1 rad beyond its upper limit on every limited axis, with k = 10⁵, c = 10³ and the rig's `maxTorqueNm` cap. Over 2 s no hinge, twist or cone limit is exceeded by more than 0.03 rad. Then the same toward the lower limits.
   - `"a humanoid-mass chain hangs without creep"`: 20 boxes alternating 40 kg and 1 kg hang in a ball chain from the world, released 0.3 rad from vertical. Over 60 s:
     - every state stays finite and no body exceeds 5 m/s;
     - after 30 s every body's speed is below 0.05 m/s;
@@ -325,7 +336,7 @@
   Expected: identical hashes at widths 1, 4 and 8 × workers 1, 4 and 8.
 - [ ] **Step 2:** Add the hidden profile case `[.][jointcost]`: four unpinned humanoids on a floor, drives holding a standing pose (k = 10³ and c = 50 on every axis), 600 steps at 4 substeps. It prints the mean `StepProfile::joints` time, the mean step time, and steps per second for one humanoid alone.
   - Run it on this laptop. Then run it on the lab desktop through the `talus-lab` skill (worker `desktop`, Release).
-  Expected on the desktop: joints at or below 0.2 ms per step. Report all numbers with machine, compiler and commit.
+  Expected on the desktop: one 20-body ragdoll at or below about 0.25 ms per step at its 16 substeps. Report all numbers with machine, compiler and commit.
 - [ ] **Step 3:** Run the full `verify` workflow and the eight hidden hash tags.
   Expected: the baseline's cases plus the new ones pass, the same one expected failure remains, and the hashes equal `baseline-hashes.txt`.
 - [ ] **Step 4:** Write the docs, with plain usage in `integration.md` and status and measured cost in `physics-status.md`. Commit `Document joints and record their cost`.

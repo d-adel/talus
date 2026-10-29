@@ -54,7 +54,9 @@ The work fails, even if it runs, if any of these happen:
   - **Measured while planning (2026-10-29).** For Reflex's reference humanoid (`humanoid20.json`), a 60 Hz soft limit would be pushed past its stop at the joint's torque cap by between 0.04 and 0.87 rad, depending on the joint and axis. Every joint misses the 0.02 rad check. The worst are the ankles, elbows and wrists, about 0.2 to 0.87 rad.
     - Method: torque cap / (effective inertia × (2π·60)²), using the pair's centre-of-mass inertias from the rig.
     - A per-island substep count would need about 27 substeps for the ankle.
-  - **Decision.** Limit rows are therefore **rigid**. They have no softness, so the impulse fully cancels the closing velocity, and they correct position at bias C/h, capped at a joint correction speed of 3 rad/s. This is the stiffest form of "limit stiffness sized from the torque cap". Point and alignment rows keep Box3D's soft 60 Hz rows. If rigid limits jitter or still miss verification 3, the work stops and reports before going further.
+  - **Measured in Task 4 (2026-10-30).** A serial joint-by-joint solve does not carry a stop through a chain within 4 substeps: chains overrun their limits by 0.15 to 1.3 rad, and a 20-link 40:1 chain blows up. At 16 substeps, Box3D's row maths hold most chains within about 0.03 rad.
+  - **Owner's decision (2026-10-30).** Islands that contain a joint are stepped with their own substep count, 16 by default (`IntegrationParameters::jointSubsteps`); all other islands keep the world's 4. Joint rows stay Box3D's row maths. The limit tolerance is 0.03 rad.
+  - **Earlier decision.** Limit rows are therefore **rigid**. They have no softness, so the impulse fully cancels the closing velocity, and they correct position at bias C/h, capped at a joint correction speed of 3 rad/s. This is the stiffest form of "limit stiffness sized from the torque cap". Point and alignment rows keep Box3D's soft 60 Hz rows. If rigid limits jitter or still miss verification 3, the work stops and reports before going further.
 - **Destruction.** Until pull request 5, joint forces do not load destruction bonds. Destruction re-centres and splits compounds. Joint anchors are re-expressed in the new body frame. When a compound splits, the joint stays with the piece that holds its anchor.
 - **Solve order.** The rows are solved in `solveSoftstep`, using Box3D's joint mathematics.
   - Joints are prepared after body gather.
@@ -129,16 +131,16 @@ The only ray query today, `rayBlockers` and `firstHit`, serves blast occlusion. 
 
 ## Verification
 
-"Done" means all of the following, with expectations from physics or published values, never tolerances fitted to a result.
+"Done" means all of the following, with expectations from physics or published values, never tolerances fitted to a result. Behaviour checks of jointed bodies run at the jointed islands' substep count (16).
 
 - **No regressions.**
   - The existing suite passes with its one known expected failure.
   - The existing worker and width hash checks pass.
   - A new hash check compares a jointed scene across widths 1, 4 and 8 and workers 1, 4 and 8.
-- **Behaviour at the default 4 substeps.**
+- **Behaviour.**
   1. A hinge pendulum's small-angle period matches 2π√(L/g) within 2 %. Its energy does not grow over 60 s.
   2. A 20-body chain with a 40:1 mass ratio hangs and settles with no explosion and no creep over 60 s.
-  3. With every drive of Reflex's reference humanoid pushing into its limit at its torque cap, with that rig's body masses, no hinge or cone-twist limit is exceeded by more than 0.02 rad (about 1°, **my call**).
+  3. With every drive of Reflex's reference humanoid pushing into its limit at its torque cap, with that rig's body masses, no hinge or cone-twist limit is exceeded by more than 0.03 rad (about 1.7°, owner's decision 2026-10-30, at the jointed islands' 16 substeps).
   4. A drive's static deflection under a known torque is τ/k within 2 %. Its response frequency is √(k/I) within 5 %, for joined-mass ratios from 1 to 75. This is the planted-ankle case.
   5. Per-direction torque bounds and the magnitude cap hold.
   6. A spring joint capped at 50 N holds a 3 kg box and lets a 10 kg box slip and fall.
@@ -151,7 +153,7 @@ The only ray query today, `rayBlockers` and `firstHit`, serves blast occlusion. 
   13. The world ray cast hits every shape kind with the exact point and normal, and skips filtered bodies.
   14. A sleeping body touched by a moving mass-0 body wakes. Reading the code suggests it may not today. If this fails, it is fixed separately before the mover work.
 - **Cost.** Measured on the reference desktop in Release:
-  - Four 20-body ragdolls standing on a floor add at most 0.2 ms per world step at 4 substeps (**my call**).
+  - A 20-body ragdoll standing on a floor costs at most about 0.25 ms per world step at its 16 substeps, so four cost about 1 ms (owner's decision 2026-10-30, replacing my 0.2 ms for four at 4 substeps).
   - Steps per second for one ragdoll in an otherwise empty world are recorded, to plan training.
 - **Outside this repository.** Reflex's Talus backend and its standing gate come after this work. They are not part of "done" here.
 
@@ -171,7 +173,7 @@ Box3D is MIT-licensed. Ported code keeps its notice in `THIRD_PARTY_NOTICES.md`.
 
 These do not block the work.
 
-- **Substeps for ragdolls.** If ragdolls need more than 4 substeps, add a per-island substep count rather than raising the world's.
+- **Whole-chain solving.** If 16 substeps still leave ragdolls floppy or unstable at extreme mass ratios, solve a character's joints together (articulation or sparse direct solve). Not planned.
 - **Colouring joints for parallel solves,** if many characters make the serial order costly.
 - **Joints on deformable bodies.**
 
