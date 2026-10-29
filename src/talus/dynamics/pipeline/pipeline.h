@@ -5,6 +5,7 @@
 #include <talus/dynamics/broadphase/broadphase.h>
 #include <talus/dynamics/contact/contact.h>
 #include <talus/dynamics/islands/islands.h>
+#include <talus/dynamics/joints/joints.h>
 #include <talus/dynamics/manifoldcache/manifoldcache.h>
 #include <talus/dynamics/scheduler/scheduler.h>
 
@@ -74,6 +75,7 @@ struct World {
   ManifoldCache manifolds;
   BroadPhase broadPhase;
   IslandStore islandStore;
+  JointSet joints;
   uint32_t workerCount = 1u;
   EnqueueTaskCallback* enqueueTask = nullptr;
   FinishTaskCallback* finishTask = nullptr;
