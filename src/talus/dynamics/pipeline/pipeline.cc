@@ -384,7 +384,9 @@ StepReport step(World& world) {
     world.softstepArena.get(),
     &report.profile,
     &softstepTouching,
-    &alongside
+    &alongside,
+    &world.joints,
+    &world.islandStore
   );
 
   const double solve = clock.lap();

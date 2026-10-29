@@ -46,6 +46,7 @@ struct StepProfile {
   double integrate = 0.0;
   double restitute = 0.0;
   double storeBack = 0.0;
+  double joints = 0.0;
   double continuous = 0.0;
   double events = 0.0;
   double sleep = 0.0;

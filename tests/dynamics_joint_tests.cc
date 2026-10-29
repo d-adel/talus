@@ -7,14 +7,19 @@
 #include <talus/dynamics/joints/jointedits.h>
 #include <talus/dynamics/pipeline/pipeline.h>
 #include <talus/dynamics/sleep/sleep.h>
+#include <talus/dynamics/softstep/simdwidth.h>
+#include <talus/dynamics/softstep/softstep.h>
 #include <talus/dynamics/tiers/tiers.h>
 #include <talus/field/sampledsdf/sampledsdf.h>
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
+#include <numbers>
 #include <optional>
 #include <vector>
 
@@ -459,7 +464,9 @@ TEST_CASE("removing a joint wakes a sleeping body", "[dynamics][joints]") {
   addFloor(world);
 
   const uint32_t a = addResting(world, crate, 0.0);
-  const uint32_t joint = addJoint(world, between(noBody, a));
+  JointDef def = between(noBody, a);
+  def.frameA.position = world.bodies.rigids[0].position;
+  const uint32_t joint = addJoint(world, def);
 
   REQUIRE(joint != 0u);
   REQUIRE(sleepsWithin(world, 600u));
@@ -496,4 +503,226 @@ TEST_CASE("removing an excluding joint lets overlapping bodies collide", "[dynam
   }
 
   CHECK(contact);
+}
+
+namespace {
+
+uint64_t mixBits(uint64_t hash, double value) {
+  uint64_t bits = 0u;
+
+  std::memcpy(&bits, &value, sizeof(bits));
+
+  for (int byte = 0; byte != 8; ++byte) {
+    hash ^= (bits >> (8 * byte)) & 0xFFu;
+    hash *= 1099511628211ull;
+  }
+
+  return hash;
+}
+
+struct JointedRun {
+  uint64_t hash = 0u;
+  bool loaded = false;
+};
+
+JointedRun chainOnPile(uint32_t workers, uint32_t width) {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+
+  world.workerCount = workers;
+  world.simdWidth = width;
+  addFloor(world);
+
+  for (int row = 0; row != 3; ++row) {
+    for (int column = 0; column != 3; ++column) {
+      for (int level = 0; level != 3; ++level) {
+        (void)addCrate(world, crate, glm::dvec3(-0.12 + 0.12 * row, 0.151 + 0.101 * level, -0.12 + 0.12 * column));
+      }
+    }
+  }
+
+  std::vector<uint32_t> chain;
+
+  for (int link = 0; link != 8; ++link) {
+    chain.push_back(addCrate(world, crate, glm::dvec3(-0.42 + 0.12 * link, 0.7, 0.03)));
+  }
+
+  for (size_t link = 0u; link + 1u != chain.size(); ++link) {
+    JointDef def = between(chain[link], chain[link + 1u]);
+    def.frameA.position = glm::dvec3(0.06, 0.0, 0.0);
+    def.frameB.position = glm::dvec3(-0.06, 0.0, 0.0);
+    REQUIRE(addJoint(world, def) != 0u);
+  }
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    if (talus::dynamics::step(world).nonFinite) {
+      return {};
+    }
+  }
+
+  JointedRun run;
+  run.hash = 1469598103934665603ull;
+
+  for (const RigidBody& body : world.bodies.rigids) {
+    for (int axis = 0; axis != 3; ++axis) {
+      run.hash = mixBits(run.hash, body.position[axis]);
+      run.hash = mixBits(run.hash, body.velocity[axis]);
+      run.hash = mixBits(run.hash, body.angularVelocity[axis]);
+    }
+
+    for (int axis = 0; axis != 4; ++axis) {
+      run.hash = mixBits(run.hash, body.rotation[axis]);
+    }
+  }
+
+  for (const Joint& joint : world.joints.all()) {
+    for (int axis = 0; axis != 3; ++axis) {
+      run.hash = mixBits(run.hash, joint.report.force[axis]);
+    }
+
+    run.loaded = run.loaded || joint.report.force != glm::dvec3(0.0);
+  }
+
+  return run;
+}
+
+}
+
+TEST_CASE("a ball pendulum keeps its period and energy", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  const double lever = 1.0;
+  const double release = 0.1;
+  const glm::dvec3 pivot(0.0, 2.0, 0.0);
+  const glm::dvec3 start = pivot + lever * glm::dvec3(std::sin(release), -std::cos(release), 0.0);
+  const uint32_t index = addRigidBox(world.bodies, crate, glm::dvec3(0.05), 1.0, start, glm::dvec3(0.0), 0.5, 3u);
+  JointDef def = between(noBody, world.bodies.rigids[index].id);
+  def.frameA.position = pivot;
+  def.frameB.position = pivot - start;
+  REQUIRE(addJoint(world, def) != 0u);
+
+  const double dt = world.parameters.dt;
+  const uint32_t steps = static_cast<uint32_t>(std::lround(60.0 / dt));
+  double previous = release;
+  double peak = 0.0;
+  std::vector<double> crossings;
+
+  for (uint32_t frame = 1u; frame <= steps; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+    const glm::dvec3 arm = world.bodies.rigids[index].position - pivot;
+    const double angle = std::atan2(arm.x, -arm.y);
+
+    if (previous < 0.0 && angle >= 0.0) {
+      crossings.push_back(dt * (static_cast<double>(frame - 1u) + previous / (previous - angle)));
+    }
+
+    peak = std::max(peak, std::atan2(std::hypot(arm.x, arm.z), -arm.y));
+    previous = angle;
+  }
+
+  REQUIRE(crossings.size() >= 10u);
+
+  const double period = (crossings.back() - crossings.front()) / static_cast<double>(crossings.size() - 1u);
+  const double expected = 2.0 * std::numbers::pi * std::sqrt(lever / std::abs(world.parameters.gravity.y));
+
+  CHECK(std::abs(period - expected) <= 0.02 * expected);
+  CHECK(peak <= 1.01 * release);
+}
+
+TEST_CASE("a hanging joint reports its load", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  const double mass = 3.0;
+  const uint32_t index = addRigidBox(world.bodies, crate, glm::dvec3(0.05), mass, glm::dvec3(0.0, 1.5, 0.0), glm::dvec3(0.0), 0.5, 3u);
+  JointDef def = between(noBody, world.bodies.rigids[index].id);
+  def.frameA.position = glm::dvec3(0.0, 2.0, 0.0);
+  def.frameB.position = glm::dvec3(0.0, 0.5, 0.0);
+  const uint32_t joint = addJoint(world, def);
+  REQUIRE(joint != 0u);
+
+  for (uint32_t frame = 0u; frame != 60u; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+  }
+
+  const std::optional<JointReport> report = jointReport(world, joint);
+  const double weight = mass * std::abs(world.parameters.gravity.y);
+
+  REQUIRE(report.has_value());
+  CHECK(std::abs(report->force.y - weight) <= 0.01 * weight);
+}
+
+TEST_CASE("a joint rides a moving mass-0 body", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  const glm::dvec3 speed(1.0, 0.0, 0.0);
+  const uint32_t platform = addRigidBox(world.bodies, crate, glm::dvec3(0.05), 0.0, glm::dvec3(0.0, 2.0, 0.0), speed, 0.5, 3u);
+  const uint32_t box = addRigidBox(world.bodies, crate, glm::dvec3(0.05), 1.0, glm::dvec3(0.0, 1.4, 0.0), speed, 0.5, 3u);
+  JointDef def = between(world.bodies.rigids[platform].id, world.bodies.rigids[box].id);
+  def.frameA.position = glm::dvec3(0.0, -0.1, 0.0);
+  def.frameB.position = glm::dvec3(0.0, 0.5, 0.0);
+  REQUIRE(addJoint(world, def) != 0u);
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+  }
+
+  const RigidBody& carrier = world.bodies.rigids[platform];
+  const glm::dvec3 anchor = carrier.position + carrier.rotation * def.frameA.position;
+  const glm::dvec3 offset = world.bodies.rigids[box].position - anchor;
+
+  CHECK(std::abs(carrier.position.x - 2.0) < 1.0e-3);
+  CHECK(std::hypot(offset.x, offset.z) < 0.01);
+  CHECK(std::abs(offset.y + 0.5) < 0.01);
+}
+
+TEST_CASE("a joint follows a mass-0 body outside the solve", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  BodySet bodies;
+  const glm::dvec3 speed(1.0, 0.0, 0.0);
+  const uint32_t platform = addRigidBox(bodies, crate, glm::dvec3(0.05), 0.0, glm::dvec3(0.0, 2.0, 0.0), speed, 0.5, 3u);
+  const uint32_t box = addRigidBox(bodies, crate, glm::dvec3(0.05), 1.0, glm::dvec3(0.0, 1.4, 0.0), speed, 0.5, 3u);
+  JointDef def = between(bodies.rigids[platform].id, bodies.rigids[box].id);
+  def.frameA.position = glm::dvec3(0.0, -0.1, 0.0);
+  def.frameB.position = glm::dvec3(0.0, 0.5, 0.0);
+  JointSet joints;
+  REQUIRE(joints.add(def) == 1u);
+
+  IslandStore islands;
+  ManifoldCache cache;
+  const IntegrationParameters parameters;
+  std::vector<uint32_t> stateOf;
+  const std::vector<uint32_t> solved{box};
+
+  islands.sync(bodies);
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    (void)solveSoftstep(bodies, cache, solved, parameters, stateOf, Workers{}, 1u, nullptr, nullptr, nullptr, nullptr, &joints, &islands);
+    bodies.rigids[platform].position += parameters.dt * speed;
+  }
+
+  const glm::dvec3 anchor = bodies.rigids[platform].position + def.frameA.position;
+  const glm::dvec3 offset = bodies.rigids[box].position - anchor;
+
+  CHECK(std::hypot(offset.x, offset.z) < 0.01);
+  CHECK(std::abs(offset.y + 0.5) < 0.01);
+}
+
+TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 and 8", "[dynamics][joints]") {
+  std::vector<uint32_t> widths{1u, 4u};
+
+  if (hasAvx2()) {
+    widths.push_back(8u);
+  }
+
+  const JointedRun serial = chainOnPile(1u, 1u);
+
+  REQUIRE(serial.hash != 0u);
+  REQUIRE(serial.loaded);
+
+  for (const uint32_t width : widths) {
+    for (const uint32_t workers : {1u, 4u, 8u}) {
+      CHECK(chainOnPile(workers, width).hash == serial.hash);
+    }
+  }
 }

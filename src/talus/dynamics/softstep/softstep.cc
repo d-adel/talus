@@ -1,6 +1,7 @@
 #include "softstep.h"
 #include "widecontact.h"
 
+#include <talus/dynamics/joints/jointrows.h>
 #include <talus/dynamics/pipeline/pipeline.h>
 #include <talus/dynamics/scheduler/stopwatch.h>
 
@@ -583,6 +584,7 @@ struct SoftstepArena {
   std::vector<uint32_t> laneSlot;
   std::vector<WideContact<4u>> batches4;
   std::vector<WideContact<8u>> batches8;
+  std::vector<JointRow<float>> jointRows;
   StageRunner runner;
 };
 
@@ -601,7 +603,9 @@ uint32_t solveSoftstep(
   SoftstepArena* arena,
   StepProfile* profile,
   SoftstepTouching* touching,
-  const std::function<void()>* alongside
+  const std::function<void()>* alongside,
+  JointSet* joints,
+  const IslandStore* islandStore
 ) {
   const uint32_t substeps = std::max(parameters.softstepSubsteps, 1u);
   const double step = parameters.dt / static_cast<double>(substeps);
@@ -1439,6 +1443,10 @@ uint32_t solveSoftstep(
   double solveTime = 0.0;
   double restituteTime = 0.0;
   double storeTime = 0.0;
+  const bool jointWork = joints != nullptr && !joints->empty();
+  std::vector<JointRow<float>>& jointRows = scratch.jointRows;
+  Stopwatch jointClock;
+  double jointTime = 0.0;
 
   runner.run([&] {
     (void)clock.lap();
@@ -1452,17 +1460,36 @@ uint32_t solveSoftstep(
     gatherTime = clock.lap();
     runner.execute(prepareStage);
     runner.execute(packStage);
+
+    if (jointWork) {
+      (void)jointClock.lap();
+      prepareJointRows<float, State>(*joints, bodies, *islandStore, states, stateOf, h, jointRows);
+      jointTime += jointClock.lap();
+    }
+
     prepareTime = clock.lap();
 
     for (uint32_t substep = 0u; substep != substeps; ++substep) {
       runner.execute(substepStages[substep][0]);
       integrateTime += clock.lap();
 
+      if (jointWork) {
+        (void)jointClock.lap();
+        warmStartJointRows<float, State>(states, jointRows);
+        jointTime += jointClock.lap();
+      }
+
       for (uint32_t item = 0u; item != overflowEnd; ++item) {
         warmStart(states, constraints[item], points);
       }
 
       runColours(substepStages[substep][1]);
+
+      if (jointWork) {
+        (void)jointClock.lap();
+        solveJointRows<float, State>(states, jointRows, invH, true);
+        jointTime += jointClock.lap();
+      }
 
       for (uint32_t item = 0u; item != overflowEnd; ++item) {
         push(states, constraints[item], points, invH, contactSpeed);
@@ -1472,6 +1499,13 @@ uint32_t solveSoftstep(
       solveTime += clock.lap();
       runner.execute(substepStages[substep][3]);
       integrateTime += clock.lap();
+
+      if (jointWork) {
+        (void)jointClock.lap();
+        advanceJointRows<float>(jointRows, h);
+        solveJointRows<float, State>(states, jointRows, invH, false);
+        jointTime += jointClock.lap();
+      }
 
       for (uint32_t item = 0u; item != overflowEnd; ++item) {
         relax(states, constraints[item], points, invH);
@@ -1495,6 +1529,13 @@ uint32_t solveSoftstep(
     substepTime = integrateTime + solveTime + restituteTime;
     runner.execute(unpackStage);
     runner.execute(memoryStage);
+
+    if (jointWork) {
+      (void)jointClock.lap();
+      storeJointRows<float>(*joints, jointRows, invH);
+      jointTime += jointClock.lap();
+    }
+
     runner.execute(bodyStage);
     storeTime = clock.lap();
   }, alongside);
@@ -1529,6 +1570,7 @@ uint32_t solveSoftstep(
     profile->integrate = integrateTime;
     profile->restitute = restituteTime;
     profile->storeBack = storeTime + clock.lap();
+    profile->joints = jointTime;
   }
 
   return widePairs;
