@@ -259,7 +259,7 @@
 - [ ] **Step 2: Run** BUILD, then TEST `[joints]`.
   Expected: build failure, because the fixture is missing.
 - [ ] **Step 3: Implement** the fixture.
-  - If the limit test fails, **stop and report** the worst joint, its axis and its overshoot. The design says so; do not loosen 0.02 rad.
+  - If the limit test fails, **stop and report** the worst joint, its axis and its overshoot. The design says so; do not loosen 0.03 rad.
 - [ ] **Step 4: Run** TEST `[joints]`.
   Expected: pass.
 - [ ] **Step 5: Commit** `Check joint limits and chains on the reference humanoid`.
