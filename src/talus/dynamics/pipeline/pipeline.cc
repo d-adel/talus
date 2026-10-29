@@ -251,7 +251,7 @@ StepReport step(World& world) {
   report.profile.travel = clock.lap();
 
   world.broadPhase.update(bodies, parameters, travel, workers, &world.manifolds);
-  world.manifolds.createPairs(bodies, world.broadPhase.created());
+  world.manifolds.createPairs(bodies, world.broadPhase.created(), &world.joints);
 
   const std::span<const BodyPair> latticePairs = world.broadPhase.latticePairs();
   std::vector<Contact> sleeping;
@@ -297,7 +297,7 @@ StepReport step(World& world) {
   }
 
   world.manifolds.recolour(bodies, events.changed);
-  world.islandStore.build(bodies, world.manifolds, events.changed, !events.separated.empty(), contacts, world.islands);
+  world.islandStore.build(bodies, world.manifolds, events.changed, !events.separated.empty(), contacts, world.islands, world.joints);
   world.manifolds.recolour(bodies, world.manifolds.syncBodies(bodies, workers));
 
   std::vector<Island>& islands = world.islands;
@@ -367,7 +367,7 @@ StepReport step(World& world) {
   const uint32_t splitIsland = world.islandStore.takeSplit();
   const std::function<void()> alongside = [&] {
     if (splitIsland != noIsland) {
-      (void)world.islandStore.split(bodies, splitIsland, world.manifolds, contacts);
+      (void)world.islandStore.split(bodies, splitIsland, world.manifolds, contacts, world.joints);
     }
 
     world.broadPhase.rebuildTrees();

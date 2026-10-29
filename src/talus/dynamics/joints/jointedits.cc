@@ -115,11 +115,31 @@ uint32_t addJoint(World& world, const JointDef& def) {
   stored.spring.target = normalised(def.spring.target);
   wakeJointBodies(world, stored);
 
+  if (!stored.collideConnected && stored.bodyA != noBody) {
+    world.manifolds.forgetPair(stored.bodyA, stored.bodyB);
+  }
+
   return world.joints.add(stored);
 }
 
 bool removeJoint(World& world, uint32_t joint) {
-  return world.joints.remove(joint);
+  const Joint* found = world.joints.find(joint);
+
+  if (found == nullptr) {
+    return false;
+  }
+
+  const uint32_t a = found->def.bodyA;
+  const uint32_t b = found->def.bodyB;
+
+  world.joints.remove(joint);
+
+  if (a != noBody) {
+    world.islandStore.markRemoved(b);
+    world.islandStore.requestSplit(b);
+  }
+
+  return true;
 }
 
 bool setJointDrive(World& world, uint32_t joint, const JointDrive& drive) {
