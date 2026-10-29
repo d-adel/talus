@@ -135,6 +135,14 @@ bool sleepsWithin(World& world, uint32_t steps) {
   return false;
 }
 
+JointDef anchored(uint32_t a, uint32_t b) {
+  JointDef def = between(a, b);
+  def.frameA.position = glm::dvec3(0.125, 0.0, 0.0);
+  def.frameB.position = glm::dvec3(-0.125, 0.0, 0.0);
+
+  return def;
+}
+
 std::vector<uint32_t> sleepingChain(World& world, const talus::field::SampledSdf& crate) {
   addFloor(world);
 
@@ -145,7 +153,7 @@ std::vector<uint32_t> sleepingChain(World& world, const talus::field::SampledSdf
   }
 
   for (uint32_t index = 0u; index + 1u != ids.size(); ++index) {
-    REQUIRE(addJoint(world, between(ids[index], ids[index + 1u])) == index + 1u);
+    REQUIRE(addJoint(world, anchored(ids[index], ids[index + 1u])) == index + 1u);
   }
 
   return ids;
@@ -353,7 +361,7 @@ TEST_CASE("removing a joint splits its island", "[dynamics][joints]") {
 
   const uint32_t a = addResting(world, crate, 0.0);
   const uint32_t b = addResting(world, crate, 0.25);
-  const uint32_t joint = addJoint(world, between(a, b));
+  const uint32_t joint = addJoint(world, anchored(a, b));
 
   for (uint32_t index = 0u; index != 3u; ++index) {
     (void)talus::dynamics::step(world);
@@ -442,4 +450,50 @@ TEST_CASE("adding an excluding joint forgets the existing manifold", "[dynamics]
 
   CHECK_FALSE(cached(world, a, b));
   CHECK_FALSE(touching(world, a, b));
+}
+
+TEST_CASE("removing a joint wakes a sleeping body", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+
+  addFloor(world);
+
+  const uint32_t a = addResting(world, crate, 0.0);
+  const uint32_t joint = addJoint(world, between(noBody, a));
+
+  REQUIRE(joint != 0u);
+  REQUIRE(sleepsWithin(world, 600u));
+  REQUIRE(removeJoint(world, joint));
+  (void)talus::dynamics::step(world);
+
+  CHECK_FALSE(world.bodies.rigids[0].asleep);
+}
+
+TEST_CASE("removing an excluding joint lets overlapping bodies collide", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+
+  addFloor(world);
+
+  const uint32_t a = addResting(world, crate, 0.0);
+  const uint32_t b = addResting(world, crate, 0.08);
+  const uint32_t joint = addJoint(world, between(a, b));
+
+  REQUIRE(joint != 0u);
+
+  for (uint32_t index = 0u; index != 10u; ++index) {
+    (void)talus::dynamics::step(world);
+  }
+
+  REQUIRE_FALSE(touching(world, a, b));
+  REQUIRE(removeJoint(world, joint));
+
+  bool contact = false;
+
+  for (uint32_t index = 0u; index != 2u; ++index) {
+    (void)talus::dynamics::step(world);
+    contact = contact || touching(world, a, b);
+  }
+
+  CHECK(contact);
 }

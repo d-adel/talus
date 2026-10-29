@@ -107,6 +107,8 @@ struct Joint {
   JointImpulses impulses;
 };
 
+[[nodiscard]] bool excludesPair(const JointDef& def);
+
 class JointSet {
 public:
   [[nodiscard]] uint32_t add(const JointDef& def);

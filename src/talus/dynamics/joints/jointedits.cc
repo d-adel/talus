@@ -115,7 +115,7 @@ uint32_t addJoint(World& world, const JointDef& def) {
   stored.spring.target = normalised(def.spring.target);
   wakeJointBodies(world, stored);
 
-  if (!stored.collideConnected && stored.bodyA != noBody) {
+  if (excludesPair(stored)) {
     world.manifolds.forgetPair(stored.bodyA, stored.bodyB);
   }
 
@@ -129,14 +129,19 @@ bool removeJoint(World& world, uint32_t joint) {
     return false;
   }
 
-  const uint32_t a = found->def.bodyA;
-  const uint32_t b = found->def.bodyB;
+  const JointDef def = found->def;
 
+  wakeJointBodies(world, def);
   world.joints.remove(joint);
 
-  if (a != noBody) {
-    world.islandStore.markRemoved(b);
-    world.islandStore.requestSplit(b);
+  if (def.bodyA != noBody) {
+    world.islandStore.markRemoved(def.bodyB);
+    world.islandStore.requestSplit(def.bodyB);
+  }
+
+  if (excludesPair(def) && !world.joints.excludes(def.bodyA, def.bodyB)) {
+    world.broadPhase.markMoved(def.bodyA);
+    world.broadPhase.markMoved(def.bodyB);
   }
 
   return true;

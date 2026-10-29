@@ -13,10 +13,10 @@ uint64_t pairKey(uint32_t a, uint32_t b) {
   return (static_cast<uint64_t>(low) << 32u) | high;
 }
 
-bool excludesPair(const JointDef& def) {
-  return !def.collideConnected && def.bodyA != noBody && def.bodyB != noBody;
 }
 
+bool excludesPair(const JointDef& def) {
+  return !def.collideConnected && def.bodyA != noBody && def.bodyB != noBody;
 }
 
 uint32_t JointSet::add(const JointDef& def) {
