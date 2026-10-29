@@ -50,7 +50,11 @@ The work fails, even if it runs, if any of these happen:
 - **Rows.** Each joint carries softness for its rigid rows (hertz and damping ratio) and a `collideConnected` flag.
   - Defaults follow Box3D: 60 Hz, damping ratio 2, clamped to a quarter of the substep rate.
   - Limits are speculative: when a limit is not yet reached, its row allows the remaining gap to close in one substep.
-  - A soft limit's stiffness is its frequency squared times the joined pair's effective inertia. So, like Box3D's motor, it is soft between light bodies, and a strong drive could push a light foot past its ankle limit. The first task measures this on Reflex's reference humanoid at its torque caps. If Box3D-style limits miss verification 3 at 4 substeps, the plan chooses between a per-island substep count and limit stiffness sized from the joint's torque cap before building further.
+  - A soft limit's stiffness is its frequency squared times the joined pair's effective inertia. So, like Box3D's motor, it is soft between light bodies, and a strong drive could push a light foot past its ankle limit.
+  - **Measured while planning (2026-10-29).** For Reflex's reference humanoid (`humanoid20.json`), a 60 Hz soft limit would be pushed past its stop at the joint's torque cap by between 0.04 and 0.87 rad, depending on the joint and axis. Every joint misses the 0.02 rad check. The worst are the ankles, elbows and wrists, about 0.2 to 0.87 rad.
+    - Method: torque cap / (effective inertia × (2π·60)²), using the pair's centre-of-mass inertias from the rig.
+    - A per-island substep count would need about 27 substeps for the ankle.
+  - **Decision.** Limit rows are therefore **rigid**. They have no softness, so the impulse fully cancels the closing velocity, and they correct position at bias C/h, capped at a joint correction speed of 3 rad/s. This is the stiffest form of "limit stiffness sized from the torque cap". Point and alignment rows keep Box3D's soft 60 Hz rows. If rigid limits jitter or still miss verification 3, the work stops and reports before going further.
 - **Destruction.** Until pull request 5, joint forces do not load destruction bonds. Destruction re-centres and splits compounds. Joint anchors are re-expressed in the new body frame. When a compound splits, the joint stays with the piece that holds its anchor.
 - **Solve order.** The rows are solved in `solveSoftstep`, using Box3D's joint mathematics.
   - Joints are prepared after body gather.
