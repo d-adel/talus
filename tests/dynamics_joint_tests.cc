@@ -1424,7 +1424,7 @@ TEST_CASE("a swing-twist cone holds a light limb pushed hard at a hip-like cone"
   hip.swing = glm::dvec2(1.3, 0.65);
   hip.centre = glm::dvec2(-0.8, 0.15);
 
-  checkConeAtCap(hip, 3.0, 250.0);
+  checkConeAtCap(hip, 2.79, 250.0);
 }
 
 TEST_CASE("a swing-twist cone at the smallest half-angle still holds", "[dynamics][joints]") {
@@ -1433,6 +1433,46 @@ TEST_CASE("a swing-twist cone at the smallest half-angle still holds", "[dynamic
   narrow.centre = glm::dvec2(0.0);
 
   checkConeAtCap(narrow, 0.5, 10.0);
+}
+
+TEST_CASE("a swing-twist drive holds a swing at the edge of its reach", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const double reach = 0.89 * std::numbers::pi;
+  const double stiffness = 1.0e4;
+
+  for (uint32_t direction = 0u; direction != 8u; ++direction) {
+    const double heading = 0.25 * std::numbers::pi * static_cast<double>(direction) + (direction % 2u == 0u ? 0.0 : 0.1);
+    const glm::dvec2 target = reach * glm::dvec2(std::cos(heading), std::sin(heading));
+    CAPTURE(direction);
+
+    World world;
+    world.parameters.sleep = false;
+    const uint32_t index = addHingedCrate(world, crate);
+    JointDef def = worldSwingTwist(world, index);
+    def.drive.maxTorque = 100.0;
+    def.drive.axes[1].targetAngle = target.x;
+    def.drive.axes[2].targetAngle = target.y;
+
+    for (AxisDrive& axis : def.drive.axes) {
+      axis.stiffness = stiffness;
+      axis.damping = 0.05 * stiffness;
+    }
+
+    REQUIRE(addJoint(world, def) != 0u);
+
+    double worst = 0.0;
+
+    for (uint32_t frame = 0u; frame != 600u; ++frame) {
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+      if (frame >= 120u) {
+        worst = std::max(worst, glm::length(jointAngles(world, def).swing - target));
+      }
+    }
+
+    CAPTURE(worst);
+    CHECK(worst <= 0.03);
+  }
 }
 
 TEST_CASE("a swing-twist drive swings a wide cone through its inside", "[dynamics][joints]") {
@@ -1667,9 +1707,15 @@ TEST_CASE("swing-twist ranges, cones and drive targets beyond their bounds are r
     return joint != 0u;
   };
 
-  CHECK_FALSE(accepts(-0.99 * pi, 0.99 * pi, glm::dvec2(0.99 * pi), glm::dvec2(0.0), glm::dvec3(pi, -pi, pi)));
-  CHECK(accepts(-0.99 * pi, 0.99 * pi, glm::dvec2(0.99 * pi), glm::dvec2(0.0), glm::dvec3(pi, 0.7 * pi, -0.7 * pi)));
-  CHECK_FALSE(accepts(-0.99 * pi, 0.99 * pi, glm::dvec2(0.99 * pi), glm::dvec2(0.0), glm::dvec3(pi, 0.71 * pi, -0.7 * pi)));
+  const glm::dvec2 widest(0.89 * pi);
+
+  CHECK_FALSE(accepts(-0.99 * pi, 0.99 * pi, widest, glm::dvec2(0.0), glm::dvec3(pi, -pi, pi)));
+  CHECK(accepts(-0.99 * pi, 0.99 * pi, widest, glm::dvec2(0.0), glm::dvec3(pi, 0.62 * pi, -0.63 * pi)));
+  CHECK_FALSE(accepts(-0.99 * pi, 0.99 * pi, widest, glm::dvec2(0.0), glm::dvec3(pi, 0.63 * pi, -0.63 * pi)));
+  CHECK(accepts(-0.4, 0.2, glm::dvec2(0.889 * pi, 0.3), glm::dvec2(0.0), still));
+  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(0.891 * pi, 0.3), glm::dvec2(0.0), still));
+  CHECK(accepts(-0.4, 0.2, glm::dvec2(1.85, 1.86), glm::dvec2(0.93, 0.0), still));
+  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(1.85, 1.86), glm::dvec2(0.94, 0.0), still));
   CHECK(accepts(-0.4, 0.2, cone, offset, still));
   CHECK(accepts(-2.3, 1.1, glm::dvec2(1.85, 1.86), glm::dvec2(0.0), still));
   CHECK(accepts(-0.6, 0.6, glm::dvec2(1.3, 0.65), glm::dvec2(-0.8, 0.15), still));
@@ -1703,5 +1749,8 @@ TEST_CASE("swing-twist ranges, cones and drive targets beyond their bounds are r
   CHECK_FALSE(setJointDrive(world, joint, drive));
   drive.axes[1].targetAngle = 2.0;
   drive.axes[2].targetAngle = 2.0;
+  CHECK_FALSE(setJointDrive(world, joint, drive));
+  drive.axes[1].targetAngle = 1.9;
+  drive.axes[2].targetAngle = 1.9;
   CHECK(setJointDrive(world, joint, drive));
 }

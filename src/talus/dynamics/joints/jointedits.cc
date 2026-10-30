@@ -39,6 +39,8 @@ bool validFrame(const JointFrame& frame) {
   return finite(frame.position) && finite(length) && length > 1e-12;
 }
 
+constexpr double swingReach = 0.89;
+
 bool withinTurn(double angle, double reach) {
   return finite(angle) && std::abs(angle) <= reach * std::numbers::pi;
 }
@@ -58,11 +60,11 @@ bool validDrive(const JointDrive& drive) {
 
   const glm::dvec2 swing(drive.axes[1].targetAngle, drive.axes[2].targetAngle);
 
-  return withinTurn(glm::length(swing), 0.99) && validCap(drive.maxTorque) && finite(drive.feedForward);
+  return withinTurn(glm::length(swing), swingReach) && validCap(drive.maxTorque) && finite(drive.feedForward);
 }
 
 bool validHalfAngle(double angle) {
-  return angle >= 1.0e-3 && withinTurn(angle, 0.99);
+  return angle >= 1.0e-3 && withinTurn(angle, swingReach);
 }
 
 bool validCone(const ConeLimit& cone) {
@@ -72,7 +74,7 @@ bool validCone(const ConeLimit& cone) {
         || (cone.twistLower <= cone.twistUpper && withinTurn(cone.twistLower, 0.99)
             && withinTurn(cone.twistUpper, 0.99) && validHalfAngle(cone.swing.x)
             && validHalfAngle(cone.swing.y)
-            && withinTurn(glm::length(cone.centre) + std::max(cone.swing.x, cone.swing.y), 0.99)));
+            && withinTurn(glm::length(cone.centre) + std::max(cone.swing.x, cone.swing.y), swingReach)));
 }
 
 bool validDef(const JointDef& def) {
