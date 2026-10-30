@@ -959,6 +959,13 @@ void switchTiers(World& world, StepReport& report) {
 
     return *recorded;
   };
+  const auto jointed = [&](uint32_t id) {
+    const std::span<const Joint> joints = world.joints.all();
+
+    return std::any_of(joints.begin(), joints.end(), [id](const Joint& joint) {
+      return joint.def.bodyA == id || joint.def.bodyB == id;
+    });
+  };
 
   for (SwitchableBody& body : world.bodies.switchables) {
     const std::optional<BodyRef> ref = findBody(world.bodies, body.id);
@@ -967,7 +974,9 @@ void switchTiers(World& world, StepReport& report) {
       continue;
     }
 
-    if (body.tier == Tier::Rigid) {
+    if (body.tier == Tier::Rigid && jointed(body.id)) {
+      body.frames = 0u;
+    } else if (body.tier == Tier::Rigid) {
       screenRigid(world, body, ref->index, recordedNow());
       body.frames =
         body.dent >= world.parameters.promoteDent ? body.frames + 1u : 0u;

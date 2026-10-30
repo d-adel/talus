@@ -242,6 +242,46 @@ std::vector<uint32_t> kinematicGuests(
   return guests;
 }
 
+void wakeMovedPartners(World& world) {
+  BodySet& bodies = world.bodies;
+  const auto rigidOf = [&](uint32_t id) -> std::optional<BodyRef> {
+    if (id == noBody) {
+      return std::nullopt;
+    }
+
+    const BodyRef ref = world.islandStore.refOf(id);
+
+    if (ref.side != Side::Rigid || ref.index >= bodies.rigids.size() || bodies.rigids[ref.index].id != id) {
+      return std::nullopt;
+    }
+
+    return ref;
+  };
+  const auto moving = [&](const std::optional<BodyRef>& ref) {
+    if (!ref) {
+      return false;
+    }
+
+    const RigidBody& body = bodies.rigids[ref->index];
+
+    return !(body.mass > 0.0) && !body.asleep
+           && (body.velocity != glm::dvec3(0.0) || body.angularVelocity != glm::dvec3(0.0));
+  };
+
+  for (const Joint& joint : world.joints.all()) {
+    const std::optional<BodyRef> a = rigidOf(joint.def.bodyA);
+    const std::optional<BodyRef> b = rigidOf(joint.def.bodyB);
+
+    if (b && moving(a)) {
+      wakeBody(bodies, *b);
+    }
+
+    if (a && moving(b)) {
+      wakeBody(bodies, *a);
+    }
+  }
+}
+
 void addSoftstepWork(StepProfile& total, const StepProfile& part) {
   total.gather += part.gather;
   total.prepare += part.prepare;
@@ -518,6 +558,7 @@ StepReport step(World& world) {
 
     report.widePairs += jointedRun.widePairs;
     report.jointSubsteps = jointedRun.substeps;
+    report.jointRows += jointedRun.jointRows;
   }
 
   const SoftstepResult freeRun = solveSoftstep(
@@ -539,6 +580,7 @@ StepReport step(World& world) {
   );
 
   report.widePairs += freeRun.widePairs;
+  report.jointRows += freeRun.jointRows;
 
   if (!unjointed.empty()) {
     report.softstepSubsteps = freeRun.substeps;
@@ -582,10 +624,21 @@ StepReport step(World& world) {
     }
 
     for (const Island* island : strainIslands) {
-      report.substeps = std::max(
-        report.substeps,
-        solveStrainstep(bodies, world.manifolds, contacts, *island, parameters, *world.strainstepArena, workers)
+      const StrainstepResult strained = solveStrainstep(
+        bodies,
+        world.manifolds,
+        contacts,
+        *island,
+        parameters,
+        *world.strainstepArena,
+        workers,
+        &world.joints,
+        &world.islandStore,
+        start
       );
+
+      report.substeps = std::max(report.substeps, strained.substeps);
+      report.jointRows += strained.jointRows;
 
       for (const uint32_t index : island->contacts) {
         lastContacts.push_back(contacts[index]);
@@ -613,6 +666,7 @@ StepReport step(World& world) {
 
   if (parameters.sleep) {
     world.islandStore.linkContacts(bodies, world.contacts);
+    wakeMovedPartners(world);
     settleIslands(bodies, world.manifolds, world.islandStore, islands, start, parameters);
   }
 

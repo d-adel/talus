@@ -1615,7 +1615,7 @@ SoftstepResult solveSoftstep(
     profile->joints = jointTime;
   }
 
-  return {widePairs, substeps};
+  return {widePairs, substeps, jointWork ? static_cast<uint32_t>(jointRows.size()) : 0u};
 }
 
 }

@@ -195,6 +195,14 @@ bool setSpringTarget(World& world, uint32_t joint, const JointFrame& target) {
   return true;
 }
 
+void wakeJointPartners(World& world, uint32_t id) {
+  for (const Joint& joint : world.joints.all()) {
+    if (joint.def.bodyA == id || joint.def.bodyB == id) {
+      wakeJointBodies(world, joint.def);
+    }
+  }
+}
+
 std::optional<JointReport> jointReport(const World& world, uint32_t joint) {
   const Joint* found = world.joints.find(joint);
 

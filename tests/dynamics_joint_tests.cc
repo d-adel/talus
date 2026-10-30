@@ -4,6 +4,7 @@
 
 #include <fixtures/humanoid.h>
 
+#include <talus/deformable/solver/solver.h>
 #include <talus/dynamics/bodyset/bodyset.h>
 #include <talus/dynamics/edits/edits.h>
 #include <talus/dynamics/joints/jointedits.h>
@@ -13,8 +14,11 @@
 #include <talus/dynamics/softstep/softstep.h>
 #include <talus/dynamics/tiers/tiers.h>
 #include <talus/field/sampledsdf/sampledsdf.h>
+#include <talus/material.h>
+#include <talus/mesh.h>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -22,8 +26,10 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <numbers>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace {
@@ -165,6 +171,73 @@ std::vector<uint32_t> sleepingChain(World& world, const talus::field::SampledSdf
   }
 
   return ids;
+}
+
+talus::field::SampledSdf boxOf(const glm::dvec3& half, double voxel, double outset = 0.0) {
+  const glm::vec3 reach = glm::vec3(half) + glm::vec3(static_cast<float>(2.0 * voxel));
+
+  return talus::field::bake(
+    std::vector<talus::field::Primitive>{
+      fixture::box(glm::vec3(0.0f), glm::vec3(half) + glm::vec3(static_cast<float>(outset)))
+    },
+    -reach,
+    reach,
+    glm::uvec3(glm::round(2.0f * reach / static_cast<float>(voxel))) + glm::uvec3(1u)
+  );
+}
+
+talus::PhysicalMaterial jelly() {
+  talus::PhysicalMaterial material;
+  material.density = 500.0f;
+  material.friction = 0.7f;
+  material.youngsModulus = 5.0e4f;
+  material.poissonsRatio = 0.4f;
+
+  return material;
+}
+
+struct SoftBlock {
+  talus::field::SampledSdf field;
+  std::vector<talus::PhysicalMaterial> lanes;
+  std::shared_ptr<const talus::PreparedMesh> mesh;
+};
+
+SoftBlock softBlock(const glm::dvec3& half, double voxel) {
+  SoftBlock block;
+  block.field = boxOf(half, voxel, 1.0e-4);
+  block.lanes.assign(2u, jelly());
+  block.mesh = talus::deformable::buildMesh(
+    block.field,
+    block.lanes,
+    glm::mat4(1.0f),
+    std::span<const talus::deformable::SupportVolume>{},
+    talus::deformable::VolumeElementType::Hex
+  );
+
+  return block;
+}
+
+void addSoftBlock(World& world, const SoftBlock& block, const glm::dvec3& at, const glm::dvec3& velocity = glm::dvec3(0.0)) {
+  (void)addLattice(world.bodies, block.mesh, block.lanes, at, velocity, block.lanes.front().friction, &block.field);
+}
+
+const Island* islandWith(const World& world, uint32_t index) {
+  for (const Island& island : world.islands) {
+    for (const BodyRef& ref : island.bodies) {
+      if (ref.side == Side::Rigid && ref.index == index) {
+        return &island;
+      }
+    }
+  }
+
+  return nullptr;
+}
+
+void requireStrainstep(const World& world, uint32_t index) {
+  const Island* island = islandWith(world, index);
+
+  REQUIRE(island != nullptr);
+  REQUIRE(island->owner == Owner::Strainstep);
 }
 
 }
@@ -888,6 +961,78 @@ uint64_t deckHash(uint32_t workers, uint32_t width) {
   return hash;
 }
 
+struct LatticeChain {
+  std::vector<uint32_t> links;
+  std::vector<JointDef> defs;
+};
+
+LatticeChain addLatticeChain(World& world, const talus::field::SampledSdf& crate, const SoftBlock& slab) {
+  const glm::dquat across = glm::angleAxis(-0.5 * std::numbers::pi, glm::dvec3(0.0, 1.0, 0.0));
+  LatticeChain chain;
+
+  world.parameters.sleep = false;
+  addFloor(world);
+  addSoftBlock(world, slab, glm::dvec3(-0.4, 0.15, 0.0));
+
+  for (uint32_t link = 0u; link != 5u; ++link) {
+    chain.links.push_back(addCrate(world, crate, glm::dvec3(-0.5 + 0.25 * static_cast<double>(link), 0.25, 0.0)));
+  }
+
+  for (uint32_t link = 0u; link + 1u != chain.links.size(); ++link) {
+    JointDef def = anchored(chain.links[link], chain.links[link + 1u]);
+    def.kind = JointKind::Hinge;
+    def.frameA.rotation = across;
+    def.frameB.rotation = across;
+    REQUIRE(addJoint(world, def) != 0u);
+    chain.defs.push_back(def);
+  }
+
+  return chain;
+}
+
+SoftBlock chainSlab() {
+  return softBlock(glm::dvec3(0.2, 0.05, 0.15), 0.05);
+}
+
+uint64_t latticeChainHash(uint32_t workers, uint32_t width) {
+  const talus::field::SampledSdf crate = crateField();
+  const SoftBlock slab = chainSlab();
+  World world;
+
+  world.workerCount = workers;
+  world.simdWidth = width;
+  (void)addLatticeChain(world, crate, slab);
+
+  for (uint32_t frame = 0u; frame != 60u; ++frame) {
+    const StepReport report = talus::dynamics::step(world);
+
+    if (report.nonFinite || report.jointRows != 4u) {
+      return 0u;
+    }
+  }
+
+  uint64_t hash = 1469598103934665603ull;
+
+  for (const RigidBody& body : world.bodies.rigids) {
+    hash = bodyHash(hash, body);
+  }
+
+  for (const glm::dvec3& node : world.bodies.lattices[0].position) {
+    for (int axis = 0; axis != 3; ++axis) {
+      hash = mixBits(hash, node[axis]);
+    }
+  }
+
+  for (const Joint& joint : world.joints.all()) {
+    for (int axis = 0; axis != 3; ++axis) {
+      hash = mixBits(hash, joint.report.force[axis]);
+      hash = mixBits(hash, joint.report.torque[axis]);
+    }
+  }
+
+  return hash;
+}
+
 }
 
 TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 and 8", "[dynamics][joints]") {
@@ -901,6 +1046,7 @@ TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 an
   const JointedRun twisted = chainOnPile(1u, 1u, JointKind::SwingTwist);
   const JointedRun sprung = chainOnPile(1u, 1u, JointKind::Spring);
   const uint64_t deck = deckHash(1u, 1u);
+  const uint64_t strained = latticeChainHash(1u, 1u);
 
   REQUIRE(serial.hash != 0u);
   REQUIRE(serial.loaded);
@@ -911,6 +1057,7 @@ TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 an
   REQUIRE(sprung.loaded);
   REQUIRE(sprung.saturated);
   REQUIRE(deck != 0u);
+  REQUIRE(strained != 0u);
 
   for (const uint32_t width : widths) {
     for (const uint32_t workers : {1u, 4u, 8u}) {
@@ -919,6 +1066,7 @@ TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 an
       CHECK(chainOnPile(workers, width, JointKind::SwingTwist).hash == twisted.hash);
       CHECK(chainOnPile(workers, width, JointKind::Spring).hash == sprung.hash);
       CHECK(deckHash(workers, width) == deck);
+      CHECK(latticeChainHash(workers, width) == strained);
     }
   }
 }
@@ -1225,9 +1373,10 @@ TEST_CASE("hinge drive torque respects per-direction bounds and the cap", "[dyna
 
 namespace {
 
-void checkLimitAtCap(double dt, uint32_t substeps) {
+double checkLimitAtCap(double dt, uint32_t substeps, const SoftBlock* beside = nullptr) {
   const talus::field::SampledSdf crate = crateField();
   const double bound = 0.5;
+  double widest = 0.0;
 
   for (const double side : {1.0, -1.0}) {
     CAPTURE(side);
@@ -1237,6 +1386,12 @@ void checkLimitAtCap(double dt, uint32_t substeps) {
     world.parameters.dt = dt;
     world.parameters.jointSubsteps = substeps;
     const uint32_t index = addHingedCrate(world, crate);
+
+    if (beside != nullptr) {
+      (void)addStatic(world.bodies, floor(), 0.5, 0.0, hingePivot + glm::dvec3(0.0, -0.4, 0.0));
+      addSoftBlock(world, *beside, hingePivot + glm::dvec3(0.16, -0.1, 0.0));
+    }
+
     JointDef def = worldHinge(world, index, hingePivot);
     def.hinge.enabled = true;
     def.hinge.lower = -bound;
@@ -1253,6 +1408,10 @@ void checkLimitAtCap(double dt, uint32_t substeps) {
     for (uint32_t frame = 0u; frame != steps; ++frame) {
       REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
       furthest = std::max(furthest, side * hingeAngle(world, def));
+
+      if (beside != nullptr) {
+        requireStrainstep(world, index);
+      }
     }
 
     const JointReport report = *jointReport(world, joint);
@@ -1261,7 +1420,10 @@ void checkLimitAtCap(double dt, uint32_t substeps) {
     CHECK(side * hingeAngle(world, def) >= bound - 0.02);
     CHECK(report.limitActive);
     CHECK(report.driveSaturated);
+    widest = std::max(widest, furthest);
   }
+
+  return widest;
 }
 
 }
@@ -1272,6 +1434,15 @@ TEST_CASE("a hinge limit holds at the drive cap", "[dynamics][joints]") {
 
 TEST_CASE("a hinge limit holds at the drive cap with a 30 Hz step", "[dynamics][joints]") {
   checkLimitAtCap(1.0 / 30.0, 32u);
+}
+
+TEST_CASE("a hinge limit in a strainstep island holds at the drive cap the same at 60 and 30 Hz", "[dynamics][joints]") {
+  const SoftBlock wall = softBlock(glm::dvec3(0.1, 0.2, 0.2), 0.1);
+  const double sixty = checkLimitAtCap(1.0 / 60.0, 16u, &wall);
+  const double thirty = checkLimitAtCap(1.0 / 30.0, 32u, &wall);
+
+  CAPTURE(sixty, thirty);
+  CHECK(std::abs(sixty - thirty) <= 1.0e-6);
 }
 
 TEST_CASE("hinge limits and drive targets beyond a half turn are rejected", "[dynamics][joints]") {
@@ -2422,4 +2593,211 @@ TEST_CASE("a humanoid-mass chain swings without gaining energy", "[dynamics][joi
   REQUIRE(swing > 0.0);
   CHECK(fastest <= 5.0);
   CHECK(gain <= 0.01 * swing);
+}
+
+TEST_CASE("a jointed chain touching a lattice keeps its joints", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const SoftBlock slab = chainSlab();
+  World world;
+  const LatticeChain chain = addLatticeChain(world, crate, slab);
+  const uint32_t end = findBody(world.bodies, chain.links.front())->index;
+  const uint32_t tip = findBody(world.bodies, chain.links.back())->index;
+  double widest = 0.0;
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    const StepReport report = talus::dynamics::step(world);
+    REQUIRE_FALSE(report.nonFinite);
+    requireStrainstep(world, end);
+    CHECK(report.jointRows == 4u);
+    CHECK(report.substeps >= world.parameters.jointSubsteps);
+
+    for (const JointDef& def : chain.defs) {
+      widest = std::max(widest, anchorGap(world, def));
+    }
+  }
+
+  CAPTURE(world.bodies.rigids[tip].position.y);
+  CHECK(widest <= 0.005);
+  CHECK(world.bodies.rigids[tip].position.y < 0.2);
+}
+
+namespace {
+
+talus::PhysicalMaterial softRubber() {
+  talus::PhysicalMaterial material;
+  material.density = 1000.0f;
+  material.youngsModulus = 4.0e4f;
+  material.poissonsRatio = 0.45f;
+
+  return material;
+}
+
+int firstPromotion(bool jointed) {
+  const std::vector<talus::PhysicalMaterial> lanes{softRubber()};
+  const talus::field::SampledSdf blockField = boxOf(glm::dvec3(0.1, 0.025, 0.1), 0.025);
+  const talus::field::SampledSdf crate = boxOf(glm::dvec3(0.025), 0.005);
+  World world;
+  addFloor(world);
+  const uint32_t block = addSwitchable(
+    world.bodies,
+    talus::deformable::buildMesh(
+      blockField,
+      lanes,
+      glm::mat4(1.0f),
+      std::span<const talus::deformable::SupportVolume>{},
+      talus::deformable::VolumeElementType::Hex
+    ),
+    lanes,
+    blockField,
+    glm::dvec3(0.0, 0.125, 0.0),
+    glm::dvec3(0.0),
+    0.5,
+    0.0
+  );
+  (void)addRigidBox(world.bodies, crate, glm::dvec3(0.025), 2.0, glm::dvec3(0.0, 0.175, 0.0), glm::dvec3(0.0), 0.5, 3u);
+
+  if (jointed) {
+    JointDef def = between(noBody, block);
+    def.frameA.position = world.bodies.rigids[findBody(world.bodies, block)->index].position;
+    REQUIRE(addJoint(world, def) != 0u);
+  }
+
+  for (int frame = 0; frame != 30; ++frame) {
+    const StepReport report = talus::dynamics::step(world);
+    REQUIRE_FALSE(report.nonFinite);
+
+    if (report.promotions != 0u || world.bodies.switchables[0].tier != Tier::Rigid) {
+      return frame;
+    }
+  }
+
+  return -1;
+}
+
+}
+
+TEST_CASE("a jointed switchable body stays rigid when struck", "[dynamics][joints]") {
+  REQUIRE(firstPromotion(false) >= 0);
+  CHECK(firstPromotion(true) < 0);
+}
+
+TEST_CASE("a sleeping body wakes and follows the mass-0 body it hangs from", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const double mass = 3.0;
+  const glm::dvec3 velocity(1.0, 0.0, 0.0);
+  World world;
+  HandGrip grip;
+  grip.hand = addRigidBox(world.bodies, crate, glm::dvec3(0.05), 0.0, gripPoint + handReach, glm::dvec3(0.0), 0.5, 3u);
+  grip.box = addRigidBox(world.bodies, crate, glm::dvec3(0.05), mass, gripPoint, glm::dvec3(0.0), 0.5, 3u);
+  JointDef def = worldSpring(world.bodies.rigids[grip.box].id, glm::dvec3(0.0));
+  def.bodyA = world.bodies.rigids[grip.hand].id;
+  def.frameA.position = -handReach;
+  def.spring.maxForce = jointInfinity;
+  grip.joint = addJoint(world, def);
+  REQUIRE(grip.joint != 0u);
+  REQUIRE(sleepsWithin(world, 300u));
+
+  const double dt = world.parameters.dt;
+  const double bound = glm::length(velocity) * std::sqrt(mass / def.spring.linearStiffness);
+  double furthest = 0.0;
+  double late = 0.0;
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    moveHand(world, grip, gripPoint + handReach + dt * static_cast<double>(frame) * velocity, velocity);
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+    if (frame == 0u) {
+      REQUIRE_FALSE(world.bodies.rigids[grip.box].asleep);
+      REQUIRE(world.bodies.rigids[grip.box].velocity.x > 0.0);
+    }
+
+    const double lag = std::abs(gripSlack(world, grip).x);
+
+    furthest = std::max(furthest, lag);
+
+    if (frame >= 60u) {
+      late = std::max(late, lag);
+    }
+  }
+
+  const double weight = mass * std::abs(world.parameters.gravity.y);
+
+  CAPTURE(furthest, late, bound);
+  CHECK(furthest <= bound);
+  CHECK(late < 1.0e-3);
+  CHECK(std::abs(glm::length(jointReport(world, grip.joint)->force) - weight) <= 0.01 * weight);
+}
+
+TEST_CASE("a body held by friction stays awake while the mass-0 body it is sprung to moves", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const glm::dvec3 lift(0.0, 1.0, 0.0);
+  World world;
+  addFloor(world);
+  const uint32_t box = findBody(world.bodies, addResting(world, crate, 0.0))->index;
+  const uint32_t hand =
+    addRigidBox(world.bodies, crate, glm::dvec3(0.05), 0.0, world.bodies.rigids[box].position + lift, glm::dvec3(0.2, 0.0, 0.0), 0.5, 3u);
+  JointDef def = between(world.bodies.rigids[hand].id, world.bodies.rigids[box].id);
+  def.kind = JointKind::Spring;
+  def.frameA.position = -lift;
+  def.spring.linearStiffness = 20.0;
+  def.spring.linearDamping = 5.0;
+  REQUIRE(addJoint(world, def) != 0u);
+
+  const double start = world.bodies.rigids[box].position.x;
+
+  for (uint32_t frame = 0u; frame != 240u; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+  }
+
+  CAPTURE(world.bodies.rigids[box].position.x - start);
+  CHECK_FALSE(world.bodies.rigids[box].asleep);
+  CHECK(world.bodies.rigids[box].position.x - start > 0.1);
+}
+
+TEST_CASE("a joint rides a moving mass-0 body in a strainstep island", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const glm::dvec3 trayHalf(0.15, 0.025, 0.15);
+  const talus::field::SampledSdf trayField = boxOf(trayHalf, 0.025);
+  const SoftBlock load = softBlock(glm::dvec3(0.05), 0.05);
+  const glm::dvec3 velocity(1.0, 0.0, 0.0);
+  World world;
+  world.parameters.sleep = false;
+  HandGrip grip;
+  grip.hand = addRigidBox(world.bodies, crate, glm::dvec3(0.05), 0.0, gripPoint + handReach, velocity, 0.5, 3u);
+  grip.box = addRigidBox(world.bodies, trayField, trayHalf, 2.0, gripPoint, velocity, 0.5, 3u);
+  addSoftBlock(world, load, gripPoint + glm::dvec3(0.0, trayHalf.y + 0.05, 0.0), velocity);
+  JointDef def = worldSpring(world.bodies.rigids[grip.box].id, glm::dvec3(0.0));
+  def.bodyA = world.bodies.rigids[grip.hand].id;
+  def.frameA.position = -handReach;
+  def.spring.maxForce = jointInfinity;
+  def.spring.angularStiffness = 50.0;
+  def.spring.angularDamping = 5.0;
+  grip.joint = addJoint(world, def);
+  REQUIRE(grip.joint != 0u);
+
+  const double dt = world.parameters.dt;
+  double furthest = 0.0;
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    moveHand(world, grip, gripPoint + handReach + dt * static_cast<double>(frame) * velocity, velocity);
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+    requireStrainstep(world, grip.box);
+
+    if (frame >= 60u) {
+      furthest = std::max(furthest, std::abs(gripSlack(world, grip).x));
+    }
+  }
+
+  double carried = world.bodies.rigids[grip.box].mass;
+
+  for (const float node : world.bodies.lattices[0].mesh->nodeMass) {
+    carried += static_cast<double>(node);
+  }
+
+  const double sag = carried * std::abs(world.parameters.gravity.y) / def.spring.linearStiffness;
+  const glm::dvec3 slack = gripSlack(world, grip);
+
+  CAPTURE(furthest, slack.x, slack.y, sag);
+  CHECK(furthest < 1.0e-3);
+  CHECK(std::abs(slack.y - sag) <= 0.02 * sag);
 }

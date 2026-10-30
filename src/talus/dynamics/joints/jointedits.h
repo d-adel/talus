@@ -16,6 +16,8 @@ bool setJointDrive(World& world, uint32_t joint, const JointDrive& drive);
 
 bool setSpringTarget(World& world, uint32_t joint, const JointFrame& target);
 
+void wakeJointPartners(World& world, uint32_t id);
+
 [[nodiscard]] std::optional<JointReport> jointReport(const World& world, uint32_t joint);
 
 void pruneJoints(World& world);

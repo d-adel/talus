@@ -1,6 +1,7 @@
 #include "edits.h"
 
 #include <talus/dynamics/compound/compound.h>
+#include <talus/dynamics/joints/jointedits.h>
 #include <talus/dynamics/sleep/sleep.h>
 #include <talus/dynamics/tiers/tiers.h>
 
@@ -490,6 +491,7 @@ bool setRigidPose(
   body.initialRotation = turn;
   body.inertialRotation = turn;
   wakeTouching(world, *ref, id);
+  wakeJointPartners(world, id);
   dropContacts(world, Side::Rigid, ref->index, false);
   destroyBodyContacts(world, id);
 
@@ -504,6 +506,7 @@ bool setVelocity(World& world, uint32_t id, const glm::dvec3& velocity) {
   }
 
   wakeBody(world.bodies, *ref);
+  wakeJointPartners(world, id);
 
   if (ref->side == Side::Rigid) {
     if (frozenAt(world.bodies, *ref)) {
