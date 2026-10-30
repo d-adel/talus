@@ -27,6 +27,7 @@ struct SoftstepResult {
   uint32_t widePairs = 0u;
   uint32_t substeps = 0u;
   uint32_t jointRows = 0u;
+  uint32_t limitPassRows = 0u;
 };
 
 [[nodiscard]] std::shared_ptr<SoftstepArena> makeSoftstepArena();

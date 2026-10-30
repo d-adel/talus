@@ -64,6 +64,7 @@ struct StepReport {
   uint32_t strainstepIslands = 0u;
   uint32_t widePairs = 0u;
   uint32_t jointRows = 0u;
+  uint32_t limitPassRows = 0u;
   uint32_t promotions = 0u;
   uint32_t demotions = 0u;
   uint32_t thawed = 0u;

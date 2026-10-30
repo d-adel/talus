@@ -31,7 +31,11 @@ using JointMat = glm::mat<3, 3, Real>;
 template <typename Real>
 using JointPair = glm::vec<2, Real>;
 
-inline constexpr double jointLimitSpeed = 3.0;
+inline constexpr double jointLimitSpeed = 30.0;
+
+inline constexpr double jointLimitWatchGap = 0.05;
+
+inline constexpr uint32_t jointLimitPasses = 2u;
 
 inline constexpr double jointSmall = 1.0e-6;
 
@@ -98,13 +102,18 @@ struct JointRow {
   JointVec<Real> perpZ{Real(0)};
   JointPair<Real> alignmentImpulse{Real(0)};
   bool limit = false;
+  bool watched = false;
   Real lower = Real(0);
   Real upper = Real(0);
+  Real lowerGap = Real(0);
+  Real upperGap = Real(0);
   Real lowerImpulse = Real(0);
   Real upperImpulse = Real(0);
   JointPair<Real> coneCentre{Real(0)};
   JointPair<Real> coneHalf{Real(0)};
   JointVec<Real> coneAxis{Real(0)};
+  Real coneGap = Real(0);
+  Real coneMass = Real(0);
   Real coneImpulse = Real(0);
   std::array<JointDriveRow<Real>, 3> drives;
   JointVec<Real> feedForward{Real(0)};
@@ -260,6 +269,44 @@ Real jointLimitImpulse(Real gap, Real rate, Real mass, Real invH, bool useBias, 
   impulse = std::max(old - mass * (rate + bias), Real(0));
 
   return impulse - old;
+}
+
+template <typename Real>
+void solveJointLimits(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>& b, Real invH, bool useBias) {
+  const JointMat<Real>& iA = row.a.invI;
+  const JointMat<Real>& iB = row.b.invI;
+  const JointVec<Real> turnA = iA * row.axis;
+  const JointVec<Real> turnB = iB * row.axis;
+  const Real lower =
+    jointLimitImpulse(row.lowerGap, glm::dot(b.w - a.w, row.axis), row.axialMass, invH, useBias, row.lowerImpulse);
+
+  a.w -= lower * turnA;
+  b.w += lower * turnB;
+
+  const Real upper =
+    jointLimitImpulse(row.upperGap, glm::dot(a.w - b.w, row.axis), row.axialMass, invH, useBias, row.upperImpulse);
+
+  a.w += upper * turnA;
+  b.w -= upper * turnB;
+
+  if (row.kind != JointKind::SwingTwist) {
+    return;
+  }
+
+  const Real cone =
+    jointLimitImpulse(row.coneGap, glm::dot(a.w - b.w, row.coneAxis), row.coneMass, invH, useBias, row.coneImpulse);
+
+  a.w += cone * (iA * row.coneAxis);
+  b.w -= cone * (iB * row.coneAxis);
+}
+
+template <typename Real>
+bool jointLimitWatched(const JointRow<Real>& row) {
+  const Real gap = static_cast<Real>(jointLimitWatchGap);
+  const bool range =
+    row.lowerImpulse > Real(0) || row.upperImpulse > Real(0) || row.lowerGap < gap || row.upperGap < gap;
+
+  return range || (row.kind == JointKind::SwingTwist && (row.coneImpulse > Real(0) || row.coneGap < gap));
 }
 
 template <typename Real>
@@ -493,17 +540,9 @@ void solveHingeRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>
   }
 
   if (row.limit) {
-    const Real lower =
-      jointLimitImpulse(angle - row.lower, glm::dot(b.w - a.w, row.axis), row.axialMass, invH, useBias, row.lowerImpulse);
-
-    a.w -= lower * turnA;
-    b.w += lower * turnB;
-
-    const Real upper =
-      jointLimitImpulse(row.upper - angle, glm::dot(a.w - b.w, row.axis), row.axialMass, invH, useBias, row.upperImpulse);
-
-    a.w += upper * turnA;
-    b.w -= upper * turnB;
+    row.lowerGap = angle - row.lower;
+    row.upperGap = row.upper - angle;
+    solveJointLimits(row, a, b, invH, useBias);
   }
 
   JointPair<Real> bias(Real(0));
@@ -699,34 +738,12 @@ void solveSwingTwistRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<
   }
 
   row.axis = directions[0];
-
-  const Real twistMass = jointAngularMass(invI, row.axis);
-  const JointVec<Real> turnA = iA * row.axis;
-  const JointVec<Real> turnB = iB * row.axis;
-  const Real lower =
-    jointLimitImpulse(angles.twist - row.lower, glm::dot(b.w - a.w, row.axis), twistMass, invH, useBias, row.lowerImpulse);
-
-  a.w -= lower * turnA;
-  b.w += lower * turnB;
-
-  const Real upper =
-    jointLimitImpulse(row.upper - angles.twist, glm::dot(a.w - b.w, row.axis), twistMass, invH, useBias, row.upperImpulse);
-
-  a.w += upper * turnA;
-  b.w -= upper * turnB;
-
-  const Real gap = jointConeGap(row, frameA, angles);
-  const Real cone = jointLimitImpulse(
-    gap,
-    glm::dot(a.w - b.w, row.coneAxis),
-    jointAngularMass(invI, row.coneAxis),
-    invH,
-    useBias,
-    row.coneImpulse
-  );
-
-  a.w += cone * (iA * row.coneAxis);
-  b.w -= cone * (iB * row.coneAxis);
+  row.axialMass = jointAngularMass(invI, row.axis);
+  row.lowerGap = angles.twist - row.lower;
+  row.upperGap = row.upper - angles.twist;
+  row.coneGap = jointConeGap(row, frameA, angles);
+  row.coneMass = jointAngularMass(invI, row.coneAxis);
+  solveJointLimits(row, a, b, invH, useBias);
 }
 
 template <typename Real>
@@ -964,12 +981,37 @@ void warmStartJointRows(std::span<State> states, std::span<const JointRow<Real>>
 }
 
 template <typename Real, typename State>
-void solveJointRows(
+uint32_t solveWatchedLimits(std::span<State> states, std::span<JointRow<Real>> rows, Real invH, bool useBias) {
+  uint32_t visited = 0u;
+
+  for (uint32_t pass = 0u; pass != jointLimitPasses; ++pass) {
+    for (JointRow<Real>& row : rows) {
+      if (!row.watched) {
+        continue;
+      }
+
+      JointMotion<Real> a = jointMotion(states, row.a);
+      JointMotion<Real> b = jointMotion(states, row.b);
+
+      solveJointLimits(row, a, b, invH, useBias);
+      storeJointMotion(states, row.a, a);
+      storeJointMotion(states, row.b, b);
+      ++visited;
+    }
+  }
+
+  return visited;
+}
+
+template <typename Real, typename State>
+uint32_t solveJointRows(
   std::span<State> states,
   std::span<JointRow<Real>> rows,
   Real invH,
   bool useBias
 ) {
+  bool watching = false;
+
   for (JointRow<Real>& row : rows) {
     JointMotion<Real> a = jointMotion(states, row.a);
     JointMotion<Real> b = jointMotion(states, row.b);
@@ -986,6 +1028,12 @@ void solveJointRows(
     } else if (row.kind == JointKind::SwingTwist) {
       solveSwingTwistRows(row, a, b, invH, useBias);
     }
+
+    if (useBias) {
+      row.watched = row.limit && jointLimitWatched(row);
+    }
+
+    watching = watching || row.watched;
 
     const Real mA = row.a.invMass;
     const Real mB = row.b.invMass;
@@ -1017,6 +1065,8 @@ void solveJointRows(
     storeJointMotion(states, row.a, a);
     storeJointMotion(states, row.b, b);
   }
+
+  return watching ? solveWatchedLimits(states, rows, invH, useBias) : 0u;
 }
 
 template <typename Real>

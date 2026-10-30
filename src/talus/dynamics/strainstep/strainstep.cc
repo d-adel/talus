@@ -659,6 +659,7 @@ StrainstepResult solveStrainstep(
   prepareManifolds(bodies, cache, slots, states, stateOf, manifoldSettings, manifolds, points);
 
   std::vector<JointRow<double>> jointRows;
+  uint32_t limitPassRows = 0u;
 
   if (jointed) {
     prepareJointRows<double, RigidState>(*joints, bodies, *islandStore, states, stateOf, h, jointRows);
@@ -750,7 +751,7 @@ StrainstepResult solveStrainstep(
         solveContactRow(row, motion, true);
       }
 
-      solveJointRows<double, RigidState>(states, jointRows, invH, true);
+      limitPassRows += solveJointRows<double, RigidState>(states, jointRows, invH, true);
 
       for (const ManifoldRow& row : manifolds) {
         pushManifold(states, row, points, invH, parameters.contactSpeed);
@@ -776,7 +777,7 @@ StrainstepResult solveStrainstep(
       solveContactRow(row, motion, false);
     }
 
-    solveJointRows<double, RigidState>(states, jointRows, invH, false);
+    limitPassRows += solveJointRows<double, RigidState>(states, jointRows, invH, false);
 
     for (ManifoldRow& row : manifolds) {
       relaxManifold(states, row, points, invH);
@@ -825,7 +826,7 @@ StrainstepResult solveStrainstep(
     storeRigid(states[item], bodies.rigids[states[item].body]);
   }
 
-  return {substeps, static_cast<uint32_t>(jointRows.size())};
+  return {substeps, static_cast<uint32_t>(jointRows.size()), limitPassRows};
 }
 
 }

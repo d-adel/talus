@@ -559,6 +559,7 @@ StepReport step(World& world) {
     report.widePairs += jointedRun.widePairs;
     report.jointSubsteps = jointedRun.substeps;
     report.jointRows += jointedRun.jointRows;
+    report.limitPassRows += jointedRun.limitPassRows;
   }
 
   const SoftstepResult freeRun = solveSoftstep(
@@ -581,6 +582,7 @@ StepReport step(World& world) {
 
   report.widePairs += freeRun.widePairs;
   report.jointRows += freeRun.jointRows;
+  report.limitPassRows += freeRun.limitPassRows;
 
   if (!unjointed.empty()) {
     report.softstepSubsteps = freeRun.substeps;
@@ -639,6 +641,7 @@ StepReport step(World& world) {
 
       report.substeps = std::max(report.substeps, strained.substeps);
       report.jointRows += strained.jointRows;
+      report.limitPassRows += strained.limitPassRows;
 
       for (const uint32_t index : island->contacts) {
         lastContacts.push_back(contacts[index]);

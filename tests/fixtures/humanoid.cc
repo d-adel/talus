@@ -475,4 +475,23 @@ Humanoid addHumanoid(
   return humanoid;
 }
 
+void excludeSelfContact(talus::dynamics::World& world, const Humanoid& humanoid) {
+  for (size_t first = 0u; first != humanoid.bodies.size(); ++first) {
+    for (size_t second = first + 1u; second != humanoid.bodies.size(); ++second) {
+      talus::dynamics::JointDef def;
+      def.kind = JointKind::Spring;
+      def.bodyA = humanoid.bodies[first];
+      def.bodyB = humanoid.bodies[second];
+
+      if (world.joints.excludes(def.bodyA, def.bodyB)) {
+        continue;
+      }
+
+      if (talus::dynamics::addJoint(world, def) == 0u) {
+        throw std::runtime_error("a humanoid contact exclusion was rejected");
+      }
+    }
+  }
+}
+
 }

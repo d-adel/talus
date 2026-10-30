@@ -1485,6 +1485,7 @@ SoftstepResult solveSoftstep(
   std::vector<JointRow<float>>& jointRows = scratch.jointRows;
   Stopwatch jointClock;
   double jointTime = 0.0;
+  uint32_t limitPassRows = 0u;
 
   runner.run([&] {
     (void)clock.lap();
@@ -1525,7 +1526,7 @@ SoftstepResult solveSoftstep(
 
       if (jointWork) {
         (void)jointClock.lap();
-        solveJointRows<float, State>(states, jointRows, invH, true);
+        limitPassRows += solveJointRows<float, State>(states, jointRows, invH, true);
         jointTime += jointClock.lap();
       }
 
@@ -1541,7 +1542,7 @@ SoftstepResult solveSoftstep(
       if (jointWork) {
         (void)jointClock.lap();
         advanceJointRows<float>(jointRows, h);
-        solveJointRows<float, State>(states, jointRows, invH, false);
+        limitPassRows += solveJointRows<float, State>(states, jointRows, invH, false);
         jointTime += jointClock.lap();
       }
 
@@ -1615,7 +1616,7 @@ SoftstepResult solveSoftstep(
     profile->joints = jointTime;
   }
 
-  return {widePairs, substeps, jointWork ? static_cast<uint32_t>(jointRows.size()) : 0u};
+  return {widePairs, substeps, jointWork ? static_cast<uint32_t>(jointRows.size()) : 0u, limitPassRows};
 }
 
 }
