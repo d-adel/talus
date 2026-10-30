@@ -38,7 +38,8 @@ uint32_t solveSoftstep(
   SoftstepTouching* touching = nullptr,
   const std::function<void()>* alongside = nullptr,
   JointSet* joints = nullptr,
-  const IslandStore* islandStore = nullptr
+  const IslandStore* islandStore = nullptr,
+  std::span<const uint32_t> guests = {}
 );
 
 }

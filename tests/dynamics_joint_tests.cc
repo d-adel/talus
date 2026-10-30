@@ -726,3 +726,117 @@ TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 an
     }
   }
 }
+
+namespace {
+
+void addJointedPair(World& world, const talus::field::SampledSdf& crate, const glm::dvec3& at) {
+  const uint32_t a = addCrate(world, crate, at);
+  const uint32_t b = addCrate(world, crate, at + glm::dvec3(0.25, 0.0, 0.0));
+
+  REQUIRE(addJoint(world, anchored(a, b)) != 0u);
+}
+
+uint64_t freeBoxHash(bool besideJoint) {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+
+  addFloor(world);
+
+  const uint32_t box = addCrate(world, crate, glm::dvec3(0.0, 0.4, 0.0));
+
+  if (besideJoint) {
+    addJointedPair(world, crate, glm::dvec3(5.0, 2.0, 0.0));
+  }
+
+  for (uint32_t frame = 0u; frame != 60u; ++frame) {
+    (void)talus::dynamics::step(world);
+  }
+
+  const RigidBody& body = world.bodies.rigids[findBody(world.bodies, box)->index];
+  uint64_t hash = 1469598103934665603ull;
+
+  for (int axis = 0; axis != 3; ++axis) {
+    hash = mixBits(hash, body.position[axis]);
+    hash = mixBits(hash, body.velocity[axis]);
+    hash = mixBits(hash, body.angularVelocity[axis]);
+  }
+
+  for (int axis = 0; axis != 4; ++axis) {
+    hash = mixBits(hash, body.rotation[axis]);
+  }
+
+  return hash;
+}
+
+}
+
+TEST_CASE("jointed islands step at the joint substep count", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+
+  addFloor(world);
+  (void)addResting(world, crate, 0.0);
+  addJointedPair(world, crate, glm::dvec3(3.0, 2.0, 0.0));
+
+  const StepReport report = talus::dynamics::step(world);
+
+  CHECK(world.parameters.jointSubsteps == 16u);
+  CHECK(report.jointSubsteps == world.parameters.jointSubsteps);
+  CHECK(report.softstepSubsteps == world.parameters.softstepSubsteps);
+
+  World plain;
+
+  addFloor(plain);
+  (void)addResting(plain, crate, 0.0);
+
+  const StepReport alone = talus::dynamics::step(plain);
+
+  CHECK(alone.jointSubsteps == 0u);
+  CHECK(alone.softstepSubsteps == plain.parameters.softstepSubsteps);
+}
+
+TEST_CASE("a free island steps the same beside a jointed island", "[dynamics][joints]") {
+  CHECK(freeBoxHash(true) == freeBoxHash(false));
+}
+
+TEST_CASE("jointed and free boxes ride the same moving mass-0 deck", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  world.parameters.sleep = false;
+  const glm::dvec3 speed(1.0, 0.0, 0.0);
+  const uint32_t deck = addRigidBox(world.bodies, floor(), glm::dvec3(1.0, 0.1, 1.0), 0.0, glm::dvec3(0.0, 1.0, 0.0), speed, 0.8, 3u);
+  const std::vector<uint32_t> boxes{
+    addCrate(world, crate, glm::dvec3(-0.3, 1.15, 0.0)),
+    addCrate(world, crate, glm::dvec3(-0.05, 1.15, 0.0)),
+    addCrate(world, crate, glm::dvec3(0.4, 1.15, 0.0))
+  };
+  std::vector<glm::dvec3> offsets;
+
+  for (const uint32_t id : boxes) {
+    RigidBody& body = world.bodies.rigids[findBody(world.bodies, id)->index];
+
+    body.velocity = speed;
+    offsets.push_back(body.position - world.bodies.rigids[deck].position);
+  }
+
+  REQUIRE(addJoint(world, anchored(boxes[0], boxes[1])) != 0u);
+
+  StepReport report;
+
+  for (uint32_t frame = 0u; frame != 60u; ++frame) {
+    report = talus::dynamics::step(world);
+    REQUIRE_FALSE(report.nonFinite);
+  }
+
+  REQUIRE(report.jointSubsteps == world.parameters.jointSubsteps);
+  REQUIRE(report.softstepSubsteps == world.parameters.softstepSubsteps);
+
+  for (size_t box = 0u; box != boxes.size(); ++box) {
+    CAPTURE(box);
+
+    const glm::dvec3 offset =
+      world.bodies.rigids[findBody(world.bodies, boxes[box])->index].position - world.bodies.rigids[deck].position;
+
+    CHECK(std::abs(offset.x - offsets[box].x) < 0.01);
+  }
+}

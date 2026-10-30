@@ -56,6 +56,8 @@ struct StepProfile {
 
 struct StepReport {
   uint32_t substeps = 0u;
+  uint32_t softstepSubsteps = 0u;
+  uint32_t jointSubsteps = 0u;
   uint32_t contacts = 0u;
   uint32_t activeContacts = 0u;
   uint32_t softstepIslands = 0u;

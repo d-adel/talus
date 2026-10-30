@@ -605,7 +605,8 @@ uint32_t solveSoftstep(
   SoftstepTouching* touching,
   const std::function<void()>* alongside,
   JointSet* joints,
-  const IslandStore* islandStore
+  const IslandStore* islandStore,
+  std::span<const uint32_t> guests
 ) {
   const uint32_t substeps = std::max(parameters.softstepSubsteps, 1u);
   const double step = parameters.dt / static_cast<double>(substeps);
@@ -633,7 +634,8 @@ uint32_t solveSoftstep(
   SoftstepArena& scratch = arena != nullptr ? *arena : local;
   std::vector<State>& states = scratch.states;
   std::vector<uint32_t>& rigidOf = scratch.rigidOf;
-  const uint32_t rigidCount = static_cast<uint32_t>(rigids.size());
+  const uint32_t ownedCount = static_cast<uint32_t>(rigids.size());
+  const uint32_t rigidCount = ownedCount + static_cast<uint32_t>(guests.size());
 
   states.resize(rigidCount + 1u);
   rigidOf.resize(rigidCount + 1u);
@@ -641,8 +643,10 @@ uint32_t solveSoftstep(
   rigidOf[0] = 0u;
 
   for (uint32_t entry = 0u; entry != rigidCount; ++entry) {
-    rigidOf[entry + 1u] = rigids[entry];
-    stateOf[rigids[entry]] = entry + 1u;
+    const uint32_t index = entry < ownedCount ? rigids[entry] : guests[entry - ownedCount];
+
+    rigidOf[entry + 1u] = index;
+    stateOf[index] = entry + 1u;
   }
 
   const auto gather = [&](uint32_t item) {
@@ -673,13 +677,16 @@ uint32_t solveSoftstep(
   const auto solved = [&](const BodyRef& end) {
     return end.side == Side::Rigid && stateIndex(stateOf, end) != 0u;
   };
+  const auto owned = [&](const BodyRef& end) {
+    return solved(end) && stateIndex(stateOf, end) <= ownedCount;
+  };
   const auto held = [&](const BodyRef& end) {
     return end.side != Side::Rigid || solved(end) || !(bodies.rigids[end.index].mass > 0.0);
   };
   const auto active = [&](uint32_t slot) {
     const CachedBodyPair& pair = cache.at(slot);
 
-    return (solved(pair.first) || solved(pair.second)) && held(pair.first) && held(pair.second);
+    return (owned(pair.first) || owned(pair.second)) && held(pair.first) && held(pair.second);
   };
   const uint32_t batchWidth = width == 4u || width == 8u ? width : 0u;
   std::vector<uint32_t>& ordered = scratch.ordered;
@@ -1368,7 +1375,7 @@ uint32_t solveSoftstep(
   const uint32_t unpackStage = add(Kind::Unpack, 0u, batchCount, 4u);
   const uint32_t memoryStage =
     add(Kind::StoreMemory, 0u, static_cast<uint32_t>(constraints.size()), 4u);
-  const uint32_t bodyStage = add(Kind::StoreBodies, 1u, stateCount, 32u);
+  const uint32_t bodyStage = add(Kind::StoreBodies, 1u, ownedCount + 1u, 32u);
 
   StageRunner& runner = scratch.runner;
 
@@ -1541,6 +1548,10 @@ uint32_t solveSoftstep(
   }, alongside);
 
   for (const uint32_t index : rigids) {
+    stateOf[index] = 0u;
+  }
+
+  for (const uint32_t index : guests) {
     stateOf[index] = 0u;
   }
 

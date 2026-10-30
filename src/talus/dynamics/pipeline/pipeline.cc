@@ -157,6 +157,109 @@ bool finite(const BodySet& bodies, const Workers& workers) {
   return !bad.load(std::memory_order_relaxed);
 }
 
+std::vector<uint8_t> jointedRigids(const World& world, std::span<const Island* const> islands) {
+  if (world.joints.empty()) {
+    return {};
+  }
+
+  const BodySet& bodies = world.bodies;
+  std::vector<uint8_t> ends(bodies.rigids.size(), 0u);
+
+  for (const Joint& joint : world.joints.all()) {
+    for (const uint32_t id : {joint.def.bodyA, joint.def.bodyB}) {
+      if (id == noBody) {
+        continue;
+      }
+
+      const BodyRef ref = world.islandStore.refOf(id);
+
+      if (ref.side == Side::Rigid && ref.index < bodies.rigids.size() && bodies.rigids[ref.index].id == id) {
+        ends[ref.index] = 1u;
+      }
+    }
+  }
+
+  std::vector<uint8_t> jointed(bodies.rigids.size(), 0u);
+  bool any = false;
+
+  for (const Island* island : islands) {
+    const bool linked = std::any_of(island->bodies.begin(), island->bodies.end(), [&](const BodyRef& ref) {
+      return ref.side == Side::Rigid && ends[ref.index] != 0u;
+    });
+
+    if (!linked) {
+      continue;
+    }
+
+    any = true;
+
+    for (const BodyRef& ref : island->bodies) {
+      if (ref.side == Side::Rigid) {
+        jointed[ref.index] = 1u;
+      }
+    }
+  }
+
+  return any ? jointed : std::vector<uint8_t>{};
+}
+
+std::vector<uint32_t> kinematicGuests(
+  const World& world,
+  std::span<const uint32_t> unjointed,
+  std::span<const uint8_t> jointed
+) {
+  const BodySet& bodies = world.bodies;
+  const ManifoldCache& cache = world.manifolds;
+  const auto jointedHeavy = [&](const BodyRef& ref) {
+    return ref.side == Side::Rigid && jointed[ref.index] != 0u && bodies.rigids[ref.index].mass > 0.0;
+  };
+  std::vector<uint32_t> guests;
+
+  for (const uint32_t index : unjointed) {
+    const RigidBody& body = bodies.rigids[index];
+
+    if (body.mass > 0.0) {
+      continue;
+    }
+
+    bool touches = jointed[index] != 0u;
+
+    for (const uint32_t slot : cache.pairsOf(body.id)) {
+      if (touches) {
+        break;
+      }
+
+      const CachedBodyPair& pair = cache.at(slot);
+
+      touches = cache.live(slot) && (jointedHeavy(pair.first) || jointedHeavy(pair.second));
+    }
+
+    if (touches) {
+      guests.push_back(index);
+    }
+  }
+
+  return guests;
+}
+
+void addSoftstepWork(StepProfile& total, const StepProfile& part) {
+  total.gather += part.gather;
+  total.prepare += part.prepare;
+  total.substeps += part.substeps;
+  total.integrate += part.integrate;
+  total.restitute += part.restitute;
+  total.storeBack += part.storeBack;
+  total.joints += part.joints;
+}
+
+void addTouching(SoftstepTouching& total, const SoftstepTouching& part) {
+  total.points += part.points;
+  total.active += part.active;
+  total.hits.insert(total.hits.end(), part.hits.begin(), part.hits.end());
+  std::sort(total.hits.begin(), total.hits.end());
+  total.hits.erase(std::unique(total.hits.begin(), total.hits.end()), total.hits.end());
+}
+
 }
 
 std::unordered_set<uint64_t> recordedPairs(std::span<const Contact> contacts) {
@@ -373,10 +476,49 @@ StepReport step(World& world) {
     world.broadPhase.rebuildTrees();
   };
 
-  report.widePairs = solveSoftstep(
+  const std::vector<uint8_t> jointed = jointedRigids(world, rigidIslands);
+  std::vector<uint32_t> jointedSet;
+  std::vector<uint32_t> freeSet;
+
+  if (!jointed.empty()) {
+    for (const uint32_t index : rigids) {
+      (jointed[index] != 0u && bodies.rigids[index].mass > 0.0 ? jointedSet : freeSet).push_back(index);
+    }
+  }
+
+  const bool separate = !jointedSet.empty();
+  const std::vector<uint32_t> guests = separate ? kinematicGuests(world, freeSet, jointed) : std::vector<uint32_t>{};
+  const std::span<const uint32_t> unjointed = separate ? std::span<const uint32_t>(freeSet) : std::span<const uint32_t>(rigids);
+  StepProfile jointedProfile;
+  SoftstepTouching jointedTouching;
+
+  if (separate) {
+    IntegrationParameters jointedParameters = parameters;
+
+    jointedParameters.softstepSubsteps = parameters.jointSubsteps;
+    report.widePairs += solveSoftstep(
+      bodies,
+      world.manifolds,
+      jointedSet,
+      jointedParameters,
+      stateOf,
+      workers,
+      simdWidth,
+      world.softstepArena.get(),
+      &jointedProfile,
+      &jointedTouching,
+      nullptr,
+      &world.joints,
+      &world.islandStore,
+      guests
+    );
+    report.jointSubsteps = std::max(parameters.jointSubsteps, 1u);
+  }
+
+  report.widePairs += solveSoftstep(
     bodies,
     world.manifolds,
-    rigids,
+    unjointed,
     parameters,
     stateOf,
     workers,
@@ -385,9 +527,18 @@ StepReport step(World& world) {
     &report.profile,
     &softstepTouching,
     &alongside,
-    &world.joints,
-    &world.islandStore
+    separate ? nullptr : &world.joints,
+    separate ? nullptr : &world.islandStore
   );
+
+  if (!unjointed.empty()) {
+    report.softstepSubsteps = std::max(parameters.softstepSubsteps, 1u);
+  }
+
+  if (separate) {
+    addSoftstepWork(report.profile, jointedProfile);
+    addTouching(softstepTouching, jointedTouching);
+  }
 
   const double solve = clock.lap();
 

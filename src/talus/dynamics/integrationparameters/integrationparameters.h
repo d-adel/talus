@@ -13,6 +13,7 @@ struct IntegrationParameters {
   double restitutionThreshold = 1.0;
   uint32_t restitutionIterations = 2u;
   uint32_t softstepSubsteps = 4u;
+  uint32_t jointSubsteps = 16u;
   double contactHertz = 30.0;
   double contactDampingRatio = 10.0;
   double contactSpeed = 3.0;
