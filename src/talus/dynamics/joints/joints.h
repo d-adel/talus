@@ -113,6 +113,7 @@ class JointSet {
 public:
   [[nodiscard]] uint32_t add(const JointDef& def);
   bool remove(uint32_t id);
+  bool rebind(uint32_t id, uint32_t bodyA, uint32_t bodyB);
   Joint* find(uint32_t id);
   const Joint* find(uint32_t id) const;
   [[nodiscard]] std::span<const Joint> all() const;
@@ -121,6 +122,9 @@ public:
   [[nodiscard]] bool empty() const;
 
 private:
+  void holdPair(const JointDef& def);
+  void releasePair(const JointDef& def);
+
   std::vector<Joint> joints_;
   std::unordered_map<uint64_t, uint32_t> excluded_;
   uint32_t nextId_ = 1u;

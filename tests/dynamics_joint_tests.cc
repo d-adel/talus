@@ -5,7 +5,12 @@
 #include <fixtures/humanoid.h>
 
 #include <talus/deformable/solver/solver.h>
+#include <talus/destruction/building/building.h>
+#include <talus/destruction/chunker/chunker.h>
+#include <talus/destruction/destructionworld/destructionworld.h>
+#include <talus/destruction/materials/materials.h>
 #include <talus/dynamics/bodyset/bodyset.h>
+#include <talus/dynamics/compound/compound.h>
 #include <talus/dynamics/edits/edits.h>
 #include <talus/dynamics/joints/jointedits.h>
 #include <talus/dynamics/pipeline/pipeline.h>
@@ -2968,4 +2973,466 @@ TEST_CASE("a joint rides a moving mass-0 body in a strainstep island", "[dynamic
   CAPTURE(furthest, slack.x, slack.y, sag);
   CHECK(furthest < 1.0e-3);
   CHECK(std::abs(slack.y - sag) <= 0.02 * sag);
+}
+
+namespace {
+
+const glm::dquat unturned(1.0, 0.0, 0.0, 0.0);
+
+const RigidBody& rigidOf(const World& world, uint32_t id) {
+  const std::optional<BodyRef> ref = findBody(world.bodies, id);
+
+  REQUIRE(ref.has_value());
+  REQUIRE(ref->side == Side::Rigid);
+
+  return world.bodies.rigids[ref->index];
+}
+
+JointFrame localFrame(
+  const World& world,
+  uint32_t id,
+  const glm::dvec3& point,
+  const glm::dquat& turn
+) {
+  const RigidBody& body = rigidOf(world, id);
+  const glm::dquat back = glm::conjugate(body.rotation);
+
+  return {back * (point - body.position), back * turn};
+}
+
+glm::dvec3 worldAnchor(
+  const World& world,
+  uint32_t id,
+  const JointFrame& frame
+) {
+  if (id == noBody) {
+    return frame.position;
+  }
+
+  const RigidBody& body = rigidOf(world, id);
+
+  return body.position + body.rotation * frame.position;
+}
+
+double anchorGap(
+  const World& world,
+  uint32_t id,
+  const JointFrame& frame,
+  const glm::dvec3& point
+) {
+  return glm::length(worldAnchor(world, id, frame) - point);
+}
+
+double turnBetween(const glm::dquat& a, const glm::dquat& b) {
+  const glm::dquat between = glm::conjugate(a) * b;
+  const glm::dvec3 axis(between.x, between.y, between.z);
+
+  return 2.0 * std::atan2(glm::length(axis), std::abs(between.w));
+}
+
+CompoundChild cubeAt(const glm::dvec3& centre, double density, uint32_t key) {
+  CompoundChild child;
+  child.centre = centre;
+  child.half = glm::dvec3(0.05);
+  child.density = density;
+  child.key = key;
+
+  return child;
+}
+
+uint32_t addLopsided(World& world) {
+  const std::vector<CompoundChild> children{
+    cubeAt(glm::dvec3(0.0, 0.0, 0.0), 1000.0, 0u),
+    cubeAt(glm::dvec3(0.1, 0.0, 0.0), 1300.0, 1u),
+    cubeAt(glm::dvec3(0.2, 0.0, 0.0), 1600.0, 2u),
+    cubeAt(glm::dvec3(0.0, 0.1, 0.0), 1900.0, 3u),
+    cubeAt(glm::dvec3(0.0, 0.0, 0.1), 2200.0, 4u)
+  };
+  const uint32_t index = addCompoundBody(
+    world.bodies,
+    children,
+    glm::dvec3(0.3, 1.2, -0.4),
+    glm::angleAxis(0.7, glm::normalize(glm::dvec3(1.0, -1.0, 0.5))),
+    glm::dvec3(0.0),
+    0.5,
+    0.0,
+    false
+  );
+
+  return world.bodies.rigids[index].id;
+}
+
+glm::dvec3 childPoint(const World& world, uint32_t id, uint32_t key) {
+  const RigidBody& body = rigidOf(world, id);
+  const std::optional<uint32_t> child = findChild(*body.compound, key);
+
+  REQUIRE(child.has_value());
+
+  return body.position
+         + body.rotation * body.compound->children[*child].centre;
+}
+
+struct Recentring {
+  uint32_t compound = 0u;
+  uint32_t crate = 0u;
+  glm::dvec3 anchor{0.0};
+  glm::dquat frame{1.0, 0.0, 0.0, 0.0};
+};
+
+Recentring addRecentring(World& world, const talus::field::SampledSdf& crate) {
+  Recentring scene;
+  scene.compound = addLopsided(world);
+  scene.anchor = childPoint(world, scene.compound, 1u)
+                 + glm::dvec3(0.01, -0.02, 0.015);
+  const glm::dvec3 below(0.0, -0.2, 0.0);
+  scene.crate = addCrate(world, crate, scene.anchor + below);
+  scene.frame = glm::angleAxis(0.9, glm::normalize(glm::dvec3(-0.3, 1.0, 0.4)));
+
+  return scene;
+}
+
+void recentre(World& world, const Recentring& scene) {
+  const RigidBody before = rigidOf(world, scene.compound);
+  const std::vector<uint32_t> end{2u};
+
+  REQUIRE(removeCompoundChildren(world, scene.compound, end));
+
+  const RigidBody& after = rigidOf(world, scene.compound);
+  const double shift = glm::length(after.position - before.position);
+  const double turn = turnBetween(before.rotation, after.rotation);
+
+  CAPTURE(shift, turn);
+  REQUIRE(shift > 0.03);
+  REQUIRE(turn > 0.1);
+}
+
+const Joint& jointOf(const World& world, uint32_t id) {
+  const Joint* joint = world.joints.find(id);
+
+  REQUIRE(joint != nullptr);
+
+  return *joint;
+}
+
+JointFrame springTarget(const World& world, const JointDef& def) {
+  const glm::dquat turn = jointFrameRotation(world, def.bodyA, def.frameA);
+  const glm::dvec3 anchor = worldAnchor(world, def.bodyA, def.frameA);
+
+  return {
+    anchor + turn * def.spring.target.position,
+    turn * def.spring.target.rotation
+  };
+}
+
+}
+
+TEST_CASE("a joint keeps its world anchor when a compound re-centres", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  const Recentring scene = addRecentring(world, crate);
+  JointDef def = between(scene.compound, scene.crate);
+  def.frameA = localFrame(world, scene.compound, scene.anchor, unturned);
+  def.frameB = localFrame(world, scene.crate, scene.anchor, unturned);
+  const uint32_t joint = addJoint(world, def);
+  REQUIRE(joint != 0u);
+
+  const JointFrame frameA = jointOf(world, joint).def.frameA;
+  const glm::dvec3 before = worldAnchor(world, scene.compound, frameA);
+
+  recentre(world, scene);
+
+  const JointDef& after = jointOf(world, joint).def;
+  const double gap = anchorGap(world, scene.compound, after.frameA, before);
+
+  CAPTURE(gap);
+  CHECK(after.bodyA == scene.compound);
+  CHECK(after.bodyB == scene.crate);
+  CHECK(gap < 1.0e-9);
+  CHECK(after.frameB.position == def.frameB.position);
+}
+
+TEST_CASE("a hinge keeps its angle when a compound re-centres", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  const Recentring scene = addRecentring(world, crate);
+  const glm::dquat opened =
+    scene.frame * glm::angleAxis(0.4, glm::dvec3(1.0, 0.0, 0.0));
+  JointDef def = between(scene.compound, scene.crate);
+  def.kind = JointKind::Hinge;
+  def.hinge.enabled = true;
+  def.hinge.lower = -0.2;
+  def.hinge.upper = 0.6;
+  def.frameA = localFrame(world, scene.compound, scene.anchor, scene.frame);
+  def.frameB = localFrame(world, scene.crate, scene.anchor, opened);
+  const uint32_t joint = addJoint(world, def);
+  REQUIRE(joint != 0u);
+
+  const JointDef& stored = jointOf(world, joint).def;
+  const double angle = hingeAngle(world, stored);
+  const glm::dvec3 anchor = worldAnchor(world, scene.compound, stored.frameA);
+
+  REQUIRE(std::abs(angle - 0.4) < 1.0e-12);
+
+  recentre(world, scene);
+
+  const JointDef& after = jointOf(world, joint).def;
+  const double change = hingeAngle(world, after) - angle;
+
+  CAPTURE(change);
+  CHECK(std::abs(change) < 1.0e-9);
+  CHECK(anchorGap(world, scene.compound, after.frameA, anchor) < 1.0e-9);
+}
+
+TEST_CASE("a swing-twist joint keeps its angles when a compound re-centres", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  const Recentring scene = addRecentring(world, crate);
+  const glm::dvec3 swingAxis = glm::normalize(glm::dvec3(0.0, 0.6, -0.8));
+  const glm::dquat bent = glm::angleAxis(0.35, swingAxis)
+                          * glm::angleAxis(0.3, glm::dvec3(1.0, 0.0, 0.0));
+  JointDef def = between(scene.crate, scene.compound);
+  def.kind = JointKind::SwingTwist;
+  def.frameA = localFrame(world, scene.crate, scene.anchor, scene.frame);
+  def.frameB =
+    localFrame(world, scene.compound, scene.anchor, scene.frame * bent);
+  const uint32_t joint = addJoint(world, def);
+  REQUIRE(joint != 0u);
+
+  const JointDef& stored = jointOf(world, joint).def;
+  const SwingTwistAngles angles = jointAngles(world, stored);
+  const glm::dvec3 anchor = worldAnchor(world, scene.compound, stored.frameB);
+
+  REQUIRE(std::abs(angles.twist) > 0.1);
+  REQUIRE(glm::length(angles.swing) > 0.1);
+
+  recentre(world, scene);
+
+  const JointDef& after = jointOf(world, joint).def;
+  const SwingTwistAngles turned = jointAngles(world, after);
+  const double twist = turned.twist - angles.twist;
+  const double swing = glm::length(turned.swing - angles.swing);
+
+  CAPTURE(twist, swing);
+  CHECK(std::abs(twist) < 1.0e-9);
+  CHECK(swing < 1.0e-9);
+  CHECK(anchorGap(world, scene.compound, after.frameB, anchor) < 1.0e-9);
+}
+
+TEST_CASE("a spring keeps its world target when a compound re-centres", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  const Recentring scene = addRecentring(world, crate);
+  const glm::dvec3 targetAxis = glm::normalize(glm::dvec3(1.0, 2.0, 3.0));
+  JointDef def = between(scene.compound, scene.crate);
+  def.kind = JointKind::Spring;
+  def.spring.linearStiffness = 500.0;
+  def.spring.angularStiffness = 5.0;
+  def.spring.target.position = glm::dvec3(0.02, -0.03, 0.01);
+  def.spring.target.rotation = glm::angleAxis(0.5, targetAxis);
+  def.frameA = localFrame(world, scene.compound, scene.anchor, scene.frame);
+  def.frameB = localFrame(world, scene.crate, scene.anchor, unturned);
+  const uint32_t joint = addJoint(world, def);
+  REQUIRE(joint != 0u);
+
+  const JointFrame target = springTarget(world, jointOf(world, joint).def);
+
+  recentre(world, scene);
+
+  const JointFrame moved = springTarget(world, jointOf(world, joint).def);
+  const double shift = glm::length(moved.position - target.position);
+  const double turn = turnBetween(target.rotation, moved.rotation);
+
+  CAPTURE(shift, turn);
+  CHECK(shift < 1.0e-9);
+  CHECK(turn < 1.0e-9);
+}
+
+namespace {
+
+using talus::destruction::Building;
+using talus::destruction::BuildingReport;
+using talus::destruction::DestructionReport;
+using talus::destruction::DestructionWorld;
+using talus::destruction::Member;
+using talus::destruction::Role;
+using talus::destruction::StructuralMaterial;
+
+talus::destruction::ChunkerSettings evenChunks() {
+  talus::destruction::ChunkerSettings settings;
+  settings.variety = false;
+
+  return settings;
+}
+
+const std::vector<StructuralMaterial>& concreteOnly() {
+  static const std::vector<StructuralMaterial> materials{
+    talus::destruction::concrete()
+  };
+
+  return materials;
+}
+
+Building beamOfFive() {
+  Building building;
+  building.members.push_back(Member{
+    glm::dvec3(1.25, 1.25, 0.0),
+    glm::dvec3(1.25, 0.25, 0.25),
+    0u,
+    Role::Beam
+  });
+  building.position = glm::dvec3(0.0, 10.0, 0.0);
+
+  return building;
+}
+
+Building columnOfSix() {
+  Building building;
+  building.members.push_back(Member{
+    glm::dvec3(0.0, 1.5, 0.0),
+    glm::dvec3(0.25, 1.5, 0.25),
+    0u,
+    Role::Column
+  });
+
+  return building;
+}
+
+uint32_t hangCrate(
+  World& world,
+  const talus::field::SampledSdf& crate,
+  uint32_t body,
+  const glm::dvec3& anchor,
+  const glm::dvec3& offset
+) {
+  const uint32_t hung = addCrate(world, crate, anchor + offset);
+  JointDef def = between(body, hung);
+  def.frameA = localFrame(world, body, anchor, unturned);
+  def.frameB = localFrame(world, hung, anchor, unturned);
+  const uint32_t joint = addJoint(world, def);
+  REQUIRE(joint != 0u);
+
+  return joint;
+}
+
+}
+
+TEST_CASE("a joint follows the piece holding its anchor when a compound splits", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  DestructionWorld destruction;
+  const BuildingReport built = destruction.addBuilding(
+    world,
+    beamOfFive(),
+    concreteOnly(),
+    evenChunks()
+  );
+
+  REQUIRE(built.settled);
+
+  const DestructionReport freed = destruction.update(world);
+
+  REQUIRE(freed.created.size() == 1u);
+
+  const uint32_t piece = freed.created[0];
+  const glm::dvec3 anchor(1.3, 11.1, 0.05);
+  const glm::dvec3 below(0.0, -0.25, 0.0);
+  const uint32_t joint = hangCrate(world, crate, piece, anchor, below);
+  const uint32_t hung = jointOf(world, joint).def.bodyB;
+
+  REQUIRE(destruction.bodyOf(built.building, 2u) == piece);
+  REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+  const glm::dvec3 before =
+    worldAnchor(world, piece, jointOf(world, joint).def.frameA);
+  const std::vector<uint32_t> middle{1u, 3u};
+
+  REQUIRE(destruction.removeChunks(world, built.building, middle) == 2u);
+
+  const double recentred =
+    anchorGap(world, piece, jointOf(world, joint).def.frameA, before);
+
+  CAPTURE(recentred);
+  CHECK(recentred < 1.0e-9);
+
+  const DestructionReport split = destruction.update(world);
+
+  REQUIRE(split.created.size() == 2u);
+
+  const std::optional<uint32_t> holder = destruction.bodyOf(built.building, 2u);
+
+  REQUIRE(holder.has_value());
+  REQUIRE(*holder != piece);
+
+  const JointDef& after = jointOf(world, joint).def;
+  const double gap = anchorGap(world, after.bodyA, after.frameA, before);
+
+  CAPTURE(gap);
+  CHECK(after.bodyA == *holder);
+  CHECK(after.bodyB == hung);
+  CHECK(gap < 1.0e-9);
+
+  REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+  const IslandStore& islands = world.islandStore;
+
+  CHECK(jointOf(world, joint).def.bodyA == *holder);
+  CHECK(islands.islandOf(hung) == islands.islandOf(*holder));
+  CHECK(islands.islandOf(hung) != islands.islandOf(piece));
+}
+
+TEST_CASE("a joint follows the chunks that break off an anchored building", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  DestructionWorld destruction;
+  const BuildingReport built = destruction.addBuilding(
+    world,
+    columnOfSix(),
+    concreteOnly(),
+    evenChunks()
+  );
+
+  REQUIRE(built.settled);
+  REQUIRE(destruction.chunked(built.building).chunks.size() == 6u);
+
+  const glm::dvec3 high(0.1, 2.3, 0.05);
+  const glm::dvec3 low(-0.1, 0.8, 0.05);
+  const glm::dvec3 aside(0.4, 0.0, 0.0);
+  const uint32_t top = hangCrate(world, crate, built.body, high, aside);
+  const uint32_t bottom = hangCrate(world, crate, built.body, low, -aside);
+  const std::vector<uint32_t> middle{2u};
+
+  REQUIRE(destruction.removeChunks(world, built.building, middle) == 1u);
+
+  const DestructionReport broken = destruction.update(world);
+
+  REQUIRE(broken.created.size() == 1u);
+  REQUIRE(destruction.bodyOf(built.building, 4u) == broken.created[0]);
+  REQUIRE(destruction.bodyOf(built.building, 1u) == built.body);
+
+  const JointDef& carried = jointOf(world, top).def;
+  const JointDef& kept = jointOf(world, bottom).def;
+
+  CHECK(carried.bodyA == broken.created[0]);
+  CHECK(anchorGap(world, carried.bodyA, carried.frameA, high) < 1.0e-9);
+  CHECK(kept.bodyA == built.body);
+  CHECK(anchorGap(world, kept.bodyA, kept.frameA, low) < 1.0e-9);
+
+  const std::vector<uint32_t> base{0u};
+
+  REQUIRE(destruction.removeChunks(world, built.building, base) == 1u);
+
+  const DestructionReport emptied = destruction.update(world);
+
+  REQUIRE(emptied.created.size() == 1u);
+  REQUIRE(!findBody(world.bodies, built.body).has_value());
+  REQUIRE(destruction.bodyOf(built.building, 1u) == emptied.created[0]);
+
+  const JointDef& freed = jointOf(world, bottom).def;
+
+  CHECK(freed.bodyA == emptied.created[0]);
+  CHECK(anchorGap(world, freed.bodyA, freed.frameA, low) < 1.0e-9);
+
+  REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+  CHECK(world.joints.find(top) != nullptr);
+  CHECK(world.joints.find(bottom) != nullptr);
 }

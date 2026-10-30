@@ -7,6 +7,7 @@
 #include <talus/dynamics/compound/compound.h>
 #include <talus/dynamics/contact/contact.h>
 #include <talus/dynamics/edits/edits.h>
+#include <talus/dynamics/joints/jointedits.h>
 #include <talus/dynamics/manifoldcache/manifoldcache.h>
 #include <talus/dynamics/scheduler/stopwatch.h>
 #include <talus/dynamics/tiers/tiers.h>
@@ -54,6 +55,48 @@ bool finitePoint(const glm::dvec3& value) {
 double kineticEnergy(const dynamics::RigidBody& body) {
   return 0.5 * body.mass * glm::dot(body.velocity, body.velocity)
          + 0.5 * glm::dot(body.angularVelocity, dynamics::worldInertia(body) * body.angularVelocity);
+}
+
+const dynamics::RigidBody& rigidOf(const dynamics::World& world, uint32_t id) {
+  return world.bodies.rigids[dynamics::findBody(world.bodies, id)->index];
+}
+
+dynamics::JointFrame poseOf(const dynamics::World& world, uint32_t id) {
+  const dynamics::RigidBody& body = rigidOf(world, id);
+
+  return {body.position, body.rotation};
+}
+
+void rebaseLeaving(
+  dynamics::World& world,
+  uint32_t body,
+  const dynamics::JointFrame& pose,
+  bool emptied,
+  size_t made
+) {
+  const size_t count = world.bodies.rigids.size();
+  std::vector<dynamics::BodyRebase> pieces;
+
+  if (!emptied) {
+    const dynamics::RigidBody& kept = rigidOf(world, body);
+
+    pieces.push_back(dynamics::BodyRebase{body, {}, kept.compound->children});
+  }
+
+  for (size_t index = count - made; index != count; ++index) {
+    const dynamics::RigidBody& piece = world.bodies.rigids[index];
+    const glm::dquat back = glm::conjugate(piece.rotation);
+    const dynamics::JointFrame oldToNew{
+      back * (pose.position - piece.position),
+      glm::normalize(back * pose.rotation)
+    };
+
+    pieces.push_back(
+      dynamics::BodyRebase{piece.id, oldToNew, piece.compound->children}
+    );
+  }
+
+  dynamics::rebaseJoints(world, body, pieces);
 }
 
 glm::dvec3 pathAt(const std::vector<PathPoint>& path, uint64_t step) {
@@ -2181,6 +2224,9 @@ void DestructionWorld::splitAnchored(dynamics::World& world, uint32_t at, Destru
 
   const uint32_t body = piece.body;
   const bool emptied = keys.size() == aliveCount(piece.structure);
+  const bool jointed = !world.joints.empty();
+  const dynamics::JointFrame pose =
+    jointed ? poseOf(world, body) : dynamics::JointFrame{};
 
   if (emptied) {
     if (!dynamics::removeBody(world, body)) {
@@ -2231,6 +2277,10 @@ void DestructionWorld::splitAnchored(dynamics::World& world, uint32_t at, Destru
         ));
       }
     }
+  }
+
+  if (jointed) {
+    rebaseLeaving(world, body, pose, emptied, fresh.size());
   }
 
   forget(at, locals);

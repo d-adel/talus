@@ -19,15 +19,28 @@ bool excludesPair(const JointDef& def) {
   return !def.collideConnected && def.bodyA != noBody && def.bodyB != noBody;
 }
 
+void JointSet::holdPair(const JointDef& def) {
+  if (excludesPair(def)) {
+    ++excluded_[pairKey(def.bodyA, def.bodyB)];
+  }
+}
+
+void JointSet::releasePair(const JointDef& def) {
+  if (excludesPair(def)) {
+    const auto entry = excluded_.find(pairKey(def.bodyA, def.bodyB));
+
+    if (--entry->second == 0u) {
+      excluded_.erase(entry);
+    }
+  }
+}
+
 uint32_t JointSet::add(const JointDef& def) {
   Joint joint;
   joint.id = nextId_++;
   joint.def = def;
   joints_.push_back(joint);
-
-  if (excludesPair(def)) {
-    ++excluded_[pairKey(def.bodyA, def.bodyB)];
-  }
+  holdPair(def);
 
   return joint.id;
 }
@@ -44,15 +57,23 @@ bool JointSet::remove(uint32_t id) {
     return false;
   }
 
-  if (excludesPair(at->def)) {
-    const auto entry = excluded_.find(pairKey(at->def.bodyA, at->def.bodyB));
+  releasePair(at->def);
+  joints_.erase(at);
 
-    if (--entry->second == 0u) {
-      excluded_.erase(entry);
-    }
+  return true;
+}
+
+bool JointSet::rebind(uint32_t id, uint32_t bodyA, uint32_t bodyB) {
+  Joint* joint = find(id);
+
+  if (joint == nullptr) {
+    return false;
   }
 
-  joints_.erase(at);
+  releasePair(joint->def);
+  joint->def.bodyA = bodyA;
+  joint->def.bodyB = bodyB;
+  holdPair(joint->def);
 
   return true;
 }

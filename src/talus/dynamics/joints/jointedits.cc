@@ -116,6 +116,50 @@ void wakeJointBodies(World& world, const JointDef& def) {
   }
 }
 
+glm::dvec3 carried(const JointFrame& transform, const glm::dvec3& point) {
+  return transform.rotation * point + transform.position;
+}
+
+double childGap(const CompoundChild& child, const glm::dvec3& point) {
+  const glm::dvec3 local =
+    glm::conjugate(child.rotation) * (point - child.centre);
+  const glm::dvec3 outside =
+    glm::max(glm::abs(local) - child.half, glm::dvec3(0.0));
+
+  return glm::dot(outside, outside);
+}
+
+const BodyRebase& holderOf(
+  std::span<const BodyRebase> pieces,
+  const glm::dvec3& anchor
+) {
+  if (pieces.size() == 1u) {
+    return pieces.front();
+  }
+
+  const BodyRebase* holder = &pieces.front();
+  double nearest = jointInfinity;
+
+  for (const BodyRebase& piece : pieces) {
+    const glm::dvec3 point = carried(piece.oldToNew, anchor);
+
+    for (const CompoundChild& child : piece.children) {
+      const double gap = childGap(child, point);
+
+      if (gap < nearest) {
+        nearest = gap;
+        holder = &piece;
+      }
+
+      if (nearest == 0.0) {
+        return *holder;
+      }
+    }
+  }
+
+  return *holder;
+}
+
 }
 
 uint32_t addJoint(World& world, const JointDef& def) {
@@ -200,6 +244,64 @@ void wakeJointPartners(World& world, uint32_t id) {
     if (joint.def.bodyA == id || joint.def.bodyB == id) {
       wakeJointBodies(world, joint.def);
     }
+  }
+}
+
+void rebaseJoints(
+  World& world,
+  uint32_t oldBody,
+  std::span<const BodyRebase> pieces
+) {
+  if (pieces.empty()) {
+    return;
+  }
+
+  uint32_t split = noBody;
+
+  for (Joint& joint : world.joints.all()) {
+    const bool onA = joint.def.bodyA == oldBody;
+
+    if (!onA && joint.def.bodyB != oldBody) {
+      continue;
+    }
+
+    JointFrame& frame = onA ? joint.def.frameA : joint.def.frameB;
+    const BodyRebase& piece = holderOf(pieces, frame.position);
+
+    frame.position = carried(piece.oldToNew, frame.position);
+    frame.rotation = glm::normalize(piece.oldToNew.rotation * frame.rotation);
+
+    if (piece.body != oldBody) {
+      const JointDef before = joint.def;
+      const uint32_t other = onA ? before.bodyB : before.bodyA;
+
+      world.joints.rebind(
+        joint.id,
+        onA ? piece.body : other,
+        onA ? other : piece.body
+      );
+
+      if (excludesPair(before)
+          && !world.joints.excludes(before.bodyA, before.bodyB)) {
+        world.broadPhase.markMoved(before.bodyA);
+        world.broadPhase.markMoved(before.bodyB);
+      }
+
+      if (excludesPair(joint.def)) {
+        world.manifolds.forgetPair(joint.def.bodyA, joint.def.bodyB);
+      }
+
+      if (other != noBody) {
+        world.islandStore.markRemoved(other);
+        split = other;
+      }
+    }
+
+    wakeJointBodies(world, joint.def);
+  }
+
+  if (split != noBody) {
+    world.islandStore.requestSplit(split);
   }
 }
 

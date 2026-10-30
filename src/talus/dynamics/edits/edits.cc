@@ -195,6 +195,12 @@ void reframe(
   body.inertialRotation = body.rotation;
 }
 
+JointFrame oldToNew(const PrincipalFrame& frame) {
+  const glm::dquat back = glm::conjugate(frame.rotation);
+
+  return {back * -frame.centre, back};
+}
+
 bool fills(const CompoundChild& child, std::span<const CompoundChild> parts) {
   if (parts.empty()) {
     return false;
@@ -851,6 +857,12 @@ bool removeCompoundChildren(World& world, uint32_t id, std::span<const uint32_t>
 
     reframe(body, remaining, frame);
     wakeBody(world.bodies, *ref);
+
+    if (!world.joints.empty()) {
+      const BodyRebase rebase{id, oldToNew(frame), body.compound->children};
+
+      rebaseJoints(world, id, std::span<const BodyRebase>(&rebase, 1u));
+    }
   } else {
     removeChildren(body.compound, removed);
   }
@@ -992,6 +1004,25 @@ std::vector<uint32_t> splitCompound(
     piece.id = world.bodies.nextId++;
     ids.push_back(piece.id);
     world.bodies.rigids.push_back(std::move(piece));
+  }
+
+  if (!world.joints.empty()) {
+    const RigidBody& keeper = world.bodies.rigids[ref->index];
+    std::vector<BodyRebase> rebases{
+      BodyRebase{id, oldToNew(frames[kept]), keeper.compound->children}
+    };
+    size_t made = world.bodies.rigids.size() - ids.size();
+
+    for (size_t index = 0u; index != sorted.size(); ++index) {
+      if (index != kept) {
+        const RigidBody& piece = world.bodies.rigids[made++];
+        const JointFrame shift = oldToNew(frames[index]);
+
+        rebases.push_back({piece.id, shift, piece.compound->children});
+      }
+    }
+
+    rebaseJoints(world, id, rebases);
   }
 
   return ids;
