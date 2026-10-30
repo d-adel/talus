@@ -2,6 +2,8 @@
 
 #include "fieldprimitives.h"
 
+#include <fixtures/humanoid.h>
+
 #include <talus/dynamics/bodyset/bodyset.h>
 #include <talus/dynamics/edits/edits.h>
 #include <talus/dynamics/joints/jointedits.h>
@@ -17,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <numbers>
@@ -2086,4 +2089,270 @@ TEST_CASE("a spring grip slips at its cap under a fast-rising hand and recovers 
   CHECK_FALSE(report.forceSaturated);
   CHECK(std::abs(glm::length(report.force) - weight) <= 0.01 * weight);
   CHECK(glm::length(slack - glm::dvec3(0.0, weight / 5000.0, 0.0)) < 1.0e-3);
+}
+
+namespace {
+
+const double humanoidTargetReach = 0.88 * std::numbers::pi;
+
+glm::dvec3 jointAnchor(const World& world, uint32_t id, const glm::dvec3& local) {
+  if (id == noBody) {
+    return local;
+  }
+
+  const RigidBody& body = world.bodies.rigids[findBody(world.bodies, id)->index];
+
+  return body.position + body.rotation * local;
+}
+
+double anchorGap(const World& world, const JointDef& def) {
+  const glm::dvec3 a = jointAnchor(world, def.bodyA, def.frameA.position);
+  const glm::dvec3 b = jointAnchor(world, def.bodyB, def.frameB.position);
+
+  return glm::length(b - a);
+}
+
+double outsideEllipse(const glm::dvec2& offset, const glm::dvec2& half) {
+  const glm::dvec2 point = glm::abs(offset);
+  const glm::dvec2 squared = half * half;
+  const auto closest = [&](double t) { return squared * point / (glm::dvec2(t) + squared); };
+  const auto extent = [&](double t) {
+    const glm::dvec2 scaled = closest(t) / half;
+
+    return glm::dot(scaled, scaled);
+  };
+
+  if (extent(0.0) <= 1.0) {
+    return 0.0;
+  }
+
+  double low = 0.0;
+  double high = glm::length(half * point);
+
+  for (int iteration = 0; iteration != 100; ++iteration) {
+    const double middle = 0.5 * (low + high);
+
+    if (extent(middle) > 1.0) {
+      low = middle;
+    } else {
+      high = middle;
+    }
+  }
+
+  return glm::length(point - closest(high));
+}
+
+glm::dvec2 swingBeyondCone(const ConeLimit& cone, double heading) {
+  const glm::dvec2 direction(std::cos(heading), std::sin(heading));
+  const glm::dvec2 edge = cone.centre + direction / glm::length(direction / cone.swing);
+  const double along = glm::dot(edge, direction);
+  const double room =
+    std::sqrt(along * along - glm::dot(edge, edge) + humanoidTargetReach * humanoidTargetReach) - along;
+
+  return edge + std::min(1.0, room) * direction;
+}
+
+struct Overshoot {
+  double angle = 0.0;
+  double side = 0.0;
+  uint32_t direction = 0u;
+};
+
+struct LimitOvershoot {
+  Overshoot range;
+  Overshoot cone;
+  bool engaged = false;
+};
+
+struct HumanoidPush {
+  std::vector<LimitOvershoot> joints;
+  double gap = 0.0;
+};
+
+void keepWorse(Overshoot& worst, const Overshoot& candidate) {
+  if (candidate.angle > worst.angle) {
+    worst = candidate;
+  }
+}
+
+HumanoidPush pushHumanoidLimits(double side, uint32_t direction) {
+  World world;
+  world.parameters.sleep = false;
+  const fixture::Humanoid humanoid = fixture::addHumanoid(world, glm::dvec3(0.0, 2.0, 0.0), true);
+  const double heading = 0.25 * std::numbers::pi * static_cast<double>(direction);
+  std::vector<JointDef> defs;
+
+  for (const uint32_t id : humanoid.joints) {
+    JointDef def = world.joints.find(id)->def;
+    const bool hinge = def.kind == JointKind::Hinge;
+    const double end = side > 0.0 ? (hinge ? def.hinge.upper : def.cone.twistUpper)
+                                  : (hinge ? def.hinge.lower : def.cone.twistLower);
+    def.drive.axes[0].targetAngle = std::clamp(end + side, -humanoidTargetReach, humanoidTargetReach);
+
+    if (!hinge) {
+      const glm::dvec2 swing = swingBeyondCone(def.cone, heading);
+      def.drive.axes[1].targetAngle = swing.x;
+      def.drive.axes[2].targetAngle = swing.y;
+    }
+
+    for (size_t axis = 0u; axis != (hinge ? 1u : 3u); ++axis) {
+      def.drive.axes[axis].stiffness = 1.0e5;
+      def.drive.axes[axis].damping = 1.0e3;
+    }
+
+    REQUIRE(setJointDrive(world, id, def.drive));
+    defs.push_back(def);
+  }
+
+  HumanoidPush push;
+  push.joints.resize(defs.size());
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+    for (size_t joint = 0u; joint != defs.size(); ++joint) {
+      const JointDef& def = defs[joint];
+      LimitOvershoot& worst = push.joints[joint];
+      double range = 0.0;
+      double cone = 0.0;
+
+      if (def.kind == JointKind::Hinge) {
+        const double angle = hingeAngle(world, def);
+        range = std::max(angle - def.hinge.upper, def.hinge.lower - angle);
+      } else {
+        const SwingTwistAngles angles = jointAngles(world, def);
+        range = std::max(angles.twist - def.cone.twistUpper, def.cone.twistLower - angles.twist);
+        cone = outsideEllipse(angles.swing - def.cone.centre, def.cone.swing);
+      }
+
+      keepWorse(worst.range, {range, side, direction});
+      keepWorse(worst.cone, {cone, side, direction});
+      worst.engaged = worst.engaged || jointReport(world, humanoid.joints[joint])->limitActive;
+      push.gap = std::max(push.gap, anchorGap(world, def));
+    }
+  }
+
+  return push;
+}
+
+void printOvershoot(const char* label, const Overshoot& overshoot) {
+  if (!(overshoot.angle > 0.0)) {
+    std::printf(" %s within its limit", label);
+
+    return;
+  }
+
+  std::printf(
+    " %s %.4f rad (%s, heading %3.0f deg)",
+    label,
+    overshoot.angle,
+    overshoot.side > 0.0 ? "upper" : "lower",
+    45.0 * static_cast<double>(overshoot.direction)
+  );
+}
+
+}
+
+TEST_CASE("every humanoid limit holds with its drive at the cap", "[dynamics][joints][!mayfail]") {
+  const size_t count = fixture::humanoidJointNames.size();
+  std::vector<LimitOvershoot> worst(count);
+  std::vector<uint32_t> idle(count, 0u);
+  double gap = 0.0;
+
+  for (const double side : {1.0, -1.0}) {
+    for (uint32_t direction = 0u; direction != 8u; ++direction) {
+      const HumanoidPush push = pushHumanoidLimits(side, direction);
+
+      for (size_t joint = 0u; joint != count; ++joint) {
+        keepWorse(worst[joint].range, push.joints[joint].range);
+        keepWorse(worst[joint].cone, push.joints[joint].cone);
+        idle[joint] += push.joints[joint].engaged ? 0u : 1u;
+      }
+
+      gap = std::max(gap, push.gap);
+    }
+  }
+
+  for (size_t joint = 0u; joint != count; ++joint) {
+    const char* name = fixture::humanoidJointNames[joint];
+    const LimitOvershoot& overshoot = worst[joint];
+
+    std::printf("humanoid limit %-13s", name);
+    printOvershoot("hinge or twist", overshoot.range);
+    printOvershoot("cone", overshoot.cone);
+    std::printf("\n");
+
+    CAPTURE(name, overshoot.range.angle, overshoot.range.side, overshoot.range.direction);
+    CAPTURE(overshoot.cone.angle, overshoot.cone.side, overshoot.cone.direction);
+    CHECK(overshoot.range.angle <= 0.03);
+    CHECK(overshoot.cone.angle <= 0.03);
+    CHECK(idle[joint] == 0u);
+  }
+
+  std::printf("humanoid limit largest anchor gap %.4f m\n", gap);
+}
+
+TEST_CASE("a humanoid-mass chain hangs without creep", "[dynamics][joints][!mayfail]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  world.parameters.sleep = false;
+  const glm::dvec3 top(0.0, 5.0, 0.0);
+  const double release = 0.3;
+  const glm::dvec3 down(std::sin(release), -std::cos(release), 0.0);
+  const glm::dvec3 half = 0.1 * down;
+  std::vector<uint32_t> links;
+  std::vector<JointDef> defs;
+
+  for (uint32_t link = 0u; link != 20u; ++link) {
+    const double mass = link % 2u == 0u ? 40.0 : 1.0;
+    const glm::dvec3 at = top + (2.0 * static_cast<double>(link) + 1.0) * half;
+    const uint32_t index = addRigidBox(world.bodies, crate, glm::dvec3(0.05), mass, at, glm::dvec3(0.0), 0.5, 3u);
+    JointDef def = between(links.empty() ? noBody : world.bodies.rigids[links.back()].id, world.bodies.rigids[index].id);
+    def.frameA.position = links.empty() ? top : half;
+    def.frameB.position = -half;
+    REQUIRE(addJoint(world, def) != 0u);
+    links.push_back(index);
+    defs.push_back(def);
+  }
+
+  const uint32_t frames = static_cast<uint32_t>(std::lround(60.0 / world.parameters.dt));
+  const uint32_t settled = frames / 2u;
+  const uint32_t lastStretch = frames - static_cast<uint32_t>(std::lround(10.0 / world.parameters.dt));
+  double fastest = 0.0;
+  double fastestSettled = 0.0;
+  double creep = 0.0;
+  double gap = 0.0;
+  glm::dvec3 lowest(0.0);
+
+  for (uint32_t frame = 1u; frame <= frames; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+    for (const uint32_t index : links) {
+      const double speed = glm::length(world.bodies.rigids[index].velocity);
+      fastest = std::max(fastest, speed);
+
+      if (frame > settled) {
+        fastestSettled = std::max(fastestSettled, speed);
+      }
+    }
+
+    const glm::dvec3 bottom = world.bodies.rigids[links.back()].position;
+
+    if (frame == lastStretch) {
+      lowest = bottom;
+    } else if (frame > lastStretch) {
+      creep = std::max(creep, glm::length(bottom - lowest));
+    }
+
+    for (const JointDef& def : defs) {
+      gap = std::max(gap, anchorGap(world, def));
+    }
+  }
+
+  std::printf("humanoid-mass chain largest anchor gap %.4f m\n", gap);
+
+  CAPTURE(fastest, fastestSettled, creep);
+  CHECK(fastest <= 5.0);
+  CHECK(fastestSettled < 0.05);
+  CHECK(creep < 0.005);
 }
