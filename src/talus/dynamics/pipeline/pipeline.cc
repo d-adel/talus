@@ -512,6 +512,7 @@ StepReport step(World& world) {
       &world.joints,
       &world.islandStore,
       guests,
+      true,
       true
     );
 

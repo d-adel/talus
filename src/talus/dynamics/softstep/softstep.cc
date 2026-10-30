@@ -608,7 +608,8 @@ SoftstepResult solveSoftstep(
   JointSet* joints,
   const IslandStore* islandStore,
   std::span<const uint32_t> guests,
-  bool partial
+  bool partial,
+  bool jointed
 ) {
   const uint32_t substeps = std::max(parameters.softstepSubsteps, 1u);
   const double step = parameters.dt / static_cast<double>(substeps);
@@ -623,7 +624,8 @@ SoftstepResult solveSoftstep(
   const Softness staticSoftness = makeSoft(2.0f * hertz, 0.5f * zeta, h);
   const float contactSpeed = static_cast<float>(parameters.contactSpeed);
   const float maxLinearSpeed = static_cast<float>(parameters.maxLinearSpeed);
-  const float maxAngularSpeed = 0.25f * std::numbers::pi_v<float> / dt;
+  const float maxAngularSpeed =
+    0.25f * std::numbers::pi_v<float> * (jointed ? static_cast<float>(substeps) : 1.0f) / dt;
   const float threshold = static_cast<float>(parameters.restitutionThreshold);
   const float speculativeDistance =
     static_cast<float>(parameters.speculativeDistance);

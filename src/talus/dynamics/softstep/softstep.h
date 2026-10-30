@@ -45,7 +45,8 @@ SoftstepResult solveSoftstep(
   JointSet* joints = nullptr,
   const IslandStore* islandStore = nullptr,
   std::span<const uint32_t> guests = {},
-  bool partial = false
+  bool partial = false,
+  bool jointed = false
 );
 
 }

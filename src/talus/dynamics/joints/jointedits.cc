@@ -4,6 +4,7 @@
 #include <talus/dynamics/tiers/tiers.h>
 
 #include <cmath>
+#include <numbers>
 #include <vector>
 
 namespace talus::dynamics {
@@ -37,8 +38,12 @@ bool validFrame(const JointFrame& frame) {
   return finite(frame.position) && finite(length) && length > 1e-12;
 }
 
+bool withinTurn(double angle, double reach) {
+  return finite(angle) && std::abs(angle) <= reach * std::numbers::pi;
+}
+
 bool validAxis(const AxisDrive& axis) {
-  return finite(axis.targetAngle) && finite(axis.targetVelocity) && validGain(axis.stiffness)
+  return withinTurn(axis.targetAngle, 1.0) && finite(axis.targetVelocity) && validGain(axis.stiffness)
     && validGain(axis.damping) && !std::isnan(axis.minTorque) && !std::isnan(axis.maxTorque)
     && axis.minTorque <= axis.maxTorque;
 }
@@ -59,7 +64,8 @@ bool validDef(const JointDef& def) {
   return validFrame(def.frameA) && validFrame(def.frameB) && validFrame(spring.target)
     && finite(def.hertz) && def.hertz > 0.0 && finite(def.dampingRatio)
     && def.dampingRatio >= 0.0 && finite(def.hinge.lower) && finite(def.hinge.upper)
-    && (!def.hinge.enabled || def.hinge.lower <= def.hinge.upper)
+    && (!def.hinge.enabled
+        || (def.hinge.lower <= def.hinge.upper && withinTurn(def.hinge.lower, 0.99) && withinTurn(def.hinge.upper, 0.99)))
     && finite(def.cone.twistLower) && finite(def.cone.twistUpper)
     && (!def.cone.enabled || def.cone.twistLower <= def.cone.twistUpper)
     && finite(def.cone.swing) && def.cone.swing.x >= 0.0 && def.cone.swing.y >= 0.0
