@@ -48,10 +48,9 @@ decisions made while building it are in [joints design](joints-design.md).
   counts 1, 4 and 8, in both solvers. One of them has two pinned humanoids
   pushing into a box pile, with all four joint kinds, limits and drives.
 - Linux/GCC 13 Release with `-Werror`, on the lab's spare machine: the build
-  and the full physics suite passed at `55d5282` and at `3a1f382`, before the
-  final review fixes. **Pending: the same run at the final head commit.
-  [Result goes here.]** The GCC 14 checks named elsewhere predate the joint
-  work.
+  and the full physics suite passed at `55d5282`, at `3a1f382` and at
+  `32b89c2`, the last code change in this pull request. The GCC 14 checks
+  named elsewhere predate the joint work.
 
 ### Cost
 
@@ -77,9 +76,26 @@ Single runs varied by up to 17 %, and the medians by about 5 % between
 invocations. A re-run after the final review fixes, which only remove
 per-step work, matched these medians within 4 %.
 
-Reference desktop: **pending, `[jointcost]` at the final head commit.
-[Result goes here.]** The design's budget is about 0.25 ms per world step for
-one humanoid there.
+Reference desktop (Intel Core i7-10700KF, Windows 11, MSVC 19.50, Release,
+8-wide contacts), runtime source `32b89c2`, the same case:
+
+| Scene | Joint solve | Whole step | Steps per second |
+| --- | --- | --- | --- |
+| 1 humanoid, self-contact | 0.167 ms | 0.275 ms | 3,636 |
+| 1 humanoid, inert springs | 0.324 ms | 0.394 ms | 2,536 |
+| 4 humanoids, self-contact | 0.661 ms (0.165 each) | 0.893 ms (0.223 each) | 1,119 |
+| 4 humanoids, inert springs | 1.447 ms (0.362 each) | 1.614 ms (0.403 each) | 620 |
+
+The three runs were within 4 % of each other. The design's budget is about
+0.25 ms per world step for one humanoid, and about 1 ms for four.
+
+- **Four humanoids** fit: 0.893 ms with self-contact.
+- **One humanoid** costs 0.275 ms with self-contact, 10 % over. That row
+  includes self-contact work that Reflex would not have.
+- **The collision-group configuration**, estimated as below, costs about
+  0.24 ms for one humanoid: 0.167 ms of joint solve plus 0.070 ms of other
+  work. This is an estimate, not a measurement. Pull request 4 can measure it.
+- **The desktop is about 13 % slower** than the laptop on this case.
 
 How to read the two configurations:
 
