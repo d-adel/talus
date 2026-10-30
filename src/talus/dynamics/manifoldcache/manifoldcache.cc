@@ -494,8 +494,12 @@ void ManifoldCache::createPairs(
       continue;
     }
 
-    if (filter && pair.first.side == Side::Rigid && pair.second.side == Side::Rigid
-        && joints->excludes(bodies.rigids[pair.first.index].id, bodies.rigids[pair.second.index].id)) {
+    if (filter && pair.first.side == Side::Rigid
+        && pair.second.side == Side::Rigid
+        && joints->excludes(
+          bodies.rigids[pair.first.index].id,
+          bodies.rigids[pair.second.index].id
+        )) {
       continue;
     }
 
@@ -515,7 +519,8 @@ void ManifoldCache::forgetPair(uint32_t idA, uint32_t idB) {
   for (const uint32_t slot : m_byBody[idA]) {
     const CachedBodyPair& pair = m_pairs[slot];
 
-    if ((pair.firstId == idA && pair.secondId == idB) || (pair.firstId == idB && pair.secondId == idA)) {
+    if ((pair.firstId == idA && pair.secondId == idB)
+        || (pair.firstId == idB && pair.secondId == idA)) {
       remove(slot);
 
       return;

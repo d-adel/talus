@@ -50,5 +50,4 @@ SoftstepResult solveSoftstep(
   bool partial = false,
   bool jointed = false
 );
-
 }

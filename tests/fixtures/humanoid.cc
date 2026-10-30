@@ -132,12 +132,14 @@ const std::vector<talus::field::SampledSdf>& fields() {
         box(glm::vec3(0.0f), half)
       };
 
-      result.push_back(talus::field::bake(
-        shape,
-        -reach,
-        reach,
-        glm::uvec3(glm::round(2.0f * reach / 0.02f)) + glm::uvec3(1u)
-      ));
+      result.push_back(
+        talus::field::bake(
+          shape,
+          -reach,
+          reach,
+          glm::uvec3(glm::round(2.0f * reach / 0.02f)) + glm::uvec3(1u)
+        )
+      );
     }
 
     return result;
@@ -200,18 +202,10 @@ Link hinge(
 }
 
 std::array<Link, humanoidJointNames.size()> links() {
-  const glm::dquat leftShoulder(
-    0.94703778,
-    -0.19657629,
-    -0.19657629,
-    -0.16073261
-  );
-  const glm::dquat rightShoulder(
-    0.16073261,
-    -0.19657629,
-    -0.19657629,
-    -0.94703778
-  );
+  const glm::dquat
+    leftShoulder(0.94703778, -0.19657629, -0.19657629, -0.16073261);
+  const glm::dquat
+    rightShoulder(0.16073261, -0.19657629, -0.19657629, -0.94703778);
   const glm::dvec2 spineTwist(-0.26, 0.26);
   const glm::dvec2 spineSwing(0.31, 0.2);
   const glm::dvec2 spineCentre(-0.16, 0.0);
@@ -419,8 +413,7 @@ Humanoid addHumanoid(
   positions[pelvis] = at;
 
   for (const Link& link : joints) {
-    positions[link.child] = positions[link.parent]
-                            + link.parentFrame.position
+    positions[link.child] = positions[link.parent] + link.parentFrame.position
                             - link.childFrame.position;
   }
 
@@ -475,9 +468,13 @@ Humanoid addHumanoid(
   return humanoid;
 }
 
-void excludeSelfContact(talus::dynamics::World& world, const Humanoid& humanoid) {
+void excludeSelfContact(
+  talus::dynamics::World& world,
+  const Humanoid& humanoid
+) {
   for (size_t first = 0u; first != humanoid.bodies.size(); ++first) {
-    for (size_t second = first + 1u; second != humanoid.bodies.size(); ++second) {
+    for (size_t second = first + 1u; second != humanoid.bodies.size();
+         ++second) {
       talus::dynamics::JointDef def;
       def.kind = JointKind::Spring;
       def.bodyA = humanoid.bodies[first];

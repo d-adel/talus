@@ -19,16 +19,16 @@
 
 namespace talus::dynamics {
 
-template <typename Real>
+template<typename Real>
 using JointVec = glm::vec<3, Real>;
 
-template <typename Real>
+template<typename Real>
 using JointQuat = glm::qua<Real>;
 
-template <typename Real>
+template<typename Real>
 using JointMat = glm::mat<3, 3, Real>;
 
-template <typename Real>
+template<typename Real>
 using JointPair = glm::vec<2, Real>;
 
 inline constexpr double jointLimitSpeed = 30.0;
@@ -39,14 +39,14 @@ inline constexpr uint32_t jointLimitPasses = 2u;
 
 inline constexpr double jointSmall = 1.0e-6;
 
-template <typename Real>
+template<typename Real>
 struct JointSoftness {
   Real biasRate = Real(0);
   Real massScale = Real(0);
   Real impulseScale = Real(0);
 };
 
-template <typename Real>
+template<typename Real>
 struct JointEnd {
   uint32_t state = 0u;
   Real invMass = Real(0);
@@ -59,7 +59,7 @@ struct JointEnd {
   JointQuat<Real> dq{Real(1), Real(0), Real(0), Real(0)};
 };
 
-template <typename Real>
+template<typename Real>
 struct JointDriveRow {
   JointSoftness<Real> softness;
   JointVec<Real> axis{Real(0)};
@@ -77,7 +77,7 @@ struct JointDriveRow {
   bool saturated = false;
 };
 
-template <typename Real>
+template<typename Real>
 struct JointSpringBlock {
   Real rateGain = Real(0);
   Real errorGain = Real(0);
@@ -87,7 +87,7 @@ struct JointSpringBlock {
   bool saturated = false;
 };
 
-template <typename Real>
+template<typename Real>
 struct JointRow {
   uint32_t joint = 0u;
   JointKind kind = JointKind::Ball;
@@ -121,7 +121,7 @@ struct JointRow {
   JointSpringBlock<Real> springAngular;
 };
 
-template <typename Real>
+template<typename Real>
 struct JointSwing {
   Real twist = Real(0);
   JointPair<Real> swing{Real(0)};
@@ -129,7 +129,7 @@ struct JointSwing {
   Real cosine = Real(1);
 };
 
-template <typename Real>
+template<typename Real>
 struct JointMotion {
   JointVec<Real> v{Real(0)};
   JointVec<Real> w{Real(0)};
@@ -137,7 +137,7 @@ struct JointMotion {
   JointQuat<Real> dq{Real(1), Real(0), Real(0), Real(0)};
 };
 
-template <typename Real>
+template<typename Real>
 JointSoftness<Real> jointSoftness(Real hertz, Real zeta, Real h) {
   if (hertz == Real(0)) {
     return {};
@@ -151,8 +151,13 @@ JointSoftness<Real> jointSoftness(Real hertz, Real zeta, Real h) {
   return {omega / a1, a2 * a3, a3};
 }
 
-template <typename Real>
-JointSoftness<Real> jointDriveSoftness(Real stiffness, Real damping, Real mass, Real h) {
+template<typename Real>
+JointSoftness<Real> jointDriveSoftness(
+  Real stiffness,
+  Real damping,
+  Real mass,
+  Real h
+) {
   const Real resistance = damping + h * stiffness;
 
   if (resistance == Real(0) || mass == Real(0)) {
@@ -165,7 +170,7 @@ JointSoftness<Real> jointDriveSoftness(Real stiffness, Real damping, Real mass, 
   return {stiffness / resistance, a2 * a3, a3};
 }
 
-template <typename Real>
+template<typename Real>
 JointMat<Real> jointSkew(const JointVec<Real>& v) {
   return JointMat<Real>(
     JointVec<Real>(Real(0), v.z, -v.y),
@@ -174,7 +179,7 @@ JointMat<Real> jointSkew(const JointVec<Real>& v) {
   );
 }
 
-template <typename Real>
+template<typename Real>
 JointMat<Real> jointPointMass(
   Real mA,
   Real mB,
@@ -194,7 +199,7 @@ JointMat<Real> jointPointMass(
   return k;
 }
 
-template <typename Real>
+template<typename Real>
 JointVec<Real> jointSolve3(const JointMat<Real>& m, const JointVec<Real>& a) {
   const Real det = glm::dot(m[0], glm::cross(m[1], m[2]));
 
@@ -211,8 +216,13 @@ JointVec<Real> jointSolve3(const JointMat<Real>& m, const JointVec<Real>& a) {
   );
 }
 
-template <typename Real>
-JointPair<Real> jointSolve2(Real kxx, Real kxy, Real kyy, const JointPair<Real>& a) {
+template<typename Real>
+JointPair<Real> jointSolve2(
+  Real kxx,
+  Real kxy,
+  Real kyy,
+  const JointPair<Real>& a
+) {
   const Real det = kxx * kyy - kxy * kxy;
 
   if (det <= Real(1000) * std::numeric_limits<Real>::min()) {
@@ -221,19 +231,35 @@ JointPair<Real> jointSolve2(Real kxx, Real kxy, Real kyy, const JointPair<Real>&
 
   const Real invDet = Real(1) / det;
 
-  return JointPair<Real>(invDet * (kyy * a.x - kxy * a.y), invDet * (kxx * a.y - kxy * a.x));
+  return JointPair<Real>(
+    invDet * (kyy * a.x - kxy * a.y),
+    invDet * (kxx * a.y - kxy * a.x)
+  );
 }
 
-template <typename Real>
-JointQuat<Real> jointTurn(const JointQuat<Real>& q, const JointVec<Real>& delta) {
-  const JointQuat<Real> qd =
-    JointQuat<Real>(Real(0), Real(0.5) * delta.x, Real(0.5) * delta.y, Real(0.5) * delta.z) * q;
+template<typename Real>
+JointQuat<Real> jointTurn(
+  const JointQuat<Real>& q,
+  const JointVec<Real>& delta
+) {
+  const JointQuat<Real> qd = JointQuat<Real>(
+                               Real(0),
+                               Real(0.5) * delta.x,
+                               Real(0.5) * delta.y,
+                               Real(0.5) * delta.z
+                             )
+                             * q;
 
-  return glm::normalize(JointQuat<Real>(q.w + qd.w, q.x + qd.x, q.y + qd.y, q.z + qd.z));
+  return glm::normalize(
+    JointQuat<Real>(q.w + qd.w, q.x + qd.x, q.y + qd.y, q.z + qd.z)
+  );
 }
 
-template <typename Real>
-JointQuat<Real> jointRelative(const JointQuat<Real>& frameA, JointQuat<Real> frameB) {
+template<typename Real>
+JointQuat<Real> jointRelative(
+  const JointQuat<Real>& frameA,
+  JointQuat<Real> frameB
+) {
   if (glm::dot(frameA, frameB) < Real(0)) {
     frameB = -frameB;
   }
@@ -241,21 +267,32 @@ JointQuat<Real> jointRelative(const JointQuat<Real>& frameA, JointQuat<Real> fra
   return glm::conjugate(frameA) * frameB;
 }
 
-template <typename Real>
+template<typename Real>
 Real jointTwist(const JointQuat<Real>& relative) {
   return relative.w < Real(0) ? Real(2) * std::atan2(-relative.x, -relative.w)
                               : Real(2) * std::atan2(relative.x, relative.w);
 }
 
-template <typename Real>
-JointVec<Real> jointPerpAxis(const JointQuat<Real>& frameA, const JointQuat<Real>& relative, const JointVec<Real>& axis) {
+template<typename Real>
+JointVec<Real> jointPerpAxis(
+  const JointQuat<Real>& frameA,
+  const JointQuat<Real>& relative,
+  const JointVec<Real>& axis
+) {
   const JointVec<Real> v(relative.x, relative.y, relative.z);
 
   return Real(0.5) * (frameA * (relative.w * axis + glm::cross(v, axis)));
 }
 
-template <typename Real>
-Real jointLimitImpulse(Real gap, Real rate, Real mass, Real invH, bool useBias, Real& impulse) {
+template<typename Real>
+Real jointLimitImpulse(
+  Real gap,
+  Real rate,
+  Real mass,
+  Real invH,
+  bool useBias,
+  Real& impulse
+) {
   Real bias = Real(0);
 
   if (gap > Real(0)) {
@@ -271,20 +308,38 @@ Real jointLimitImpulse(Real gap, Real rate, Real mass, Real invH, bool useBias, 
   return impulse - old;
 }
 
-template <typename Real>
-void solveJointLimits(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>& b, Real invH, bool useBias) {
+template<typename Real>
+void solveJointLimits(
+  JointRow<Real>& row,
+  JointMotion<Real>& a,
+  JointMotion<Real>& b,
+  Real invH,
+  bool useBias
+) {
   const JointMat<Real>& iA = row.a.invI;
   const JointMat<Real>& iB = row.b.invI;
   const JointVec<Real> turnA = iA * row.axis;
   const JointVec<Real> turnB = iB * row.axis;
-  const Real lower =
-    jointLimitImpulse(row.lowerGap, glm::dot(b.w - a.w, row.axis), row.axialMass, invH, useBias, row.lowerImpulse);
+  const Real lower = jointLimitImpulse(
+    row.lowerGap,
+    glm::dot(b.w - a.w, row.axis),
+    row.axialMass,
+    invH,
+    useBias,
+    row.lowerImpulse
+  );
 
   a.w -= lower * turnA;
   b.w += lower * turnB;
 
-  const Real upper =
-    jointLimitImpulse(row.upperGap, glm::dot(a.w - b.w, row.axis), row.axialMass, invH, useBias, row.upperImpulse);
+  const Real upper = jointLimitImpulse(
+    row.upperGap,
+    glm::dot(a.w - b.w, row.axis),
+    row.axialMass,
+    invH,
+    useBias,
+    row.upperImpulse
+  );
 
   a.w += upper * turnA;
   b.w -= upper * turnB;
@@ -293,30 +348,43 @@ void solveJointLimits(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Rea
     return;
   }
 
-  const Real cone =
-    jointLimitImpulse(row.coneGap, glm::dot(a.w - b.w, row.coneAxis), row.coneMass, invH, useBias, row.coneImpulse);
+  const Real cone = jointLimitImpulse(
+    row.coneGap,
+    glm::dot(a.w - b.w, row.coneAxis),
+    row.coneMass,
+    invH,
+    useBias,
+    row.coneImpulse
+  );
 
   a.w += cone * (iA * row.coneAxis);
   b.w -= cone * (iB * row.coneAxis);
 }
 
-template <typename Real>
+template<typename Real>
 bool jointLimitWatched(const JointRow<Real>& row) {
   const Real gap = static_cast<Real>(jointLimitWatchGap);
-  const bool range =
-    row.lowerImpulse > Real(0) || row.upperImpulse > Real(0) || row.lowerGap < gap || row.upperGap < gap;
+  const bool range = row.lowerImpulse > Real(0) || row.upperImpulse > Real(0)
+                     || row.lowerGap < gap || row.upperGap < gap;
 
-  return range || (row.kind == JointKind::SwingTwist && (row.coneImpulse > Real(0) || row.coneGap < gap));
+  return range
+         || (row.kind == JointKind::SwingTwist && (row.coneImpulse > Real(0) || row.coneGap < gap));
 }
 
-template <typename Real>
+template<typename Real>
 Real jointDriveImpulse(JointDriveRow<Real>& drive, Real angle, Real rate) {
   const JointSoftness<Real>& soft = drive.softness;
   const Real old = drive.impulse;
-  const Real unbounded = old
-                         - soft.massScale * drive.mass * (rate - drive.speed + soft.biasRate * (angle - drive.target))
-                         - soft.impulseScale * old;
-  const Real bounded = std::clamp(std::clamp(unbounded, drive.lower, drive.upper), -drive.cap, drive.cap);
+  const Real unbounded =
+    old
+    - soft.massScale * drive.mass
+        * (rate - drive.speed + soft.biasRate * (angle - drive.target))
+    - soft.impulseScale * old;
+  const Real bounded = std::clamp(
+    std::clamp(unbounded, drive.lower, drive.upper),
+    -drive.cap,
+    drive.cap
+  );
 
   drive.saturated = bounded != unbounded;
   drive.impulse = bounded;
@@ -324,14 +392,14 @@ Real jointDriveImpulse(JointDriveRow<Real>& drive, Real angle, Real rate) {
   return bounded - old;
 }
 
-template <typename Real>
+template<typename Real>
 Real jointAngularMass(const JointMat<Real>& invI, const JointVec<Real>& axis) {
   const Real k = glm::dot(axis, invI * axis);
 
   return k > Real(0) ? Real(1) / k : Real(0);
 }
 
-template <typename Real>
+template<typename Real>
 JointSwing<Real> jointSwingTwist(const JointQuat<Real>& rotation) {
   const Real small = static_cast<Real>(jointSmall);
   const JointQuat<Real> q = rotation.w < Real(0) ? -rotation : rotation;
@@ -345,7 +413,10 @@ JointSwing<Real> jointSwingTwist(const JointQuat<Real>& rotation) {
 
   const Real cosine = q.w / twistNorm;
   const Real sine = q.x / twistNorm;
-  const JointPair<Real> swing(q.y * cosine - q.z * sine, q.y * sine + q.z * cosine);
+  const JointPair<Real> swing(
+    q.y * cosine - q.z * sine,
+    q.y * sine + q.z * cosine
+  );
   const Real swingSine = glm::length(swing);
   const Real twist = Real(2) * std::atan2(sine, cosine);
 
@@ -358,17 +429,24 @@ JointSwing<Real> jointSwingTwist(const JointQuat<Real>& rotation) {
   return {twist, swing * (swingAngle / swingSine), swing, twistNorm};
 }
 
-template <typename Real>
+template<typename Real>
 JointVec<Real> jointTwistAxis(const JointSwing<Real>& angles) {
   if (angles.cosine < static_cast<Real>(jointSmall)) {
     return JointVec<Real>(Real(1), Real(0), Real(0));
   }
 
-  return JointVec<Real>(Real(1), angles.sine.y / angles.cosine, -angles.sine.x / angles.cosine);
+  return JointVec<Real>(
+    Real(1),
+    angles.sine.y / angles.cosine,
+    -angles.sine.x / angles.cosine
+  );
 }
 
-template <typename Real>
-JointVec<Real> jointSwingAxis(const JointSwing<Real>& angles, const JointPair<Real>& normal) {
+template<typename Real>
+JointVec<Real> jointSwingAxis(
+  const JointSwing<Real>& angles,
+  const JointPair<Real>& normal
+) {
   const Real small = static_cast<Real>(jointSmall);
   const Real sine = glm::length(angles.sine);
 
@@ -380,13 +458,17 @@ JointVec<Real> jointSwingAxis(const JointSwing<Real>& angles, const JointPair<Re
   const JointPair<Real> around(-radial.y, radial.x);
   const Real angle = glm::length(angles.swing);
   const Real spread = Real(2) * sine * angles.cosine;
-  const Real curl = spread > small ? angle * (angles.cosine * angles.cosine - sine * sine) / spread : Real(0);
+  const Real curl =
+    spread > small
+      ? angle * (angles.cosine * angles.cosine - sine * sine) / spread
+      : Real(0);
 
   return glm::dot(normal, radial) * JointVec<Real>(Real(0), radial.x, radial.y)
-         + glm::dot(normal, around) * JointVec<Real>(angle, curl * around.x, curl * around.y);
+         + glm::dot(normal, around)
+             * JointVec<Real>(angle, curl * around.x, curl * around.y);
 }
 
-template <typename Real, typename State>
+template<typename Real, typename State>
 bool resolveJointEnd(
   const BodySet& bodies,
   const IslandStore& islands,
@@ -407,7 +489,8 @@ bool resolveJointEnd(
 
   const BodyRef ref = islands.refOf(id);
 
-  if (ref.side != Side::Rigid || ref.index >= bodies.rigids.size() || bodies.rigids[ref.index].id != id) {
+  if (ref.side != Side::Rigid || ref.index >= bodies.rigids.size()
+      || bodies.rigids[ref.index].id != id) {
     return false;
   }
 
@@ -434,8 +517,11 @@ bool resolveJointEnd(
   return true;
 }
 
-template <typename Real, typename State>
-JointMotion<Real> jointMotion(std::span<State> states, const JointEnd<Real>& end) {
+template<typename Real, typename State>
+JointMotion<Real> jointMotion(
+  std::span<State> states,
+  const JointEnd<Real>& end
+) {
   if (end.state == 0u) {
     return {end.v, end.w, end.dp, end.dq};
   }
@@ -445,15 +531,19 @@ JointMotion<Real> jointMotion(std::span<State> states, const JointEnd<Real>& end
   return {state.v, state.w, state.dp, state.dq};
 }
 
-template <typename Real, typename State>
-void storeJointMotion(std::span<State> states, const JointEnd<Real>& end, const JointMotion<Real>& motion) {
+template<typename Real, typename State>
+void storeJointMotion(
+  std::span<State> states,
+  const JointEnd<Real>& end,
+  const JointMotion<Real>& motion
+) {
   if (end.invMass != Real(0)) {
     states[end.state].v = motion.v;
     states[end.state].w = motion.w;
   }
 }
 
-template <typename Real>
+template<typename Real>
 void prepareJointDrive(
   const AxisDrive& axisDrive,
   const JointDrive& jointDrive,
@@ -466,14 +556,16 @@ void prepareJointDrive(
   const double step = static_cast<double>(h);
 
   drive.axis = axis;
-  drive.active = (axisDrive.stiffness > 0.0 || axisDrive.damping > 0.0) && mass > Real(0);
+  drive.active =
+    (axisDrive.stiffness > 0.0 || axisDrive.damping > 0.0) && mass > Real(0);
 
   if (drive.active) {
     drive.stiffness = static_cast<Real>(axisDrive.stiffness);
     drive.damping = static_cast<Real>(axisDrive.damping);
     drive.step = h;
     drive.mass = mass;
-    drive.softness = jointDriveSoftness(drive.stiffness, drive.damping, drive.mass, h);
+    drive.softness =
+      jointDriveSoftness(drive.stiffness, drive.damping, drive.mass, h);
     drive.speed = static_cast<Real>(axisDrive.targetVelocity);
     drive.lower = static_cast<Real>(axisDrive.minTorque * step);
     drive.upper = static_cast<Real>(axisDrive.maxTorque * step);
@@ -482,14 +574,19 @@ void prepareJointDrive(
   }
 }
 
-template <typename Real>
-void aimJointDrive(JointDriveRow<Real>& drive, const JointMat<Real>& invI, const JointVec<Real>& axis) {
+template<typename Real>
+void aimJointDrive(
+  JointDriveRow<Real>& drive,
+  const JointMat<Real>& invI,
+  const JointVec<Real>& axis
+) {
   drive.axis = axis;
   drive.mass = jointAngularMass(invI, axis);
-  drive.softness = jointDriveSoftness(drive.stiffness, drive.damping, drive.mass, drive.step);
+  drive.softness =
+    jointDriveSoftness(drive.stiffness, drive.damping, drive.mass, drive.step);
 }
 
-template <typename Real>
+template<typename Real>
 void prepareHingeRows(const Joint& joint, Real h, JointRow<Real>& row) {
   const JointDef& def = joint.def;
   const JointImpulses& impulses = joint.impulses;
@@ -499,8 +596,16 @@ void prepareHingeRows(const Joint& joint, Real h, JointRow<Real>& row) {
 
   row.axis = row.a.frame * JointVec<Real>(Real(1), Real(0), Real(0));
   row.axialMass = jointAngularMass(row.a.invI + row.b.invI, row.axis);
-  row.perpY = jointPerpAxis(row.a.frame, relative, JointVec<Real>(Real(0), Real(1), Real(0)));
-  row.perpZ = jointPerpAxis(row.a.frame, relative, JointVec<Real>(Real(0), Real(0), Real(1)));
+  row.perpY = jointPerpAxis(
+    row.a.frame,
+    relative,
+    JointVec<Real>(Real(0), Real(1), Real(0))
+  );
+  row.perpZ = jointPerpAxis(
+    row.a.frame,
+    relative,
+    JointVec<Real>(Real(0), Real(0), Real(1))
+  );
   row.alignmentImpulse = JointPair<Real>(impulses.alignment * step);
   row.limit = def.hinge.enabled;
 
@@ -511,19 +616,35 @@ void prepareHingeRows(const Joint& joint, Real h, JointRow<Real>& row) {
     row.upperImpulse = static_cast<Real>(impulses.hingeUpper * step);
   }
 
-  prepareJointDrive(axisDrive, def.drive, impulses.drive.x, row.axis, row.axialMass, h, row.drives[0]);
+  prepareJointDrive(
+    axisDrive,
+    def.drive,
+    impulses.drive.x,
+    row.axis,
+    row.axialMass,
+    h,
+    row.drives[0]
+  );
   row.drives[0].target = static_cast<Real>(axisDrive.targetAngle);
   row.feedForward = JointVec<Real>(def.drive.feedForward * step);
 }
 
-template <typename Real>
+template<typename Real>
 JointVec<Real> hingeWarmImpulse(const JointRow<Real>& row) {
   return row.alignmentImpulse.x * row.perpY + row.alignmentImpulse.y * row.perpZ
-         + (row.drives[0].impulse + row.lowerImpulse - row.upperImpulse) * row.axis + row.feedForward;
+         + (row.drives[0].impulse + row.lowerImpulse - row.upperImpulse)
+             * row.axis
+         + row.feedForward;
 }
 
-template <typename Real>
-void solveHingeRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>& b, Real invH, bool useBias) {
+template<typename Real>
+void solveHingeRows(
+  JointRow<Real>& row,
+  JointMotion<Real>& a,
+  JointMotion<Real>& b,
+  Real invH,
+  bool useBias
+) {
   const JointMat<Real>& iA = row.a.invI;
   const JointMat<Real>& iB = row.b.invI;
   const JointQuat<Real> frameA = a.dq * row.a.frame;
@@ -533,7 +654,8 @@ void solveHingeRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>
   const JointVec<Real> turnB = iB * row.axis;
 
   if (row.drives[0].active) {
-    const Real impulse = jointDriveImpulse(row.drives[0], angle, glm::dot(b.w - a.w, row.axis));
+    const Real impulse =
+      jointDriveImpulse(row.drives[0], angle, glm::dot(b.w - a.w, row.axis));
 
     a.w -= impulse * turnA;
     b.w += impulse * turnB;
@@ -555,18 +677,27 @@ void solveHingeRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>
     impulseScale = row.softness.impulseScale;
   }
 
-  row.perpY = jointPerpAxis(frameA, relative, JointVec<Real>(Real(0), Real(1), Real(0)));
-  row.perpZ = jointPerpAxis(frameA, relative, JointVec<Real>(Real(0), Real(0), Real(1)));
+  row.perpY =
+    jointPerpAxis(frameA, relative, JointVec<Real>(Real(0), Real(1), Real(0)));
+  row.perpZ =
+    jointPerpAxis(frameA, relative, JointVec<Real>(Real(0), Real(0), Real(1)));
 
   const JointMat<Real> invI = iA + iB;
   const JointVec<Real> spreadY = invI * row.perpY;
   const JointVec<Real> spreadZ = invI * row.perpZ;
   const JointVec<Real> spin = b.w - a.w;
-  const JointPair<Real> rate(glm::dot(spin, row.perpY), glm::dot(spin, row.perpZ));
-  const JointPair<Real> impulse =
-    -massScale
-      * jointSolve2(glm::dot(row.perpY, spreadY), glm::dot(row.perpY, spreadZ), glm::dot(row.perpZ, spreadZ), rate + bias)
-    - impulseScale * row.alignmentImpulse;
+  const JointPair<Real> rate(
+    glm::dot(spin, row.perpY),
+    glm::dot(spin, row.perpZ)
+  );
+  const JointPair<Real> impulse = -massScale
+                                    * jointSolve2(
+                                      glm::dot(row.perpY, spreadY),
+                                      glm::dot(row.perpY, spreadZ),
+                                      glm::dot(row.perpZ, spreadZ),
+                                      rate + bias
+                                    )
+                                  - impulseScale * row.alignmentImpulse;
   const JointVec<Real> angular = impulse.x * row.perpY + impulse.y * row.perpZ;
 
   row.alignmentImpulse += impulse;
@@ -574,11 +705,12 @@ void solveHingeRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>
   b.w += iB * angular;
 }
 
-template <typename Real>
+template<typename Real>
 void storeHingeRows(Joint& joint, const JointRow<Real>& row, Real invH) {
   const double rate = static_cast<double>(invH);
-  const JointVec<Real> torque = row.alignmentImpulse.x * row.perpY + row.alignmentImpulse.y * row.perpZ
-                                + (row.lowerImpulse - row.upperImpulse) * row.axis;
+  const JointVec<Real> torque =
+    row.alignmentImpulse.x * row.perpY + row.alignmentImpulse.y * row.perpZ
+    + (row.lowerImpulse - row.upperImpulse) * row.axis;
   const double drive = static_cast<double>(row.drives[0].impulse) * rate;
 
   joint.impulses.alignment = glm::dvec2(row.alignmentImpulse) * rate;
@@ -587,12 +719,17 @@ void storeHingeRows(Joint& joint, const JointRow<Real>& row, Real invH) {
   joint.impulses.drive = glm::dvec3(drive, 0.0, 0.0);
   joint.report.torque = glm::dvec3(torque) * rate;
   joint.report.driveTorque = glm::dvec3(drive, 0.0, 0.0);
-  joint.report.limitActive = row.lowerImpulse > Real(0) || row.upperImpulse > Real(0);
+  joint.report.limitActive =
+    row.lowerImpulse > Real(0) || row.upperImpulse > Real(0);
   joint.report.driveSaturated = row.drives[0].active && row.drives[0].saturated;
 }
 
-template <typename Real>
-Real jointConeGap(JointRow<Real>& row, const JointQuat<Real>& frameA, const JointSwing<Real>& angles) {
+template<typename Real>
+Real jointConeGap(
+  JointRow<Real>& row,
+  const JointQuat<Real>& frameA,
+  const JointSwing<Real>& angles
+) {
   const JointPair<Real> scaled = (angles.swing - row.coneCentre) / row.coneHalf;
   const JointPair<Real> gradient = scaled / row.coneHalf;
   const Real slope = glm::length(gradient);
@@ -610,8 +747,11 @@ Real jointConeGap(JointRow<Real>& row, const JointQuat<Real>& frameA, const Join
   return (Real(1) - reach) * reach / slope;
 }
 
-template <typename Real>
-std::array<JointVec<Real>, 3> jointSwingTwistAxes(const JointQuat<Real>& frameA, const JointSwing<Real>& angles) {
+template<typename Real>
+std::array<JointVec<Real>, 3> jointSwingTwistAxes(
+  const JointQuat<Real>& frameA,
+  const JointSwing<Real>& angles
+) {
   return {
     frameA * jointTwistAxis(angles),
     frameA * jointSwingAxis(angles, JointPair<Real>(Real(1), Real(0))),
@@ -619,14 +759,16 @@ std::array<JointVec<Real>, 3> jointSwingTwistAxes(const JointQuat<Real>& frameA,
   };
 }
 
-template <typename Real>
+template<typename Real>
 void prepareSwingTwistRows(const Joint& joint, Real h, JointRow<Real>& row) {
   const JointDef& def = joint.def;
   const JointImpulses& impulses = joint.impulses;
   const double step = static_cast<double>(h);
   const JointMat<Real> invI = row.a.invI + row.b.invI;
-  const JointSwing<Real> angles = jointSwingTwist(jointRelative(row.a.frame, row.b.frame));
-  const std::array<JointVec<Real>, 3> directions = jointSwingTwistAxes(row.a.frame, angles);
+  const JointSwing<Real> angles =
+    jointSwingTwist(jointRelative(row.a.frame, row.b.frame));
+  const std::array<JointVec<Real>, 3> directions =
+    jointSwingTwistAxes(row.a.frame, angles);
 
   for (size_t index = 0u; index != directions.size(); ++index) {
     const AxisDrive& axisDrive = def.drive.axes[index];
@@ -660,10 +802,10 @@ void prepareSwingTwistRows(const Joint& joint, Real h, JointRow<Real>& row) {
   }
 }
 
-template <typename Real>
+template<typename Real>
 JointVec<Real> swingTwistWarmImpulse(const JointRow<Real>& row) {
-  JointVec<Real> angular =
-    (row.lowerImpulse - row.upperImpulse) * row.axis - row.coneImpulse * row.coneAxis + row.feedForward;
+  JointVec<Real> angular = (row.lowerImpulse - row.upperImpulse) * row.axis
+                           - row.coneImpulse * row.coneAxis + row.feedForward;
 
   for (const JointDriveRow<Real>& drive : row.drives) {
     angular += drive.impulse * drive.axis;
@@ -672,11 +814,20 @@ JointVec<Real> swingTwistWarmImpulse(const JointRow<Real>& row) {
   return angular;
 }
 
-template <typename Real>
-void solveSwingTwistDrive(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>& b, const JointSwing<Real>& angles) {
+template<typename Real>
+void solveSwingTwistDrive(
+  JointRow<Real>& row,
+  JointMotion<Real>& a,
+  JointMotion<Real>& b,
+  const JointSwing<Real>& angles
+) {
   const JointMat<Real>& iA = row.a.invI;
   const JointMat<Real>& iB = row.b.invI;
-  const std::array<Real, 3> coordinates{angles.twist, angles.swing.x, angles.swing.y};
+  const std::array<Real, 3> coordinates{
+    angles.twist,
+    angles.swing.x,
+    angles.swing.y
+  };
   Real cap = Real(0);
   JointVec<Real> torque(Real(0));
 
@@ -687,7 +838,11 @@ void solveSwingTwistDrive(JointRow<Real>& row, JointMotion<Real>& a, JointMotion
       continue;
     }
 
-    const Real impulse = jointDriveImpulse(drive, coordinates[index], glm::dot(b.w - a.w, drive.axis));
+    const Real impulse = jointDriveImpulse(
+      drive,
+      coordinates[index],
+      glm::dot(b.w - a.w, drive.axis)
+    );
 
     a.w -= impulse * (iA * drive.axis);
     b.w += impulse * (iB * drive.axis);
@@ -716,14 +871,22 @@ void solveSwingTwistDrive(JointRow<Real>& row, JointMotion<Real>& a, JointMotion
   }
 }
 
-template <typename Real>
-void solveSwingTwistRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>& b, Real invH, bool useBias) {
+template<typename Real>
+void solveSwingTwistRows(
+  JointRow<Real>& row,
+  JointMotion<Real>& a,
+  JointMotion<Real>& b,
+  Real invH,
+  bool useBias
+) {
   const JointMat<Real>& iA = row.a.invI;
   const JointMat<Real>& iB = row.b.invI;
   const JointMat<Real> invI = iA + iB;
   const JointQuat<Real> frameA = a.dq * row.a.frame;
-  const JointSwing<Real> angles = jointSwingTwist(jointRelative(frameA, b.dq * row.b.frame));
-  const std::array<JointVec<Real>, 3> directions = jointSwingTwistAxes(frameA, angles);
+  const JointSwing<Real> angles =
+    jointSwingTwist(jointRelative(frameA, b.dq * row.b.frame));
+  const std::array<JointVec<Real>, 3> directions =
+    jointSwingTwistAxes(frameA, angles);
 
   for (size_t index = 0u; index != directions.size(); ++index) {
     if (row.drives[index].active) {
@@ -746,17 +909,19 @@ void solveSwingTwistRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<
   solveJointLimits(row, a, b, invH, useBias);
 }
 
-template <typename Real>
+template<typename Real>
 void storeSwingTwistRows(Joint& joint, const JointRow<Real>& row, Real invH) {
   const double rate = static_cast<double>(invH);
-  const JointVec<Real> torque = (row.lowerImpulse - row.upperImpulse) * row.axis - row.coneImpulse * row.coneAxis;
+  const JointVec<Real> torque = (row.lowerImpulse - row.upperImpulse) * row.axis
+                                - row.coneImpulse * row.coneAxis;
   glm::dvec3 drive(0.0);
   bool saturated = false;
 
   for (size_t index = 0u; index != row.drives.size(); ++index) {
     const JointDriveRow<Real>& axis = row.drives[index];
 
-    drive[static_cast<glm::length_t>(index)] = static_cast<double>(axis.impulse) * rate;
+    drive[static_cast<glm::length_t>(index)] =
+      static_cast<double>(axis.impulse) * rate;
     saturated = saturated || (axis.active && axis.saturated);
   }
 
@@ -766,7 +931,9 @@ void storeSwingTwistRows(Joint& joint, const JointRow<Real>& row, Real invH) {
   joint.impulses.drive = drive;
   joint.report.torque = glm::dvec3(torque) * rate;
   joint.report.driveTorque = drive;
-  joint.report.limitActive = row.lowerImpulse > Real(0) || row.upperImpulse > Real(0) || row.coneImpulse > Real(0);
+  joint.report.limitActive = row.lowerImpulse > Real(0)
+                             || row.upperImpulse > Real(0)
+                             || row.coneImpulse > Real(0);
   joint.report.driveSaturated = saturated;
 }
 
@@ -774,10 +941,13 @@ inline JointFrame jointSpringFrame(const JointDef& def) {
   const JointFrame& frame = def.frameA;
   const JointFrame& target = def.spring.target;
 
-  return {frame.position + frame.rotation * target.position, frame.rotation * target.rotation};
+  return {
+    frame.position + frame.rotation * target.position,
+    frame.rotation * target.rotation
+  };
 }
 
-template <typename Real>
+template<typename Real>
 void prepareSpringBlock(
   double stiffness,
   double damping,
@@ -798,7 +968,7 @@ void prepareSpringBlock(
   }
 }
 
-template <typename Real>
+template<typename Real>
 void prepareSpringRows(const Joint& joint, Real h, JointRow<Real>& row) {
   const SpringSettings& spring = joint.def.spring;
   const JointImpulses& impulses = joint.impulses;
@@ -821,7 +991,7 @@ void prepareSpringRows(const Joint& joint, Real h, JointRow<Real>& row) {
   );
 }
 
-template <typename Real>
+template<typename Real>
 JointVec<Real> jointSpringImpulse(
   JointSpringBlock<Real>& block,
   const JointMat<Real>& k,
@@ -835,17 +1005,27 @@ JointVec<Real> jointSpringImpulse(
   system[1][1] += Real(1);
   system[2][2] += Real(1);
 
-  const JointVec<Real> unbounded = old - jointSolve3(system, block.rateGain * rate + block.errorGain * error + old);
+  const JointVec<Real> unbounded =
+    old
+    - jointSolve3(
+      system,
+      block.rateGain * rate + block.errorGain * error + old
+    );
   const Real square = glm::dot(unbounded, unbounded);
 
   block.saturated = square > block.cap * block.cap;
-  block.impulse = block.saturated ? (block.cap / std::sqrt(square)) * unbounded : unbounded;
+  block.impulse =
+    block.saturated ? (block.cap / std::sqrt(square)) * unbounded : unbounded;
 
   return block.impulse - old;
 }
 
-template <typename Real>
-void solveSpringRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>& b) {
+template<typename Real>
+void solveSpringRows(
+  JointRow<Real>& row,
+  JointMotion<Real>& a,
+  JointMotion<Real>& b
+) {
   const Real mA = row.a.invMass;
   const Real mB = row.b.invMass;
   const JointMat<Real>& iA = row.a.invI;
@@ -854,8 +1034,10 @@ void solveSpringRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real
   if (row.springAngular.active) {
     const JointQuat<Real> frameA = a.dq * row.a.frame;
     const JointQuat<Real> relative = jointRelative(frameA, b.dq * row.b.frame);
-    const JointVec<Real> error = Real(2) * (frameA * JointVec<Real>(relative.x, relative.y, relative.z));
-    const JointVec<Real> impulse = jointSpringImpulse(row.springAngular, iA + iB, b.w - a.w, error);
+    const JointVec<Real> error =
+      Real(2) * (frameA * JointVec<Real>(relative.x, relative.y, relative.z));
+    const JointVec<Real> impulse =
+      jointSpringImpulse(row.springAngular, iA + iB, b.w - a.w, error);
 
     a.w -= iA * impulse;
     b.w += iB * impulse;
@@ -865,9 +1047,14 @@ void solveSpringRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real
     const JointVec<Real> rA = a.dq * row.a.anchor;
     const JointVec<Real> rB = b.dq * row.b.anchor;
     const JointVec<Real> error = (b.dp - a.dp) + (rB - rA) + row.deltaCenter;
-    const JointVec<Real> rate = b.v + glm::cross(b.w, rB) - a.v - glm::cross(a.w, rA);
-    const JointVec<Real> impulse =
-      jointSpringImpulse(row.springLinear, jointPointMass(mA, mB, iA, iB, rA, rB), rate, error);
+    const JointVec<Real> rate =
+      b.v + glm::cross(b.w, rB) - a.v - glm::cross(a.w, rA);
+    const JointVec<Real> impulse = jointSpringImpulse(
+      row.springLinear,
+      jointPointMass(mA, mB, iA, iB, rA, rB),
+      rate,
+      error
+    );
 
     a.v -= mA * impulse;
     a.w -= iA * glm::cross(rA, impulse);
@@ -876,7 +1063,7 @@ void solveSpringRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real
   }
 }
 
-template <typename Real>
+template<typename Real>
 void storeSpringRows(Joint& joint, const JointRow<Real>& row, Real invH) {
   const double rate = static_cast<double>(invH);
   const glm::dvec3 force = glm::dvec3(row.springLinear.impulse) * rate;
@@ -890,7 +1077,7 @@ void storeSpringRows(Joint& joint, const JointRow<Real>& row, Real invH) {
   joint.report.torqueSaturated = row.springAngular.saturated;
 }
 
-template <typename Real>
+template<typename Real>
 JointVec<Real> jointWarmAngular(const JointRow<Real>& row) {
   if (row.kind == JointKind::Hinge) {
     return hingeWarmImpulse(row);
@@ -903,7 +1090,7 @@ JointVec<Real> jointWarmAngular(const JointRow<Real>& row) {
   return row.springAngular.impulse;
 }
 
-template <typename Real, typename State>
+template<typename Real, typename State>
 void prepareJointRows(
   const JointSet& joints,
   const BodySet& bodies,
@@ -920,13 +1107,33 @@ void prepareJointRows(
 
   for (uint32_t index = 0u; index != all.size(); ++index) {
     const Joint& joint = all[index];
-    const JointFrame frameA = joint.def.kind == JointKind::Spring ? jointSpringFrame(joint.def) : joint.def.frameA;
+    const JointFrame frameA = joint.def.kind == JointKind::Spring
+                                ? jointSpringFrame(joint.def)
+                                : joint.def.frameA;
     JointRow<Real> row;
     glm::dvec3 centreA(0.0);
     glm::dvec3 centreB(0.0);
 
-    if (!resolveJointEnd(bodies, islands, states, stateOf, joint.def.bodyA, frameA, row.a, centreA)
-        || !resolveJointEnd(bodies, islands, states, stateOf, joint.def.bodyB, joint.def.frameB, row.b, centreB)
+    if (!resolveJointEnd(
+          bodies,
+          islands,
+          states,
+          stateOf,
+          joint.def.bodyA,
+          frameA,
+          row.a,
+          centreA
+        )
+        || !resolveJointEnd(
+          bodies,
+          islands,
+          states,
+          stateOf,
+          joint.def.bodyB,
+          joint.def.frameB,
+          row.b,
+          centreB
+        )
         || (row.a.state == 0u && row.b.state == 0u)) {
       continue;
     }
@@ -938,7 +1145,8 @@ void prepareJointRows(
       static_cast<Real>(joint.def.dampingRatio),
       h
     );
-    row.pointImpulse = JointVec<Real>(joint.impulses.point * static_cast<double>(h));
+    row.pointImpulse =
+      JointVec<Real>(joint.impulses.point * static_cast<double>(h));
     row.kind = joint.def.kind;
 
     if (row.kind == JointKind::Hinge) {
@@ -953,14 +1161,19 @@ void prepareJointRows(
   }
 }
 
-template <typename Real, typename State>
-void warmStartJointRows(std::span<State> states, std::span<const JointRow<Real>> rows) {
+template<typename Real, typename State>
+void warmStartJointRows(
+  std::span<State> states,
+  std::span<const JointRow<Real>> rows
+) {
   for (const JointRow<Real>& row : rows) {
     JointMotion<Real> a = jointMotion(states, row.a);
     JointMotion<Real> b = jointMotion(states, row.b);
     const JointVec<Real> rA = a.dq * row.a.anchor;
     const JointVec<Real> rB = b.dq * row.b.anchor;
-    const JointVec<Real>& impulse = row.kind == JointKind::Spring ? row.springLinear.impulse : row.pointImpulse;
+    const JointVec<Real>& impulse = row.kind == JointKind::Spring
+                                      ? row.springLinear.impulse
+                                      : row.pointImpulse;
     JointVec<Real> turnA = glm::cross(rA, impulse);
     JointVec<Real> turnB = glm::cross(rB, impulse);
 
@@ -980,8 +1193,13 @@ void warmStartJointRows(std::span<State> states, std::span<const JointRow<Real>>
   }
 }
 
-template <typename Real, typename State>
-uint32_t solveWatchedLimits(std::span<State> states, std::span<JointRow<Real>> rows, Real invH, bool useBias) {
+template<typename Real, typename State>
+uint32_t solveWatchedLimits(
+  std::span<State> states,
+  std::span<JointRow<Real>> rows,
+  Real invH,
+  bool useBias
+) {
   uint32_t visited = 0u;
 
   for (uint32_t pass = 0u; pass != jointLimitPasses; ++pass) {
@@ -1003,7 +1221,7 @@ uint32_t solveWatchedLimits(std::span<State> states, std::span<JointRow<Real>> r
   return visited;
 }
 
-template <typename Real, typename State>
+template<typename Real, typename State>
 uint32_t solveJointRows(
   std::span<State> states,
   std::span<JointRow<Real>> rows,
@@ -1041,13 +1259,15 @@ uint32_t solveJointRows(
     const JointMat<Real>& iB = row.b.invI;
     const JointVec<Real> rA = a.dq * row.a.anchor;
     const JointVec<Real> rB = b.dq * row.b.anchor;
-    const JointVec<Real> cdot = b.v + glm::cross(b.w, rB) - a.v - glm::cross(a.w, rA);
+    const JointVec<Real> cdot =
+      b.v + glm::cross(b.w, rB) - a.v - glm::cross(a.w, rA);
     JointVec<Real> bias(Real(0));
     Real massScale = Real(1);
     Real impulseScale = Real(0);
 
     if (useBias) {
-      const JointVec<Real> separation = (b.dp - a.dp) + (rB - rA) + row.deltaCenter;
+      const JointVec<Real> separation =
+        (b.dp - a.dp) + (rB - rA) + row.deltaCenter;
 
       bias = row.softness.biasRate * separation;
       massScale = row.softness.massScale;
@@ -1055,7 +1275,9 @@ uint32_t solveJointRows(
     }
 
     const JointVec<Real> impulse =
-      -massScale * jointSolve3(jointPointMass(mA, mB, iA, iB, rA, rB), cdot + bias) - impulseScale * row.pointImpulse;
+      -massScale
+        * jointSolve3(jointPointMass(mA, mB, iA, iB, rA, rB), cdot + bias)
+      - impulseScale * row.pointImpulse;
 
     row.pointImpulse += impulse;
     a.v -= mA * impulse;
@@ -1069,7 +1291,7 @@ uint32_t solveJointRows(
   return watching ? solveWatchedLimits(states, rows, invH, useBias) : 0u;
 }
 
-template <typename Real>
+template<typename Real>
 void advanceJointEnd(JointEnd<Real>& end, Real h) {
   if (end.state != 0u) {
     return;
@@ -1079,7 +1301,7 @@ void advanceJointEnd(JointEnd<Real>& end, Real h) {
   end.dq = jointTurn(end.dq, h * end.w);
 }
 
-template <typename Real>
+template<typename Real>
 void advanceJointRows(std::span<JointRow<Real>> rows, Real h) {
   for (JointRow<Real>& row : rows) {
     advanceJointEnd(row.a, h);
@@ -1087,13 +1309,18 @@ void advanceJointRows(std::span<JointRow<Real>> rows, Real h) {
   }
 }
 
-template <typename Real>
-void storeJointRows(JointSet& joints, std::span<const JointRow<Real>> rows, Real invH) {
+template<typename Real>
+void storeJointRows(
+  JointSet& joints,
+  std::span<const JointRow<Real>> rows,
+  Real invH
+) {
   const std::span<Joint> all = joints.all();
 
   for (const JointRow<Real>& row : rows) {
     Joint& joint = all[row.joint];
-    const glm::dvec3 force = glm::dvec3(row.pointImpulse) * static_cast<double>(invH);
+    const glm::dvec3 force =
+      glm::dvec3(row.pointImpulse) * static_cast<double>(invH);
 
     joint.impulses.point = force;
     joint.report.force = force;

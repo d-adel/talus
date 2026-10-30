@@ -5564,7 +5564,15 @@ TEST_CASE("splits each island once per build, however many lattices it holds", "
 
   const std::vector<talus::dynamics::Contact> chains = touching({0u, 1u, 2u, 4u, 5u, 6u});
 
-  store.build(bodies, cache, {}, false, chains, islands, talus::dynamics::JointSet{});
+  store.build(
+    bodies,
+    cache,
+    {},
+    false,
+    chains,
+    islands,
+    talus::dynamics::JointSet{}
+  );
 
   CHECK(store.splits() == 2u);
   CHECK(islands.size() == 6u);
@@ -5575,7 +5583,15 @@ TEST_CASE("splits each island once per build, however many lattices it holds", "
 
   const std::vector<talus::dynamics::Contact> broken = touching({0u, 2u, 4u, 5u, 6u});
 
-  store.build(bodies, cache, {}, false, broken, islands, talus::dynamics::JointSet{});
+  store.build(
+    bodies,
+    cache,
+    {},
+    false,
+    broken,
+    islands,
+    talus::dynamics::JointSet{}
+  );
 
   CHECK(store.splits() == 2u);
   CHECK(islands.size() == 7u);

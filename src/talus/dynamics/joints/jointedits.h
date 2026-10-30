@@ -32,7 +32,10 @@ void rebaseJoints(
   std::span<const BodyRebase> pieces
 );
 
-[[nodiscard]] std::optional<JointReport> jointReport(const World& world, uint32_t joint);
+[[nodiscard]] std::optional<JointReport> jointReport(
+  const World& world,
+  uint32_t joint
+);
 
 void pruneJoints(World& world);
 

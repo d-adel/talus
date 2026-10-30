@@ -58,5 +58,4 @@ StrainstepResult solveStrainstep(
   const IslandStore* islandStore = nullptr,
   std::span<const RigidPose> start = {}
 );
-
 }

@@ -16,7 +16,12 @@ namespace talus::dynamics {
 
 inline constexpr double jointInfinity = std::numeric_limits<double>::infinity();
 
-enum class JointKind : uint8_t { Ball, Hinge, SwingTwist, Spring };
+enum class JointKind : uint8_t {
+  Ball,
+  Hinge,
+  SwingTwist,
+  Spring
+};
 
 struct JointFrame {
   glm::dvec3 position{0.0};

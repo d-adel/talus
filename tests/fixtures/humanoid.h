@@ -43,6 +43,9 @@ Humanoid addHumanoid(
   bool pinPelvis
 );
 
-void excludeSelfContact(talus::dynamics::World& world, const Humanoid& humanoid);
+void excludeSelfContact(
+  talus::dynamics::World& world,
+  const Humanoid& humanoid
+);
 
 }

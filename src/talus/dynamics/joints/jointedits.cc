@@ -34,7 +34,8 @@ bool validGain(double value) {
 
 bool validFrame(const JointFrame& frame) {
   const glm::dquat& q = frame.rotation;
-  const double length = std::sqrt(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z);
+  const double length =
+    std::sqrt(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z);
 
   return finite(frame.position) && finite(length) && length > 1e-12;
 }
@@ -46,9 +47,10 @@ bool withinTurn(double angle, double reach) {
 }
 
 bool validAxis(const AxisDrive& axis) {
-  return withinTurn(axis.targetAngle, 1.0) && finite(axis.targetVelocity) && validGain(axis.stiffness)
-    && validGain(axis.damping) && !std::isnan(axis.minTorque) && !std::isnan(axis.maxTorque)
-    && axis.minTorque <= axis.maxTorque;
+  return withinTurn(axis.targetAngle, 1.0) && finite(axis.targetVelocity)
+         && validGain(axis.stiffness) && validGain(axis.damping)
+         && !std::isnan(axis.minTorque) && !std::isnan(axis.maxTorque)
+         && axis.minTorque <= axis.maxTorque;
 }
 
 bool validDrive(const JointDrive& drive) {
@@ -60,7 +62,8 @@ bool validDrive(const JointDrive& drive) {
 
   const glm::dvec2 swing(drive.axes[1].targetAngle, drive.axes[2].targetAngle);
 
-  return withinTurn(glm::length(swing), swingReach) && validCap(drive.maxTorque) && finite(drive.feedForward);
+  return withinTurn(glm::length(swing), swingReach) && validCap(drive.maxTorque)
+         && finite(drive.feedForward);
 }
 
 bool validHalfAngle(double angle) {
@@ -323,7 +326,8 @@ void pruneJoints(World& world) {
   std::vector<uint32_t> dead;
 
   for (const Joint& joint : world.joints.all()) {
-    const bool aLive = joint.def.bodyA == noBody || resolves(world, joint.def.bodyA);
+    const bool aLive =
+      joint.def.bodyA == noBody || resolves(world, joint.def.bodyA);
 
     if (!aLive || !resolves(world, joint.def.bodyB)) {
       dead.push_back(joint.id);

@@ -365,7 +365,8 @@ void IslandStore::linkContacts(const BodySet& bodies, std::span<const Contact> c
 }
 
 bool IslandStore::heavyId(const BodySet& bodies, uint32_t id) const {
-  return id < m_islandOf.size() && m_islandOf[id] != noIsland && heavy(bodies, m_ref[id]);
+  return id < m_islandOf.size() && m_islandOf[id] != noIsland
+         && heavy(bodies, m_ref[id]);
 }
 
 void IslandStore::linkJoints(const BodySet& bodies, const JointSet& joints) {
@@ -518,7 +519,8 @@ void IslandStore::build(
       continue;
     }
 
-    for (const uint32_t piece : split(bodies, island, cache, contacts, joints)) {
+    for (const uint32_t piece :
+         split(bodies, island, cache, contacts, joints)) {
       if (piece >= settled.size()) {
         settled.resize(piece + 1u, 0u);
       }

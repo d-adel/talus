@@ -625,7 +625,8 @@ SoftstepResult solveSoftstep(
   const float contactSpeed = static_cast<float>(parameters.contactSpeed);
   const float maxLinearSpeed = static_cast<float>(parameters.maxLinearSpeed);
   const float maxAngularSpeed =
-    0.25f * std::numbers::pi_v<float> * (jointed ? static_cast<float>(substeps) : 1.0f) / dt;
+    0.25f * std::numbers::pi_v<float>
+    * (jointed ? static_cast<float>(substeps) : 1.0f) / dt;
   const float threshold = static_cast<float>(parameters.restitutionThreshold);
   const float speculativeDistance =
     static_cast<float>(parameters.speculativeDistance);
@@ -647,7 +648,8 @@ SoftstepResult solveSoftstep(
   rigidOf[0] = 0u;
 
   for (uint32_t entry = 0u; entry != rigidCount; ++entry) {
-    const uint32_t index = entry < ownedCount ? rigids[entry] : guests[entry - ownedCount];
+    const uint32_t index =
+      entry < ownedCount ? rigids[entry] : guests[entry - ownedCount];
 
     rigidOf[entry + 1u] = index;
     stateOf[index] = entry + 1u;
@@ -690,7 +692,8 @@ SoftstepResult solveSoftstep(
   const auto active = [&](uint32_t slot) {
     const CachedBodyPair& pair = cache.at(slot);
 
-    return (owned(pair.first) || owned(pair.second)) && held(pair.first) && held(pair.second);
+    return (owned(pair.first) || owned(pair.second)) && held(pair.first)
+           && held(pair.second);
   };
   const uint32_t batchWidth = width == 4u || width == 8u ? width : 0u;
   std::vector<uint32_t>& ordered = scratch.ordered;
@@ -745,7 +748,10 @@ SoftstepResult solveSoftstep(
       return cache.widePairs(colour);
     }
 
-    return std::span<const uint32_t>(wideSlots).subspan(wideBegin[colour], wideBegin[colour + 1u] - wideBegin[colour]);
+    return std::span<const uint32_t>(wideSlots).subspan(
+      wideBegin[colour],
+      wideBegin[colour + 1u] - wideBegin[colour]
+    );
   };
 
   std::vector<Constraint>& constraints = scratch.constraints;
@@ -1502,7 +1508,15 @@ SoftstepResult solveSoftstep(
 
     if (jointWork) {
       (void)jointClock.lap();
-      prepareJointRows<float, State>(*joints, bodies, *islandStore, states, stateOf, h, jointRows);
+      prepareJointRows<float, State>(
+        *joints,
+        bodies,
+        *islandStore,
+        states,
+        stateOf,
+        h,
+        jointRows
+      );
       jointTime += jointClock.lap();
     }
 
@@ -1526,7 +1540,8 @@ SoftstepResult solveSoftstep(
 
       if (jointWork) {
         (void)jointClock.lap();
-        limitPassRows += solveJointRows<float, State>(states, jointRows, invH, true);
+        limitPassRows +=
+          solveJointRows<float, State>(states, jointRows, invH, true);
         jointTime += jointClock.lap();
       }
 
@@ -1542,7 +1557,8 @@ SoftstepResult solveSoftstep(
       if (jointWork) {
         (void)jointClock.lap();
         advanceJointRows<float>(jointRows, h);
-        limitPassRows += solveJointRows<float, State>(states, jointRows, invH, false);
+        limitPassRows +=
+          solveJointRows<float, State>(states, jointRows, invH, false);
         jointTime += jointClock.lap();
       }
 
@@ -1616,7 +1632,11 @@ SoftstepResult solveSoftstep(
     profile->joints = jointTime;
   }
 
-  return {widePairs, substeps, jointWork ? static_cast<uint32_t>(jointRows.size()) : 0u, limitPassRows};
+  return {
+    widePairs,
+    substeps,
+    jointWork ? static_cast<uint32_t>(jointRows.size()) : 0u,
+    limitPassRows
+  };
 }
-
 }

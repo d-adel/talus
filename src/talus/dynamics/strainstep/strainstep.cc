@@ -497,8 +497,9 @@ bool holdsJoint(
 
       const BodyRef ref = islands.refOf(id);
 
-      if (ref.side == Side::Rigid && ref.index < bodies.rigids.size() && bodies.rigids[ref.index].id == id
-          && stateOf[ref.index] != 0u && bodies.rigids[ref.index].mass > 0.0) {
+      if (ref.side == Side::Rigid && ref.index < bodies.rigids.size()
+          && bodies.rigids[ref.index].id == id && stateOf[ref.index] != 0u
+          && bodies.rigids[ref.index].mass > 0.0) {
         return true;
       }
     }
@@ -529,7 +530,6 @@ void rewindJointEnd(
   end.dp = start[index].position - body.position;
   end.dq = start[index].rotation * glm::conjugate(body.rotation);
 }
-
 }
 
 std::shared_ptr<StrainstepArena> makeStrainstepArena() {
@@ -588,13 +588,15 @@ StrainstepResult solveStrainstep(
     }
   }
 
-  const bool jointed =
-    joints != nullptr && islandStore != nullptr && holdsJoint(*joints, bodies, *islandStore, stateOf);
+  const bool jointed = joints != nullptr && islandStore != nullptr
+                       && holdsJoint(*joints, bodies, *islandStore, stateOf);
   const uint32_t needed = islandSubsteps(bodies, island, parameters);
-  const uint32_t substeps = jointed ? std::max(needed, parameters.jointSubsteps) : needed;
+  const uint32_t substeps =
+    jointed ? std::max(needed, parameters.jointSubsteps) : needed;
   const double h = parameters.dt / static_cast<double>(substeps);
   const double invH = 1.0 / h;
-  const double maxAngularSpeed = 0.25 * std::numbers::pi / (jointed ? h : parameters.dt);
+  const double maxAngularSpeed =
+    0.25 * std::numbers::pi / (jointed ? h : parameters.dt);
   std::vector<uint32_t> lattices;
   std::vector<StrainLattice*> sets;
   std::vector<uint8_t> stiff(bodies.lattices.size(), 0u);
@@ -662,7 +664,15 @@ StrainstepResult solveStrainstep(
   uint32_t limitPassRows = 0u;
 
   if (jointed) {
-    prepareJointRows<double, RigidState>(*joints, bodies, *islandStore, states, stateOf, h, jointRows);
+    prepareJointRows<double, RigidState>(
+      *joints,
+      bodies,
+      *islandStore,
+      states,
+      stateOf,
+      h,
+      jointRows
+    );
 
     for (JointRow<double>& row : jointRows) {
       const JointDef& def = joints->all()[row.joint].def;
@@ -751,7 +761,8 @@ StrainstepResult solveStrainstep(
         solveContactRow(row, motion, true);
       }
 
-      limitPassRows += solveJointRows<double, RigidState>(states, jointRows, invH, true);
+      limitPassRows +=
+        solveJointRows<double, RigidState>(states, jointRows, invH, true);
 
       for (const ManifoldRow& row : manifolds) {
         pushManifold(states, row, points, invH, parameters.contactSpeed);
@@ -777,7 +788,8 @@ StrainstepResult solveStrainstep(
       solveContactRow(row, motion, false);
     }
 
-    limitPassRows += solveJointRows<double, RigidState>(states, jointRows, invH, false);
+    limitPassRows +=
+      solveJointRows<double, RigidState>(states, jointRows, invH, false);
 
     for (ManifoldRow& row : manifolds) {
       relaxManifold(states, row, points, invH);
@@ -828,5 +840,4 @@ StrainstepResult solveStrainstep(
 
   return {substeps, static_cast<uint32_t>(jointRows.size()), limitPassRows};
 }
-
 }
