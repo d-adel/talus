@@ -523,9 +523,27 @@ uint64_t mixBits(uint64_t hash, double value) {
 struct JointedRun {
   uint64_t hash = 0u;
   bool loaded = false;
+  bool limited = false;
 };
 
-JointedRun chainOnPile(uint32_t workers, uint32_t width) {
+void twistLink(JointDef& def) {
+  def.kind = JointKind::SwingTwist;
+  def.cone.enabled = true;
+  def.cone.twistLower = -0.3;
+  def.cone.twistUpper = 0.3;
+  def.cone.swing = glm::dvec2(0.5, 0.25);
+  def.cone.centre = glm::dvec2(0.05, 0.0);
+  def.drive.axes[1].targetAngle = 0.2;
+  def.drive.axes[2].targetAngle = -0.3;
+  def.drive.maxTorque = 5.0;
+
+  for (AxisDrive& axis : def.drive.axes) {
+    axis.stiffness = 2.0;
+    axis.damping = 0.1;
+  }
+}
+
+JointedRun chainOnPile(uint32_t workers, uint32_t width, JointKind kind) {
   const talus::field::SampledSdf crate = crateField();
   World world;
 
@@ -551,16 +569,26 @@ JointedRun chainOnPile(uint32_t workers, uint32_t width) {
     JointDef def = between(chain[link], chain[link + 1u]);
     def.frameA.position = glm::dvec3(0.06, 0.0, 0.0);
     def.frameB.position = glm::dvec3(-0.06, 0.0, 0.0);
+
+    if (kind == JointKind::SwingTwist) {
+      twistLink(def);
+    }
+
     REQUIRE(addJoint(world, def) != 0u);
   }
+
+  JointedRun run;
 
   for (uint32_t frame = 0u; frame != 120u; ++frame) {
     if (talus::dynamics::step(world).nonFinite) {
       return {};
     }
+
+    for (const Joint& joint : world.joints.all()) {
+      run.limited = run.limited || joint.report.limitActive;
+    }
   }
 
-  JointedRun run;
   run.hash = 1469598103934665603ull;
 
   for (const RigidBody& body : world.bodies.rigids) {
@@ -578,6 +606,8 @@ JointedRun chainOnPile(uint32_t workers, uint32_t width) {
   for (const Joint& joint : world.joints.all()) {
     for (int axis = 0; axis != 3; ++axis) {
       run.hash = mixBits(run.hash, joint.report.force[axis]);
+      run.hash = mixBits(run.hash, joint.report.torque[axis]);
+      run.hash = mixBits(run.hash, joint.report.driveTorque[axis]);
     }
 
     run.loaded = run.loaded || joint.report.force != glm::dvec3(0.0);
@@ -838,17 +868,22 @@ TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 an
     widths.push_back(8u);
   }
 
-  const JointedRun serial = chainOnPile(1u, 1u);
+  const JointedRun serial = chainOnPile(1u, 1u, JointKind::Ball);
+  const JointedRun twisted = chainOnPile(1u, 1u, JointKind::SwingTwist);
   const uint64_t deck = deckHash(1u, 1u);
 
   REQUIRE(serial.hash != 0u);
   REQUIRE(serial.loaded);
+  REQUIRE(twisted.hash != 0u);
+  REQUIRE(twisted.loaded);
+  REQUIRE(twisted.limited);
   REQUIRE(deck != 0u);
 
   for (const uint32_t width : widths) {
     for (const uint32_t workers : {1u, 4u, 8u}) {
       CAPTURE(width, workers);
-      CHECK(chainOnPile(workers, width).hash == serial.hash);
+      CHECK(chainOnPile(workers, width, JointKind::Ball).hash == serial.hash);
+      CHECK(chainOnPile(workers, width, JointKind::SwingTwist).hash == twisted.hash);
       CHECK(deckHash(workers, width) == deck);
     }
   }
@@ -1244,4 +1279,272 @@ TEST_CASE("hinge limits and drive targets beyond a half turn are rejected", "[dy
   CHECK_FALSE(setJointDrive(world, joint, drive));
   drive.axes[0].targetAngle = 1.0;
   CHECK(setJointDrive(world, joint, drive));
+}
+
+namespace {
+
+struct SwingTwistAngles {
+  double twist = 0.0;
+  glm::dvec2 swing{0.0};
+};
+
+SwingTwistAngles reflexSwingTwist(const glm::dquat& rotation) {
+  const glm::dquat q = rotation.w < 0.0 ? -rotation : rotation;
+  const double twistNorm = std::sqrt(q.w * q.w + q.x * q.x);
+
+  if (twistNorm < 1.0e-6) {
+    return {0.0, glm::normalize(glm::dvec2(q.y, q.z)) * std::numbers::pi};
+  }
+
+  const double cosine = q.w / twistNorm;
+  const double sine = q.x / twistNorm;
+  const glm::dvec2 swing(q.y * cosine - q.z * sine, q.y * sine + q.z * cosine);
+  const double swingSine = glm::length(swing);
+  const double twist = 2.0 * std::atan2(sine, cosine);
+
+  if (swingSine < 1.0e-6) {
+    return {twist, swing * (2.0 / twistNorm)};
+  }
+
+  return {twist, swing * (2.0 * std::atan2(swingSine, twistNorm) / swingSine)};
+}
+
+SwingTwistAngles jointAngles(const World& world, const JointDef& def) {
+  return reflexSwingTwist(
+    glm::conjugate(jointFrameRotation(world, def.bodyA, def.frameA)) * jointFrameRotation(world, def.bodyB, def.frameB)
+  );
+}
+
+const glm::dquat limbDown = glm::angleAxis(-0.5 * std::numbers::pi, glm::dvec3(0.0, 0.0, 1.0));
+
+JointDef worldSwingTwist(const World& world, uint32_t index) {
+  const RigidBody& body = world.bodies.rigids[index];
+  JointDef def = between(noBody, body.id);
+  def.kind = JointKind::SwingTwist;
+  def.frameA.position = hingePivot;
+  def.frameA.rotation = limbDown;
+  def.frameB.position = glm::conjugate(body.rotation) * (hingePivot - body.position);
+  def.frameB.rotation = glm::conjugate(body.rotation) * limbDown;
+
+  return def;
+}
+
+JointDef shoulder(const World& world, uint32_t index) {
+  JointDef def = worldSwingTwist(world, index);
+  def.cone.enabled = true;
+  def.cone.twistLower = -0.4;
+  def.cone.twistUpper = 0.2;
+  def.cone.swing = glm::dvec2(0.6, 0.3);
+  def.cone.centre = glm::dvec2(0.1, 0.0);
+
+  return def;
+}
+
+void pushAtCap(JointDef& def) {
+  def.drive.maxTorque = 100.0;
+
+  for (AxisDrive& axis : def.drive.axes) {
+    axis.stiffness = 1.0e5;
+  }
+}
+
+double ellipse(const ConeLimit& cone, const glm::dvec2& swing) {
+  const glm::dvec2 scaled = (swing - cone.centre) / cone.swing;
+
+  return glm::dot(scaled, scaled);
+}
+
+}
+
+TEST_CASE("a swing-twist cone holds an ellipse", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const double margin = 0.03 / 0.3;
+
+  for (uint32_t direction = 0u; direction != 8u; ++direction) {
+    const double heading = 0.25 * std::numbers::pi * static_cast<double>(direction);
+    CAPTURE(direction);
+
+    World world;
+    world.parameters.sleep = false;
+    const uint32_t index = addHingedCrate(world, crate);
+    JointDef def = shoulder(world, index);
+    pushAtCap(def);
+    def.drive.axes[1].targetAngle = 2.0 * std::cos(heading);
+    def.drive.axes[2].targetAngle = 2.0 * std::sin(heading);
+    const uint32_t joint = addJoint(world, def);
+    REQUIRE(joint != 0u);
+
+    double furthest = 0.0;
+
+    for (uint32_t frame = 0u; frame != 120u; ++frame) {
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+      furthest = std::max(furthest, ellipse(def.cone, jointAngles(world, def).swing));
+    }
+
+    const JointReport report = *jointReport(world, joint);
+
+    CAPTURE(furthest);
+    CHECK(furthest <= (1.0 + margin) * (1.0 + margin));
+    CHECK(ellipse(def.cone, jointAngles(world, def).swing) >= (1.0 - margin) * (1.0 - margin));
+    CHECK(report.limitActive);
+    CHECK(report.driveSaturated);
+  }
+}
+
+TEST_CASE("a swing-twist twist range holds", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+
+  for (const double side : {1.0, -1.0}) {
+    CAPTURE(side);
+
+    World world;
+    world.parameters.sleep = false;
+    const uint32_t index = addHingedCrate(world, crate);
+    JointDef def = shoulder(world, index);
+    pushAtCap(def);
+    def.drive.axes[0].targetAngle = 2.0 * side;
+    const double end = side > 0.0 ? def.cone.twistUpper : def.cone.twistLower;
+    const uint32_t joint = addJoint(world, def);
+    REQUIRE(joint != 0u);
+
+    double overshoot = -1.0;
+
+    for (uint32_t frame = 0u; frame != 120u; ++frame) {
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+      overshoot = std::max(overshoot, side * (jointAngles(world, def).twist - end));
+    }
+
+    const JointReport report = *jointReport(world, joint);
+
+    CAPTURE(overshoot);
+    CHECK(overshoot <= 0.03);
+    CHECK(side * (jointAngles(world, def).twist - end) >= -0.02);
+    CHECK(report.limitActive);
+    CHECK(report.driveSaturated);
+  }
+}
+
+TEST_CASE("a swing-twist drive deflects per axis", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const glm::dvec3 stiffness(100.0, 200.0, 400.0);
+  const double torque = 10.0;
+
+  for (int axis = 0; axis != 3; ++axis) {
+    CAPTURE(axis);
+
+    World world;
+    world.parameters.gravity = glm::dvec3(0.0);
+    world.parameters.sleep = false;
+    const uint32_t index = addHingedCrate(world, crate);
+    JointDef def = worldSwingTwist(world, index);
+    glm::dvec3 local(0.0);
+    local[axis] = torque;
+    def.drive.feedForward = limbDown * local;
+
+    for (int other = 0; other != 3; ++other) {
+      def.drive.axes[other].stiffness = stiffness[other];
+      def.drive.axes[other].damping = 20.0;
+    }
+
+    const uint32_t joint = addJoint(world, def);
+    REQUIRE(joint != 0u);
+
+    for (uint32_t frame = 0u; frame != 180u; ++frame) {
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+    }
+
+    const SwingTwistAngles angles = jointAngles(world, def);
+    const glm::dvec3 deflection(angles.twist, angles.swing.x, angles.swing.y);
+    const double expected = torque / stiffness[axis];
+    const JointReport report = *jointReport(world, joint);
+
+    CAPTURE(deflection.x, deflection.y, deflection.z);
+    CHECK(std::abs(deflection[axis] - expected) <= 0.02 * expected);
+    CHECK(std::abs(report.driveTorque[axis] + torque) <= 0.02 * torque);
+
+    for (int other = 0; other != 3; ++other) {
+      if (other != axis) {
+        CHECK(std::abs(deflection[other]) < 0.002);
+      }
+    }
+  }
+}
+
+TEST_CASE("a swing-twist drive reaches its target in Reflex's angles", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  world.parameters.gravity = glm::dvec3(0.0);
+  world.parameters.sleep = false;
+  const glm::dvec3 target(0.3, 0.4, -0.2);
+  const uint32_t index = addHingedCrate(world, crate);
+  JointDef def = worldSwingTwist(world, index);
+
+  for (int axis = 0; axis != 3; ++axis) {
+    def.drive.axes[axis].targetAngle = target[axis];
+    def.drive.axes[axis].stiffness = 50.0;
+    def.drive.axes[axis].damping = 5.0;
+  }
+
+  REQUIRE(addJoint(world, def) != 0u);
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+  }
+
+  const SwingTwistAngles angles = jointAngles(world, def);
+
+  CAPTURE(angles.twist, angles.swing.x, angles.swing.y);
+  CHECK(std::abs(angles.twist - target.x) < 1.0e-3);
+  CHECK(std::abs(angles.swing.x - target.y) < 1.0e-3);
+  CHECK(std::abs(angles.swing.y - target.z) < 1.0e-3);
+}
+
+TEST_CASE("swing-twist ranges, cones and drive targets beyond their bounds are rejected", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  const uint32_t index = addHingedCrate(world, crate);
+  const double pi = std::numbers::pi;
+
+  const auto accepts = [&](double lower, double upper, const glm::dvec2& swing, const glm::dvec3& target) {
+    JointDef def = shoulder(world, index);
+    def.cone.twistLower = lower;
+    def.cone.twistUpper = upper;
+    def.cone.swing = swing;
+
+    for (int axis = 0; axis != 3; ++axis) {
+      def.drive.axes[axis].targetAngle = target[axis];
+      def.drive.axes[axis].stiffness = 20.0;
+    }
+
+    const uint32_t joint = addJoint(world, def);
+
+    if (joint != 0u) {
+      REQUIRE(removeJoint(world, joint));
+    }
+
+    return joint != 0u;
+  };
+
+  const glm::dvec2 cone(0.6, 0.3);
+  const glm::dvec3 still(0.0);
+
+  CHECK(accepts(-0.99 * pi, 0.99 * pi, glm::dvec2(0.495 * pi), glm::dvec3(pi, -pi, pi)));
+  CHECK(accepts(-0.4, 0.2, cone, still));
+  CHECK_FALSE(accepts(-3.12, 0.2, cone, still));
+  CHECK_FALSE(accepts(-0.4, 3.12, cone, still));
+  CHECK_FALSE(accepts(0.2, -0.4, cone, still));
+  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(0.0, 0.3), still));
+  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(0.6, -0.3), still));
+  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(1.56, 0.3), still));
+  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(0.6, 1.56), still));
+  CHECK_FALSE(accepts(-0.4, 0.2, cone, glm::dvec3(3.2, 0.0, 0.0)));
+  CHECK_FALSE(accepts(-0.4, 0.2, cone, glm::dvec3(0.0, -3.2, 0.0)));
+  CHECK_FALSE(accepts(-0.4, 0.2, cone, glm::dvec3(0.0, 0.0, 3.2)));
+  CHECK(world.joints.empty());
+
+  JointDef unlimited = shoulder(world, index);
+  unlimited.cone.enabled = false;
+  unlimited.cone.swing = glm::dvec2(0.0);
+  unlimited.cone.twistLower = -4.0;
+  CHECK(addJoint(world, unlimited) != 0u);
 }

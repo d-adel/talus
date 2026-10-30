@@ -58,6 +58,19 @@ bool validDrive(const JointDrive& drive) {
   return validCap(drive.maxTorque) && finite(drive.feedForward);
 }
 
+bool validHalfAngle(double angle) {
+  return angle > 0.0 && withinTurn(angle, 0.495);
+}
+
+bool validCone(const ConeLimit& cone) {
+  return finite(cone.twistLower) && finite(cone.twistUpper) && finite(cone.swing)
+    && cone.swing.x >= 0.0 && cone.swing.y >= 0.0 && finite(cone.centre)
+    && (!cone.enabled
+        || (cone.twistLower <= cone.twistUpper && withinTurn(cone.twistLower, 0.99)
+            && withinTurn(cone.twistUpper, 0.99) && validHalfAngle(cone.swing.x)
+            && validHalfAngle(cone.swing.y)));
+}
+
 bool validDef(const JointDef& def) {
   const SpringSettings& spring = def.spring;
 
@@ -66,10 +79,7 @@ bool validDef(const JointDef& def) {
     && def.dampingRatio >= 0.0 && finite(def.hinge.lower) && finite(def.hinge.upper)
     && (!def.hinge.enabled
         || (def.hinge.lower <= def.hinge.upper && withinTurn(def.hinge.lower, 0.99) && withinTurn(def.hinge.upper, 0.99)))
-    && finite(def.cone.twistLower) && finite(def.cone.twistUpper)
-    && (!def.cone.enabled || def.cone.twistLower <= def.cone.twistUpper)
-    && finite(def.cone.swing) && def.cone.swing.x >= 0.0 && def.cone.swing.y >= 0.0
-    && finite(def.cone.centre) && validDrive(def.drive) && validGain(spring.linearStiffness)
+    && validCone(def.cone) && validDrive(def.drive) && validGain(spring.linearStiffness)
     && validGain(spring.linearDamping) && validCap(spring.maxForce)
     && validGain(spring.angularStiffness) && validGain(spring.angularDamping)
     && validCap(spring.maxTorque);
