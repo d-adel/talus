@@ -74,7 +74,7 @@ The work fails, even if it runs, if any of these happen:
   - Joints link islands in `build` and add edges to `split`'s union-find. Removal calls `markRemoved`.
   - Creating or editing a joint wakes both bodies.
   - Bodies are stored by id, because vector indices change when bodies are removed.
-  - **As built.** Removing a joint also wakes both bodies. `setRigidPose` and `setVelocity` wake every body jointed to the edited body. At the end of each step, every body jointed to an awake, moving mass-0 body is woken, so a sleeping body follows a platform or hand that starts to move. A host that writes a mass-0 body's velocity directly bypasses both rules, as it does for contacts.
+  - **As built.** Removing a joint also wakes both bodies. Removing a body deletes its joints at once and wakes the bodies at their other ends, so no step has to look for joints on removed bodies. `setRigidPose` and `setVelocity` wake every body jointed to the edited body. At the end of each step, every body jointed to an awake, moving mass-0 body is woken, so a sleeping body follows a platform or hand that starts to move. A host that writes a mass-0 body's velocity directly bypasses both rules, as it does for contacts.
 
 ### Joint kinds
 
@@ -92,11 +92,13 @@ The work fails, even if it runs, if any of these happen:
   Each axis is its own soft row with physical k and c (Catto's soft constraints, GDC 2011). So the response does not depend on the joined bodies' masses.
   - Torque is bounded per axis and per direction, with a lower and an upper bound, and also by a cap on the torque vector's magnitude.
   - A world-space feed-forward torque is applied as equal and opposite body torques in every substep.
+  - **As built.** Each axis's bounds must allow zero torque (`minTorque` ≤ 0 ≤ `maxTorque`). A positive lower bound is a constant torque source, which is what the feed-forward torque is for, and a lower bound of +∞ made the first step non-finite.
   - **As built (Task 5).** A swing-twist drive measures each axis's error in the swing-twist coordinates: the twist angle about frame B's x, and the two components of the swing vector. It does not use the shortest rotation to the target, because Reflex's shoulder twist range spans more than π, and the shortest rotation would drive through the far limit. The row directions, masses and softness are recomputed in every solve. With directions fixed for a whole step, a 1 kg limb escaped a hip cone by 1.73 rad. The magnitude cap limits the world torque vector; the per-axis bounds limit each angle's torque.
 - **Spring joint.** Pulls body B's frame toward a target frame on A. The host may move the target every step.
   - It has linear and angular stiffness and damping in physical units, and caps on force and torque.
   - When a cap is reached, the joint slips instead of holding. This serves grips, a ragdoll tethered to its mover capsule, and the role of Box3D's motor joint.
   - **As built (Task 7).** The target pose is A × frameA × target, so the default target pulls B's frame onto A's frame. Each block (linear and angular) is solved as one 3 × 3 implicit spring-damper with Task 4's drive softness, using the block's effective-mass matrix. That keeps an off-centre grip physical in every direction. The caps limit the force and torque vectors in any direction.
+  - `setSpringSettings` changes a spring's gains, caps and target without re-creating the joint, so a grip can weaken as a character tires.
   - The spring has no target-velocity input, and its damping acts on the relative velocity of A and B. A host that carries an object therefore drives a mass-0 body A (a kinematic hand) with `setRigidPose` and `setVelocity`, and the grip follows without lag. A world-anchored target moved by the host each step lags instead: 0.034 m at 1 m/s for a 3 kg box with c = 200 N·s/m.
 - **Planar velocity joint (Box3D's mover joint).** Two rows in the plane normal to frame B's y. They drive B's velocity relative to A toward a target velocity.
   - The effective mass is 1/(m_A + m_B) with inertia ignored, so it never rotates either body.
@@ -151,7 +153,7 @@ The only ray query today, `rayBlockers` and `firstHit`, serves blast occlusion. 
   1. A hinge pendulum's small-angle period matches 2π√(L/g) within 2 %. Its energy does not grow over 60 s.
   2. A 20-body chain with a 40:1 mass ratio hangs and settles with no explosion and no creep over 60 s.
   3. With every drive of Reflex's reference humanoid pushing into its limit at its torque cap, with that rig's body masses, no hinge or cone-twist limit is exceeded by more than 0.03 rad (about 1.7°, owner's decision 2026-10-30, at the jointed islands' 16 substeps).
-  4. A drive's static deflection under a known torque is τ/k within 2 %. Its response frequency is √(k/I) within 5 %, for joined-mass ratios from 1 to 75, up to the measured frequency range (owner's ruling 2026-10-30). This is the planted-ankle case.
+  4. A drive's static deflection under a known torque is τ/k within 2 %. Its response frequency is √(k/I) within 5 %, for joined-mass ratios from 1 to 75, up to the measured frequency range (the controller's provisional ruling of 2026-10-30, pending the owner). This is the planted-ankle case.
      - At the default 1/960 s substep (1/60 s × 16), the bound holds up to about 39 Hz at a mass ratio of 1, 19 Hz at 10 and 12 Hz at 75. The worst error in that range is 4.3 % slow. Measured in Task 4 on two 0.1 m crates hinged 0.1 m from each centre.
      - Above that range, stiff drives ring slower. At 78, 38 and 24 Hz (k = 200 N·m/rad on the same bodies), the frequency is 10 %, 7 % and 10 % low.
      - Raising `jointSubsteps` shortens the substep and restores the accuracy, at proportional cost. At 64 substeps (1/3840 s), the same 24–78 Hz drives are within 2 %, and 54–174 Hz drives are within 5 %.
@@ -180,7 +182,7 @@ Measured on 2026-10-30 on Dilan's laptop (AMD Ryzen 7 7840HS, Windows 11, MSVC 1
 
 | Item | Measured | Bound |
 | --- | --- | --- |
-| No regressions | 623 cases; all pass except 3 expected failures: the known ball/soft-face case and the two `[!mayfail]` cases in items 3 and 4. The eight hidden hash tags equal the baseline. | One known expected failure before this work |
+| No regressions | 629 cases at the final head; all pass except 3 expected failures: the known ball/soft-face case and the two `[!mayfail]` cases in items 3 and 4. The eight hidden hash tags equal the baseline. | One known expected failure before this work |
 | Width × worker hashes | Identical at widths 1, 4 and 8 × workers 1, 4 and 8 for six jointed scenes, in both solvers. One scene has two pinned humanoids pushing into a box pile, a ball chain on the pile, and a spring grip, so it covers all four kinds, limits and drives. | Identical |
 | 1. Pendulum | Period within 0.15 % for ball and hinge. The peak swing never grows over 60 s, and the hinge sways at most 7 mm out of its plane. | 2 %; no growth; 10 mm |
 | 2. 40:1 chain | Hung at rest, the lowest body moves 4.3 × 10⁻⁸ m over the last 10 s of 60 s. Released at 0.3 rad, it stays finite, peaks at 3.4 m/s and never gains energy. | 5 mm; 5 m/s; 1 % of the swing energy |
@@ -221,6 +223,8 @@ The "As built" notes above give the details. In short:
 9. Editing the pose or velocity of a body wakes its joint partners, and a moving mass-0 body wakes its partners at the end of each step.
 10. `promote` refuses a joint end. Before, it promoted the body, and its joints were then deleted silently at the next step.
 11. Joints move to the piece that holds their anchor through compound splits and through chunks that leave anchored buildings.
+12. Removing a body deletes its joints at once and wakes the bodies at their other ends. Before, the next step deleted them and left the other end asleep, so a box hung from a removed beam stayed in the air.
+13. Hosts read joint records but change them only through the `jointedits.h` functions. Drive bounds must allow zero torque.
 
 ### Open questions for the owner
 

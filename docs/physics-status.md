@@ -39,7 +39,7 @@ decisions made while building it are in [joints design](joints-design.md).
 
 ### Checks
 
-- Windows/MSVC Release: 623 physics cases. All pass except 3 expected
+- Windows/MSVC Release: 629 physics cases. All pass except 3 expected
   failures: the known ball/soft-face case and two joint cases marked
   `[!mayfail]`, described below. The headless example passes.
 - The eight hidden hash tags print the same records as before the joint work,
@@ -47,7 +47,11 @@ decisions made while building it are in [joints design](joints-design.md).
 - Jointed scenes give identical hashes at SIMD widths 1, 4 and 8 and worker
   counts 1, 4 and 8, in both solvers. One of them has two pinned humanoids
   pushing into a box pile, with all four joint kinds, limits and drives.
-- Linux/GCC has not yet been checked for the joint work.
+- Linux/GCC 13 Release with `-Werror`, on the lab's spare machine: the build
+  and the full physics suite passed at `55d5282` and at `3a1f382`, before the
+  final review fixes. **Pending: the same run at the final head commit.
+  [Result goes here.]** The GCC 14 checks named elsewhere predate the joint
+  work.
 
 ### Cost
 
@@ -70,10 +74,12 @@ runtime source `55d5282` plus this pull request's `promote` change:
 | 4 humanoids, inert springs | 1.027 ms (0.257 each) | 1.161 ms (0.290 each) | 861 |
 
 Single runs varied by up to 17 %, and the medians by about 5 % between
-invocations.
+invocations. A re-run after the final review fixes, which only remove
+per-step work, matched these medians within 4 %.
 
-Reference desktop: not yet measured. The design's budget is about 0.25 ms per
-world step for one humanoid there.
+Reference desktop: **pending, `[jointcost]` at the final head commit.
+[Result goes here.]** The design's budget is about 0.25 ms per world step for
+one humanoid there.
 
 How to read the two configurations:
 
@@ -111,6 +117,14 @@ Other measured costs, on the same laptop:
   at 16 substeps, and the lattice is stepped at that count too. A five-box
   hinge chain on a 96-cell slab costs 3.0 ms per step, against 1.0 ms at 4
   substeps. This is far above the ragdoll budget while they touch.
+- **Joints in a world with many other bodies.** Four sleeping 19-joint
+  chains (76 joints) were added after 0, 5,000 or 20,000 other sleeping
+  bodies. A step cost 0.004, 0.008 and 0.02 ms more than the same world
+  without joints, within the run-to-run spread of the 1.4 ms step at 20,000
+  bodies. Removing a body deletes its joints at once, so no step searches the
+  world for them. Before this was fixed, that search cost 0.33 ms per step at
+  5,000 bodies and 1.8–2.0 ms at 20,000. Measured with a probe outside the
+  suite.
 - **A jointed island beside a large free pile.** A ball-jointed pair 5 m from
   an awake pile of 405 crates adds about 0.03 ms per step to the substep
   stage, because the jointed solve batches only its own contacts. The whole
@@ -140,11 +154,13 @@ Other measured costs, on the same laptop:
   passes after each pass; that cost is not timed.
 - **Fast turns.** A jointed body may turn more than 45° in one frame, so
   continuous collision is approximate for it.
+- **Touched piles pay too.** A jointed body that touches a dynamic pile joins
+  the pile's island, so the whole contact-connected pile steps at 16 substeps
+  while they touch. This is not measured yet.
 - **Not measured yet:** the first substep after a compound split moves a
   joint's warm-start impulse onto a much lighter piece; the cost of
-  re-expressing joints in re-centres and splits; tier switching's scan of
-  every joint for every switchable body; and the wake of every joint on an
-  anchored building each time a chunk breaks off it.
+  re-expressing joints in re-centres and splits; and the wake of every joint
+  on an anchored building each time a chunk breaks off it.
 - **Owner questions, open:** whether the self-contact case should pass once
   collision groups land, and whether a joint should break when the chunk that
   holds its anchor is destroyed. Today it moves to the nearest remaining

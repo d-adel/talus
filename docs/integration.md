@@ -57,6 +57,11 @@ functions are in `<talus/dynamics/joints/jointedits.h>` and the types are in
 `world.dynamics` in a `talus::World`. Measured cost and known limits are in
 [physics status](physics-status.md#joints).
 
+`world.joints` is read-only for hosts: `find` and `all` return const
+records. Change a joint only through the functions in `jointedits.h`, which
+validate the values, wake the bodies and keep the contact exclusions
+consistent. `<talus/dynamics/joints/jointrecords.h>` is internal to Talus.
+
 | Kind | What it holds | Limits | Drive |
 | --- | --- | --- | --- |
 | `Ball` | The two anchor points together | None | None |
@@ -100,9 +105,12 @@ const uint32_t joint = addJoint(world.dynamics, elbow);
 - Creating, editing or removing a joint wakes both bodies.
 - With `collideConnected` false, which is the default, the two bodies never
   collide, and their existing contacts are dropped when the joint is created.
-- `removeJoint` deletes a joint. When a body is removed, its joints are deleted
-  at the start of the next step, and `jointReport` then returns
+- `removeJoint` deletes a joint. `removeBody` and `removeBodies` delete the
+  removed bodies' joints at once and wake the bodies at their other ends, so a
+  box hung from a removed beam falls. `jointReport` then returns
   `std::nullopt`.
+- `jointDef(world, joint)` returns a joint's stored definition, with its frame
+  rotations normalised, or `std::nullopt` for an unknown joint.
 
 ### Angles, limits and drives
 
@@ -139,7 +147,8 @@ const uint32_t joint = addJoint(world.dynamics, elbow);
     Stiffer drives ring slower than √(k/I). Raise `jointSubsteps` if a stiffer
     drive must ring at its exact frequency.
 - `setJointDrive` replaces a joint's drive. It returns false for an unknown
-  joint or an invalid drive.
+  joint or an invalid drive. A ball or spring joint stores the drive but does
+  not use it.
 
 ### Spring joints
 
@@ -154,6 +163,12 @@ const uint32_t joint = addJoint(world.dynamics, elbow);
   object drags or falls out of a grip.
 - `setSpringTarget` moves the target pose. It returns false for an unknown
   joint or an invalid frame.
+- `setSpringSettings` replaces the whole `SpringSettings`, including the
+  target, and keeps the joint's id and warm start. So a grip can weaken as a
+  character tires: copy `jointDef(world, joint)->spring`, lower `maxForce`,
+  and set it. It validates the settings as `addJoint` does and returns false
+  for an unknown joint or invalid settings.
+- The other kinds store the spring settings and target but do not use them.
 - A spring has no target-velocity input, and its damping acts on the relative
   velocity of the two bodies. To carry an object smoothly, make body A a mass-0
   hand and move the hand with `setRigidPose` and `setVelocity`. The grip then
@@ -167,17 +182,24 @@ const uint32_t joint = addJoint(world.dynamics, elbow);
 
 - `force`: the force that the joint applied to body B in the last substep, in
   world axes (N). Body A received the opposite force.
-- `torque`: the torque from the alignment and limit rows, or from a spring's
-  angular block, in the last substep (N·m). It excludes the drive.
+- `torque`: the torque that the alignment and limit rows, or a spring's
+  angular block, applied to body B in the last substep, in world axes (N·m).
+  Body A received the opposite torque. It excludes the drive.
 - `driveTorque`: the drive torque on each drive axis (N·m).
 - `limitActive`: a limit row pushed in the last substep.
 - `driveSaturated`: a per-axis bound or the magnitude cap clipped the drive.
 - `forceSaturated` and `torqueSaturated`: a spring cap clipped the spring.
 
+A joint in a sleeping island is not solved, so it keeps the report of the
+last step in which it was solved.
+
 `StepReport::jointRows` counts the joints solved in the step, and
 `StepReport::limitPassRows` counts the limit rows that the extra passes
-visited. `StepProfile::joints` is the time of the joint stages in softstep, in
-milliseconds.
+visited. `StepReport::jointSubsteps` is the substep count of softstep's
+jointed islands in the step, or 0 when there were none, and
+`StepReport::softstepSubsteps` is the count of the other softstep islands.
+Neither counts strainstep islands. `StepProfile::joints` is the time of the
+joint stages in softstep, in milliseconds.
 
 ### Accepted values
 
@@ -185,11 +207,15 @@ milliseconds.
 
 - body A and body B are the same, body B is `noBody`, or a body is unknown or
   not rigid;
+- the kind is not one of the four `JointKind` values;
 - a value is NaN, a frame rotation has zero length, or a position, angle,
-  gain, `hertz`, `dampingRatio` or feed-forward is infinite (torque bounds and
-  caps may be infinite, which is their default);
-- `hertz` is not positive, a stiffness, damping, cap or `dampingRatio` is
-  negative, or a `minTorque` is above its `maxTorque`;
+  gain, `hertz`, `dampingRatio` or feed-forward is infinite;
+- `hertz` is not positive, or a stiffness, damping, cap or `dampingRatio` is
+  negative;
+- a drive axis's bounds do not allow zero torque: `minTorque` must be at most
+  0 and `maxTorque` at least 0. So `minTorque` may be −∞, and `maxTorque` and
+  the caps may be +∞, which are their defaults, but not the other way round. A
+  constant torque belongs in `feedForward`, not in a bound;
 - an enabled hinge range has its lower bound above its upper bound, or a bound
   outside ±0.99π;
 - an enabled cone has its twist lower bound above its upper bound, a twist
@@ -208,7 +234,9 @@ stiffness tested.
 An island that contains a joint is stepped with
 `IntegrationParameters::jointSubsteps` substeps, 16 by default. Every other
 island keeps `softstepSubsteps`, 4 by default. Islands without joints do
-exactly the same work as before.
+exactly the same work as before. An island is every body connected through
+contacts or joints, so a jointed body that rests on a dynamic pile makes the
+whole pile step at `jointSubsteps` while they touch.
 
 `jointSubsteps` is a count per frame. A host that steps at 30 Hz (dt 1/30 s)
 needs 32 to get the same substep length, and so the same joint behaviour, as
@@ -233,7 +261,11 @@ and end poses, so it is approximate for such fast-turning bodies.
 
 - A switchable body stays in the rigid tier while it is a joint end, so a held
   prop does not dent. `promote` returns false for a joint end and changes
-  nothing. Remove the joint first to promote the body.
+  nothing. Remove the joint first to promote the body. `promote` also returns
+  false for an unknown body, a body that is not switchable or one that is
+  already a lattice; it returns true only when it made a lattice.
+- The destruction world's cost-based freeze does not skip joint ends. A frozen
+  jointed piece acts as a mass-0 end until a contact thaws it.
 - A jointed island that touches a lattice body is solved by strainstep, at
   `jointSubsteps` or the lattice's own substep count, whichever is larger.
   While they touch, the lattice is stepped at that count too. In the one scene

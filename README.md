@@ -35,8 +35,9 @@ Three-storey concrete-frame collapse, rendered with the original Talus testbed.
   grips and tethers.
 - Joined pairs that do not collide, and per-joint force, torque and saturation
   read-back.
-- Islands that contain a joint step with their own substep count; other
-  islands are unaffected. Joints keep their anchors through compound splits.
+- Islands that contain a joint, with every body they touch, step with their
+  own substep count; other islands are unaffected. Joints keep their anchors
+  through compound splits.
 
 ### Deformation and material history
 
