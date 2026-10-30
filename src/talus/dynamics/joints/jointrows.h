@@ -74,6 +74,16 @@ struct JointDriveRow {
 };
 
 template <typename Real>
+struct JointSpringBlock {
+  Real rateGain = Real(0);
+  Real errorGain = Real(0);
+  Real cap = Real(0);
+  JointVec<Real> impulse{Real(0)};
+  bool active = false;
+  bool saturated = false;
+};
+
+template <typename Real>
 struct JointRow {
   uint32_t joint = 0u;
   JointKind kind = JointKind::Ball;
@@ -98,6 +108,8 @@ struct JointRow {
   Real coneImpulse = Real(0);
   std::array<JointDriveRow<Real>, 3> drives;
   JointVec<Real> feedForward{Real(0)};
+  JointSpringBlock<Real> springLinear;
+  JointSpringBlock<Real> springAngular;
 };
 
 template <typename Real>
@@ -151,6 +163,26 @@ JointMat<Real> jointSkew(const JointVec<Real>& v) {
     JointVec<Real>(-v.z, Real(0), v.x),
     JointVec<Real>(v.y, -v.x, Real(0))
   );
+}
+
+template <typename Real>
+JointMat<Real> jointPointMass(
+  Real mA,
+  Real mB,
+  const JointMat<Real>& iA,
+  const JointMat<Real>& iB,
+  const JointVec<Real>& rA,
+  const JointVec<Real>& rB
+) {
+  const JointMat<Real> sA = jointSkew(rA);
+  const JointMat<Real> sB = jointSkew(rB);
+  JointMat<Real> k = -(sA * iA * sA + sB * iB * sB);
+
+  k[0][0] += mA + mB;
+  k[1][1] += mA + mB;
+  k[2][2] += mA + mB;
+
+  return k;
 }
 
 template <typename Real>
@@ -721,6 +753,139 @@ void storeSwingTwistRows(Joint& joint, const JointRow<Real>& row, Real invH) {
   joint.report.driveSaturated = saturated;
 }
 
+inline JointFrame jointSpringFrame(const JointDef& def) {
+  const JointFrame& frame = def.frameA;
+  const JointFrame& target = def.spring.target;
+
+  return {frame.position + frame.rotation * target.position, frame.rotation * target.rotation};
+}
+
+template <typename Real>
+void prepareSpringBlock(
+  double stiffness,
+  double damping,
+  double cap,
+  const glm::dvec3& stored,
+  Real h,
+  JointSpringBlock<Real>& block
+) {
+  const double step = static_cast<double>(h);
+
+  block.active = (stiffness > 0.0 || damping > 0.0) && cap > 0.0;
+
+  if (block.active) {
+    block.rateGain = static_cast<Real>(step * (damping + step * stiffness));
+    block.errorGain = static_cast<Real>(step * stiffness);
+    block.cap = static_cast<Real>(cap * step);
+    block.impulse = JointVec<Real>(stored * step);
+  }
+}
+
+template <typename Real>
+void prepareSpringRows(const Joint& joint, Real h, JointRow<Real>& row) {
+  const SpringSettings& spring = joint.def.spring;
+  const JointImpulses& impulses = joint.impulses;
+
+  prepareSpringBlock(
+    spring.linearStiffness,
+    spring.linearDamping,
+    spring.maxForce,
+    impulses.springLinear,
+    h,
+    row.springLinear
+  );
+  prepareSpringBlock(
+    spring.angularStiffness,
+    spring.angularDamping,
+    spring.maxTorque,
+    impulses.springAngular,
+    h,
+    row.springAngular
+  );
+}
+
+template <typename Real>
+JointVec<Real> jointSpringImpulse(
+  JointSpringBlock<Real>& block,
+  const JointMat<Real>& k,
+  const JointVec<Real>& rate,
+  const JointVec<Real>& error
+) {
+  const JointVec<Real> old = block.impulse;
+  JointMat<Real> system = block.rateGain * k;
+
+  system[0][0] += Real(1);
+  system[1][1] += Real(1);
+  system[2][2] += Real(1);
+
+  const JointVec<Real> unbounded = old - jointSolve3(system, block.rateGain * rate + block.errorGain * error + old);
+  const Real square = glm::dot(unbounded, unbounded);
+
+  block.saturated = square > block.cap * block.cap;
+  block.impulse = block.saturated ? (block.cap / std::sqrt(square)) * unbounded : unbounded;
+
+  return block.impulse - old;
+}
+
+template <typename Real>
+void solveSpringRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>& b) {
+  const Real mA = row.a.invMass;
+  const Real mB = row.b.invMass;
+  const JointMat<Real>& iA = row.a.invI;
+  const JointMat<Real>& iB = row.b.invI;
+
+  if (row.springAngular.active) {
+    const JointQuat<Real> frameA = a.dq * row.a.frame;
+    const JointQuat<Real> relative = jointRelative(frameA, b.dq * row.b.frame);
+    const JointVec<Real> error = Real(2) * (frameA * JointVec<Real>(relative.x, relative.y, relative.z));
+    const JointVec<Real> impulse = jointSpringImpulse(row.springAngular, iA + iB, b.w - a.w, error);
+
+    a.w -= iA * impulse;
+    b.w += iB * impulse;
+  }
+
+  if (row.springLinear.active) {
+    const JointVec<Real> rA = a.dq * row.a.anchor;
+    const JointVec<Real> rB = b.dq * row.b.anchor;
+    const JointVec<Real> error = (b.dp - a.dp) + (rB - rA) + row.deltaCenter;
+    const JointVec<Real> rate = b.v + glm::cross(b.w, rB) - a.v - glm::cross(a.w, rA);
+    const JointVec<Real> impulse =
+      jointSpringImpulse(row.springLinear, jointPointMass(mA, mB, iA, iB, rA, rB), rate, error);
+
+    a.v -= mA * impulse;
+    a.w -= iA * glm::cross(rA, impulse);
+    b.v += mB * impulse;
+    b.w += iB * glm::cross(rB, impulse);
+  }
+}
+
+template <typename Real>
+void storeSpringRows(Joint& joint, const JointRow<Real>& row, Real invH) {
+  const double rate = static_cast<double>(invH);
+  const glm::dvec3 force = glm::dvec3(row.springLinear.impulse) * rate;
+  const glm::dvec3 torque = glm::dvec3(row.springAngular.impulse) * rate;
+
+  joint.impulses.springLinear = force;
+  joint.impulses.springAngular = torque;
+  joint.report.force = force;
+  joint.report.torque = torque;
+  joint.report.forceSaturated = row.springLinear.saturated;
+  joint.report.torqueSaturated = row.springAngular.saturated;
+}
+
+template <typename Real>
+JointVec<Real> jointWarmAngular(const JointRow<Real>& row) {
+  if (row.kind == JointKind::Hinge) {
+    return hingeWarmImpulse(row);
+  }
+
+  if (row.kind == JointKind::SwingTwist) {
+    return swingTwistWarmImpulse(row);
+  }
+
+  return row.springAngular.impulse;
+}
+
 template <typename Real, typename State>
 void prepareJointRows(
   const JointSet& joints,
@@ -738,11 +903,12 @@ void prepareJointRows(
 
   for (uint32_t index = 0u; index != all.size(); ++index) {
     const Joint& joint = all[index];
+    const JointFrame frameA = joint.def.kind == JointKind::Spring ? jointSpringFrame(joint.def) : joint.def.frameA;
     JointRow<Real> row;
     glm::dvec3 centreA(0.0);
     glm::dvec3 centreB(0.0);
 
-    if (!resolveJointEnd(bodies, islands, states, stateOf, joint.def.bodyA, joint.def.frameA, row.a, centreA)
+    if (!resolveJointEnd(bodies, islands, states, stateOf, joint.def.bodyA, frameA, row.a, centreA)
         || !resolveJointEnd(bodies, islands, states, stateOf, joint.def.bodyB, joint.def.frameB, row.b, centreB)
         || (row.a.state == 0u && row.b.state == 0u)) {
       continue;
@@ -762,6 +928,8 @@ void prepareJointRows(
       prepareHingeRows(joint, h, row);
     } else if (row.kind == JointKind::SwingTwist) {
       prepareSwingTwistRows(joint, h, row);
+    } else if (row.kind == JointKind::Spring) {
+      prepareSpringRows(joint, h, row);
     }
 
     rows.push_back(row);
@@ -775,12 +943,12 @@ void warmStartJointRows(std::span<State> states, std::span<const JointRow<Real>>
     JointMotion<Real> b = jointMotion(states, row.b);
     const JointVec<Real> rA = a.dq * row.a.anchor;
     const JointVec<Real> rB = b.dq * row.b.anchor;
-    const JointVec<Real>& impulse = row.pointImpulse;
+    const JointVec<Real>& impulse = row.kind == JointKind::Spring ? row.springLinear.impulse : row.pointImpulse;
     JointVec<Real> turnA = glm::cross(rA, impulse);
     JointVec<Real> turnB = glm::cross(rB, impulse);
 
-    if (row.kind == JointKind::Hinge || row.kind == JointKind::SwingTwist) {
-      const JointVec<Real> angular = row.kind == JointKind::Hinge ? hingeWarmImpulse(row) : swingTwistWarmImpulse(row);
+    if (row.kind != JointKind::Ball) {
+      const JointVec<Real> angular = jointWarmAngular(row);
 
       turnA += angular;
       turnB += angular;
@@ -805,6 +973,13 @@ void solveJointRows(
   for (JointRow<Real>& row : rows) {
     JointMotion<Real> a = jointMotion(states, row.a);
     JointMotion<Real> b = jointMotion(states, row.b);
+
+    if (row.kind == JointKind::Spring) {
+      solveSpringRows(row, a, b);
+      storeJointMotion(states, row.a, a);
+      storeJointMotion(states, row.b, b);
+      continue;
+    }
 
     if (row.kind == JointKind::Hinge) {
       solveHingeRows(row, a, b, invH, useBias);
@@ -831,16 +1006,8 @@ void solveJointRows(
       impulseScale = row.softness.impulseScale;
     }
 
-    const JointMat<Real> sA = jointSkew(rA);
-    const JointMat<Real> sB = jointSkew(rB);
-    JointMat<Real> k = -(sA * iA * sA + sB * iB * sB);
-
-    k[0][0] += mA + mB;
-    k[1][1] += mA + mB;
-    k[2][2] += mA + mB;
-
     const JointVec<Real> impulse =
-      -massScale * jointSolve3(k, cdot + bias) - impulseScale * row.pointImpulse;
+      -massScale * jointSolve3(jointPointMass(mA, mB, iA, iB, rA, rB), cdot + bias) - impulseScale * row.pointImpulse;
 
     row.pointImpulse += impulse;
     a.v -= mA * impulse;
@@ -886,6 +1053,8 @@ void storeJointRows(JointSet& joints, std::span<const JointRow<Real>> rows, Real
       storeHingeRows(joint, row, invH);
     } else if (row.kind == JointKind::SwingTwist) {
       storeSwingTwistRows(joint, row, invH);
+    } else if (row.kind == JointKind::Spring) {
+      storeSpringRows(joint, row, invH);
     }
   }
 }

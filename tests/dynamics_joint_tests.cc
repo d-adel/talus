@@ -250,6 +250,18 @@ TEST_CASE("invalid joint definitions are rejected", "[dynamics][joints]") {
   rejects(def);
 
   def = between(a, b);
+  def.spring.angularDamping = nan;
+  rejects(def);
+
+  def = between(a, b);
+  def.spring.maxTorque = -1.0;
+  rejects(def);
+
+  def = between(a, b);
+  def.spring.target.rotation = glm::dquat(0.0, 0.0, 0.0, 0.0);
+  rejects(def);
+
+  def = between(a, b);
   def.drive.axes[2].minTorque = 2.0;
   def.drive.axes[2].maxTorque = 1.0;
   rejects(def);
@@ -524,6 +536,7 @@ struct JointedRun {
   uint64_t hash = 0u;
   bool loaded = false;
   bool limited = false;
+  bool saturated = false;
 };
 
 void twistLink(JointDef& def) {
@@ -541,6 +554,16 @@ void twistLink(JointDef& def) {
     axis.stiffness = 2.0;
     axis.damping = 0.1;
   }
+}
+
+void springLink(JointDef& def) {
+  def.kind = JointKind::Spring;
+  def.spring.linearStiffness = 2000.0;
+  def.spring.linearDamping = 20.0;
+  def.spring.maxForce = 20.0;
+  def.spring.angularStiffness = 2.0;
+  def.spring.angularDamping = 0.05;
+  def.spring.maxTorque = 0.5;
 }
 
 JointedRun chainOnPile(uint32_t workers, uint32_t width, JointKind kind) {
@@ -572,6 +595,8 @@ JointedRun chainOnPile(uint32_t workers, uint32_t width, JointKind kind) {
 
     if (kind == JointKind::SwingTwist) {
       twistLink(def);
+    } else if (kind == JointKind::Spring) {
+      springLink(def);
     }
 
     REQUIRE(addJoint(world, def) != 0u);
@@ -586,6 +611,7 @@ JointedRun chainOnPile(uint32_t workers, uint32_t width, JointKind kind) {
 
     for (const Joint& joint : world.joints.all()) {
       run.limited = run.limited || joint.report.limitActive;
+      run.saturated = run.saturated || joint.report.forceSaturated || joint.report.torqueSaturated;
     }
   }
 
@@ -870,6 +896,7 @@ TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 an
 
   const JointedRun serial = chainOnPile(1u, 1u, JointKind::Ball);
   const JointedRun twisted = chainOnPile(1u, 1u, JointKind::SwingTwist);
+  const JointedRun sprung = chainOnPile(1u, 1u, JointKind::Spring);
   const uint64_t deck = deckHash(1u, 1u);
 
   REQUIRE(serial.hash != 0u);
@@ -877,6 +904,9 @@ TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 an
   REQUIRE(twisted.hash != 0u);
   REQUIRE(twisted.loaded);
   REQUIRE(twisted.limited);
+  REQUIRE(sprung.hash != 0u);
+  REQUIRE(sprung.loaded);
+  REQUIRE(sprung.saturated);
   REQUIRE(deck != 0u);
 
   for (const uint32_t width : widths) {
@@ -884,6 +914,7 @@ TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 an
       CAPTURE(width, workers);
       CHECK(chainOnPile(workers, width, JointKind::Ball).hash == serial.hash);
       CHECK(chainOnPile(workers, width, JointKind::SwingTwist).hash == twisted.hash);
+      CHECK(chainOnPile(workers, width, JointKind::Spring).hash == sprung.hash);
       CHECK(deckHash(workers, width) == deck);
     }
   }
@@ -1753,4 +1784,197 @@ TEST_CASE("swing-twist ranges, cones and drive targets beyond their bounds are r
   drive.axes[1].targetAngle = 1.9;
   drive.axes[2].targetAngle = 1.9;
   CHECK(setJointDrive(world, joint, drive));
+}
+
+namespace {
+
+JointDef worldSpring(uint32_t body, const glm::dvec3& target) {
+  JointDef def = between(noBody, body);
+  def.kind = JointKind::Spring;
+  def.spring.target.position = target;
+  def.spring.linearStiffness = 5000.0;
+  def.spring.linearDamping = 200.0;
+  def.spring.maxForce = 50.0;
+
+  return def;
+}
+
+struct SpringHold {
+  glm::dvec3 offset{0.0};
+  double furthest = 0.0;
+  double strongest = 0.0;
+  bool everSaturated = false;
+  JointReport report;
+};
+
+SpringHold holdBox(double mass) {
+  const talus::field::SampledSdf crate = crateField();
+  const glm::dvec3 target(0.0, 2.0, 0.0);
+  World world;
+  const uint32_t index = addRigidBox(world.bodies, crate, glm::dvec3(0.05), mass, target, glm::dvec3(0.0), 0.5, 3u);
+  const uint32_t joint = addJoint(world, worldSpring(world.bodies.rigids[index].id, target));
+  REQUIRE(joint != 0u);
+
+  SpringHold hold;
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+    hold.report = *jointReport(world, joint);
+    hold.offset = world.bodies.rigids[index].position - target;
+    hold.furthest = std::max(hold.furthest, glm::length(hold.offset));
+    hold.strongest = std::max(hold.strongest, glm::length(hold.report.force));
+    hold.everSaturated = hold.everSaturated || hold.report.forceSaturated;
+  }
+
+  return hold;
+}
+
+}
+
+TEST_CASE("a capped spring holds a light box and lets a heavy one slip", "[dynamics][joints]") {
+  const double cap = 50.0;
+  const double gravity = std::abs(IntegrationParameters{}.gravity.y);
+  const SpringHold light = holdBox(3.0);
+  const SpringHold heavy = holdBox(10.0);
+  const double sag = 3.0 * gravity / 5000.0;
+
+  CAPTURE(light.furthest, light.offset.y, light.strongest, heavy.offset.y, heavy.strongest);
+  CHECK(light.furthest < 0.02);
+  CHECK_FALSE(light.everSaturated);
+  CHECK(std::abs(-light.offset.y - sag) <= 0.02 * sag);
+  CHECK(light.strongest <= 1.01 * cap);
+  CHECK(heavy.offset.y < -1.0);
+  CHECK(heavy.report.forceSaturated);
+  CHECK(std::abs(glm::length(heavy.report.force) - cap) <= 0.01 * cap);
+  CHECK(heavy.strongest <= 1.01 * cap);
+}
+
+TEST_CASE("a spring target moved every step is followed", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const glm::dvec3 start(0.0, 2.0, 0.0);
+  const glm::dvec3 speed(1.0, 0.0, 0.0);
+  World world;
+  const uint32_t index = addRigidBox(world.bodies, crate, glm::dvec3(0.05), 3.0, start, glm::dvec3(0.0), 0.5, 3u);
+  const uint32_t joint = addJoint(world, worldSpring(world.bodies.rigids[index].id, start));
+  REQUIRE(joint != 0u);
+
+  const double dt = world.parameters.dt;
+  const uint32_t steps = static_cast<uint32_t>(std::lround(2.0 / dt));
+  JointFrame target;
+
+  for (uint32_t frame = 1u; frame <= steps; ++frame) {
+    target.position = start + dt * static_cast<double>(frame) * speed;
+    REQUIRE(setSpringTarget(world, joint, target));
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+  }
+
+  const glm::dvec3 lag = target.position - world.bodies.rigids[index].position;
+
+  CAPTURE(lag.x, lag.y, lag.z);
+  CHECK(glm::length(lag) < 0.05);
+}
+
+TEST_CASE("a capped spring's force stays within its cap in any direction", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const double cap = 50.0;
+  const glm::dvec3 start(0.0, 1.0, 0.0);
+  World world;
+  addStatic(world.bodies, floor(), 0.5, 0.0, glm::dvec3(0.2, 1.0, 0.0), glm::angleAxis(0.5 * std::numbers::pi, glm::dvec3(0.0, 0.0, 1.0)));
+  const uint32_t index = addRigidBox(world.bodies, crate, glm::dvec3(0.05), 3.0, start, glm::dvec3(0.0), 0.5, 3u);
+  const uint32_t joint = addJoint(world, worldSpring(world.bodies.rigids[index].id, start + glm::dvec3(0.6, 0.0, 0.0)));
+  REQUIRE(joint != 0u);
+
+  double strongest = 0.0;
+  JointReport report;
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+    report = *jointReport(world, joint);
+    strongest = std::max(strongest, glm::length(report.force));
+  }
+
+  const glm::dvec3 position = world.bodies.rigids[index].position;
+
+  CAPTURE(strongest, report.force.x, report.force.y, report.force.z, position.x, position.y);
+  CHECK(strongest <= 1.01 * cap);
+  CHECK(report.forceSaturated);
+  CHECK(std::abs(report.force.y) > 0.1 * cap);
+  CHECK(std::abs(position.x - 0.05) < 0.01);
+}
+
+TEST_CASE("a spring turns its body to the target rotation within its torque cap", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const double cap = 0.5;
+  const glm::dvec3 centre(0.0, 2.0, 0.0);
+  const glm::dquat turn = glm::angleAxis(0.8, glm::normalize(glm::dvec3(1.0, 1.0, 0.0)));
+  World world;
+  world.parameters.gravity = glm::dvec3(0.0);
+  world.parameters.sleep = false;
+  const uint32_t box = addCrate(world, crate, centre);
+  JointDef def = worldSpring(box, centre);
+  def.spring.target.rotation = turn;
+  def.spring.angularStiffness = 2.0;
+  def.spring.angularDamping = 0.2;
+  def.spring.maxTorque = cap;
+  const uint32_t joint = addJoint(world, def);
+  REQUIRE(joint != 0u);
+
+  double strongest = 0.0;
+  bool startSaturated = false;
+
+  for (uint32_t frame = 0u; frame != 180u; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+    const JointReport report = *jointReport(world, joint);
+
+    strongest = std::max(strongest, glm::length(report.torque));
+    startSaturated = startSaturated || (frame == 0u && report.torqueSaturated);
+  }
+
+  const RigidBody& body = world.bodies.rigids[findBody(world.bodies, box)->index];
+  const glm::dquat rest = glm::conjugate(turn) * body.rotation;
+  const double error = 2.0 * std::asin(std::min(1.0, glm::length(glm::dvec3(rest.x, rest.y, rest.z))));
+
+  CAPTURE(strongest, error);
+  CHECK(startSaturated);
+  CHECK(strongest <= 1.01 * cap);
+  CHECK(error < 1.0e-3);
+  CHECK(glm::length(body.position - centre) < 1.0e-3);
+}
+
+TEST_CASE("an off-centre spring grip deflects by its load over its stiffness", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const double mass = 3.0;
+  const double lever = 0.05;
+  const double stiffness = 20.0;
+  const glm::dvec3 grip(0.0, 2.0, 0.0);
+  World world;
+  const uint32_t index =
+    addRigidBox(world.bodies, crate, glm::dvec3(0.05), mass, grip + glm::dvec3(lever, 0.0, 0.0), glm::dvec3(0.0), 0.5, 3u);
+  JointDef def = worldSpring(world.bodies.rigids[index].id, grip);
+  def.frameB.position = glm::dvec3(-lever, 0.0, 0.0);
+  def.spring.angularStiffness = stiffness;
+  def.spring.angularDamping = 1.0;
+  const uint32_t joint = addJoint(world, def);
+  REQUIRE(joint != 0u);
+
+  for (uint32_t frame = 0u; frame != 180u; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+  }
+
+  const RigidBody& body = world.bodies.rigids[index];
+  const glm::dvec3 anchor = body.position + body.rotation * def.frameB.position;
+  const double weight = mass * std::abs(world.parameters.gravity.y);
+  const double angle = -2.0 * std::asin(body.rotation.z);
+  double expected = 0.0;
+
+  for (int pass = 0; pass != 8; ++pass) {
+    expected = weight * lever * std::cos(expected) / stiffness;
+  }
+
+  CAPTURE(angle, expected, anchor.x, anchor.y, anchor.z);
+  CHECK(std::abs(angle - expected) <= 0.02 * expected);
+  CHECK(std::abs(grip.y - anchor.y - weight / 5000.0) <= 0.02 * weight / 5000.0);
+  CHECK(std::hypot(anchor.x - grip.x, anchor.z - grip.z) < 1.0e-3);
 }
