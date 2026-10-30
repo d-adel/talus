@@ -1922,12 +1922,12 @@ TEST_CASE("a spring turns its body to the target rotation within its torque cap"
 
   double strongest = 0.0;
   bool startSaturated = false;
+  JointReport report;
 
   for (uint32_t frame = 0u; frame != 180u; ++frame) {
     REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
 
-    const JointReport report = *jointReport(world, joint);
-
+    report = *jointReport(world, joint);
     strongest = std::max(strongest, glm::length(report.torque));
     startSaturated = startSaturated || (frame == 0u && report.torqueSaturated);
   }
@@ -1941,6 +1941,8 @@ TEST_CASE("a spring turns its body to the target rotation within its torque cap"
   CHECK(strongest <= 1.01 * cap);
   CHECK(error < 1.0e-3);
   CHECK(glm::length(body.position - centre) < 1.0e-3);
+  CHECK_FALSE(report.torqueSaturated);
+  CHECK_FALSE(report.forceSaturated);
 }
 
 TEST_CASE("an off-centre spring grip deflects by its load over its stiffness", "[dynamics][joints]") {
@@ -1977,4 +1979,111 @@ TEST_CASE("an off-centre spring grip deflects by its load over its stiffness", "
   CHECK(std::abs(angle - expected) <= 0.02 * expected);
   CHECK(std::abs(grip.y - anchor.y - weight / 5000.0) <= 0.02 * weight / 5000.0);
   CHECK(std::hypot(anchor.x - grip.x, anchor.z - grip.z) < 1.0e-3);
+}
+
+namespace {
+
+const glm::dvec3 gripPoint(0.0, 2.0, 0.0);
+const glm::dvec3 handReach(0.0, 0.3, 0.0);
+
+struct HandGrip {
+  uint32_t hand = 0u;
+  uint32_t box = 0u;
+  uint32_t joint = 0u;
+};
+
+HandGrip gripBox(World& world, const talus::field::SampledSdf& crate) {
+  HandGrip grip;
+  grip.hand = addRigidBox(world.bodies, crate, glm::dvec3(0.05), 0.0, gripPoint + handReach, glm::dvec3(0.0), 0.5, 3u);
+  grip.box = addRigidBox(world.bodies, crate, glm::dvec3(0.05), 3.0, gripPoint, glm::dvec3(0.0), 0.5, 3u);
+  JointDef def = worldSpring(world.bodies.rigids[grip.box].id, glm::dvec3(0.0));
+  def.bodyA = world.bodies.rigids[grip.hand].id;
+  def.frameA.position = -handReach;
+  grip.joint = addJoint(world, def);
+  REQUIRE(grip.joint != 0u);
+
+  return grip;
+}
+
+void moveHand(World& world, const HandGrip& grip, const glm::dvec3& position, const glm::dvec3& velocity) {
+  const uint32_t id = world.bodies.rigids[grip.hand].id;
+
+  REQUIRE(setRigidPose(world, id, position, glm::dquat(1.0, 0.0, 0.0, 0.0)));
+  REQUIRE(setVelocity(world, id, velocity));
+}
+
+glm::dvec3 gripSlack(const World& world, const HandGrip& grip) {
+  const RigidBody& hand = world.bodies.rigids[grip.hand];
+
+  return hand.position + hand.rotation * -handReach - world.bodies.rigids[grip.box].position;
+}
+
+}
+
+TEST_CASE("a spring grip follows a moving kinematic hand without lag", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const double weight = 3.0 * std::abs(IntegrationParameters{}.gravity.y);
+  const double bound = 1.0e-3;
+
+  for (const double speed : {1.0, 3.0}) {
+    CAPTURE(speed);
+
+    World world;
+    const HandGrip grip = gripBox(world, crate);
+    const glm::dvec3 velocity(speed, 0.0, 0.0);
+    const double dt = world.parameters.dt;
+    double furthest = 0.0;
+    double weakest = jointInfinity;
+    double strongest = 0.0;
+
+    for (uint32_t frame = 0u; frame != 120u; ++frame) {
+      moveHand(world, grip, gripPoint + handReach + dt * static_cast<double>(frame) * velocity, velocity);
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+      if (frame >= 60u) {
+        const double force = glm::length(jointReport(world, grip.joint)->force);
+
+        furthest = std::max(furthest, std::abs(gripSlack(world, grip).x));
+        weakest = std::min(weakest, force);
+        strongest = std::max(strongest, force);
+      }
+    }
+
+    CAPTURE(furthest, weakest, strongest);
+    CHECK(furthest < bound);
+    CHECK(std::abs(weakest - weight) <= 0.01 * weight);
+    CHECK(std::abs(strongest - weight) <= 0.01 * weight);
+  }
+}
+
+TEST_CASE("a spring grip slips at its cap under a fast-rising hand and recovers below it", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const double cap = 50.0;
+  const double weight = 3.0 * std::abs(IntegrationParameters{}.gravity.y);
+  World world;
+  const HandGrip grip = gripBox(world, crate);
+  const glm::dvec3 velocity(0.0, 3.0, 0.0);
+  const double dt = world.parameters.dt;
+  double strongest = 0.0;
+  bool slipped = false;
+  JointReport report;
+
+  for (uint32_t frame = 0u; frame != 180u; ++frame) {
+    const double moved = dt * static_cast<double>(std::min(frame, 60u));
+
+    moveHand(world, grip, gripPoint + handReach + moved * velocity, frame < 60u ? velocity : glm::dvec3(0.0));
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+    report = *jointReport(world, grip.joint);
+    strongest = std::max(strongest, glm::length(report.force));
+    slipped = slipped || report.forceSaturated;
+  }
+
+  const glm::dvec3 slack = gripSlack(world, grip);
+
+  CAPTURE(strongest, report.force.y, slack.x, slack.y, slack.z);
+  CHECK(slipped);
+  CHECK(strongest <= 1.01 * cap);
+  CHECK_FALSE(report.forceSaturated);
+  CHECK(std::abs(glm::length(report.force) - weight) <= 0.01 * weight);
+  CHECK(glm::length(slack - glm::dvec3(0.0, weight / 5000.0, 0.0)) < 1.0e-3);
 }
