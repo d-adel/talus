@@ -22,7 +22,7 @@
 - Results are bit-identical across SIMD widths 1, 4 and 8 and worker counts 1, 4 and 8. Joints are solved serially in ascending joint id.
 - Joint ids start at 1. 0 means invalid. Bodies are referenced by `RigidBody::id`, never by vector index.
 - Body A may be `noBody`, which means the world. Statics are always the world.
-- Defaults: row hertz 60, damping ratio 2, both clamped to a quarter of the substep rate. Rigid limit correction speed is capped at 3 rad/s.
+- Defaults: row hertz 60, damping ratio 2, both clamped to a quarter of the substep rate. Rigid limit correction speed is capped at 30 rad/s (raised from 3 rad/s in Task 6b).
 - Islands that contain a joint step with `IntegrationParameters::jointSubsteps` (default 16); every other island keeps `softstepSubsteps` (4). Joint rows follow Box3D's row maths. Limit tolerance 0.03 rad (owner's decision 2026-10-30).
 - Ported Box3D code keeps Box3D's MIT notice in `THIRD_PARTY_NOTICES.md` (source: commit 5d83df83, copy at `C:\Users\dilan\Documents\GitHub\reflex\build-dev\_deps\box3d-src`).
 - **BUILD**, in PowerShell: `cmd /c '"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" && cd /d C:\Users\dilan\Documents\GitHub\talus && cmake --preset release && cmake --build --preset release'`
@@ -157,7 +157,7 @@
 - The templates, where `State` is any type with `v, w, dp, dq, invMass, invI`:
   - `template <typename Real, typename State> void prepareJointRows(const JointSet&, const BodySet&, const IslandStore&, std::span<const State>, std::span<const uint32_t> stateOf, Real h, std::vector<JointRow<Real>>&);`
   - `template <typename Real, typename State> void warmStartJointRows(std::span<State>, std::span<const JointRow<Real>>);`
-  - `template <typename Real, typename State> void solveJointRows(std::span<State>, std::span<JointRow<Real>>, Real invH, bool useBias);`
+  - `template <typename Real, typename State> uint32_t solveJointRows(std::span<State>, std::span<JointRow<Real>>, Real invH, bool useBias);` It returns the number of limit rows that the extra limit passes visited (Task 6b).
   - `template <typename Real> void storeJointRows(JointSet&, std::span<const JointRow<Real>>, Real invH);`
 - Inputs: `solveSoftstep` gains `JointSet* joints` (nullptr or empty means no joint work).
 
@@ -200,7 +200,7 @@
 - Drive row softness from physical k and c with effective mass m: ω = √(k/m), ζ = c / (2√(k·m)). The `makeSoft` formula is used with no frequency clamp. The impulse is clamped per axis to [h·minTorque, h·maxTorque], then the drive impulse vector to h·maxTorque. Feed-forward adds h·feedForward as equal and opposite angular impulses.
 - Rigid limit row: massScale 1, impulseScale 0, one-sided impulse.
   - When the limit is still open (C > 0), the bias is the speculative C/h.
-  - When it is violated (C < 0), the correcting bias has magnitude min(|C|/h, 3 rad/s).
+  - When it is violated (C < 0), the correcting bias has magnitude min(|C|/h, 30 rad/s). (The plan said 3 rad/s; Task 6b raised it.)
   - Bias is used only when `useBias`.
 
 - [ ] **Step 1: Write the failing tests:**
@@ -334,7 +334,7 @@
 
 - [ ] **Step 1:** Extend the determinism test to a scene with all four joint kinds, limits and drives, plus two pinned humanoids touching a box pile. Run it.
   Expected: identical hashes at widths 1, 4 and 8 × workers 1, 4 and 8.
-- [ ] **Step 2:** Add the hidden profile case `[.][jointcost]`: four unpinned humanoids on a floor, drives holding a standing pose (k = 10³ and c = 50 on every axis), 600 steps at 4 substeps. It prints the mean `StepProfile::joints` time, the mean step time, and steps per second for one humanoid alone.
+- [ ] **Step 2:** Add the hidden profile case `[.][jointcost]`: four unpinned humanoids on a floor, drives holding a standing pose (k = 10³ and c = 50 on every axis), 600 steps with jointed islands at their 16 substeps. It prints the mean `StepProfile::joints` time, the mean step time, and steps per second for one humanoid alone.
   - Run it on this laptop. Then run it on the lab desktop through the `talus-lab` skill (worker `desktop`, Release).
   Expected on the desktop: one 20-body ragdoll at or below about 0.25 ms per step at its 16 substeps. Report all numbers with machine, compiler and commit.
 - [ ] **Step 3:** Run the full `verify` workflow and the eight hidden hash tags.

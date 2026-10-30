@@ -26,6 +26,8 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -35,6 +37,7 @@
 #include <numbers>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -1043,6 +1046,152 @@ uint64_t latticeChainHash(uint32_t workers, uint32_t width) {
   return hash;
 }
 
+struct MixedRun {
+  uint64_t hash = 0u;
+  uint32_t limitPassRows = 0u;
+  bool touched = false;
+  bool limited = false;
+  bool driven = false;
+  bool saturated = false;
+  bool loaded = false;
+};
+
+uint32_t humanoidPart(const World& world, const fixture::Humanoid& humanoid, std::string_view joint) {
+  const auto named = std::ranges::find_if(fixture::humanoidJointNames, [&](const char* name) { return joint == name; });
+
+  REQUIRE(named != fixture::humanoidJointNames.end());
+
+  return world.joints.find(humanoid.joints[static_cast<size_t>(named - fixture::humanoidJointNames.begin())])->def.bodyB;
+}
+
+void driveIntoTwistLimits(World& world, const fixture::Humanoid& humanoid) {
+  for (const uint32_t id : humanoid.joints) {
+    const JointDef& def = world.joints.find(id)->def;
+    JointDrive drive = def.drive;
+
+    if (def.kind == JointKind::Hinge) {
+      drive.axes[0].targetAngle = def.hinge.lower + 0.3 * (def.hinge.upper - def.hinge.lower);
+    } else {
+      drive.axes[0].targetAngle = std::min(def.cone.twistUpper + 0.2, std::numbers::pi);
+      drive.axes[1].targetAngle = def.cone.centre.x;
+      drive.axes[2].targetAngle = def.cone.centre.y;
+    }
+
+    for (AxisDrive& axis : drive.axes) {
+      axis.stiffness = 300.0;
+      axis.damping = 20.0;
+    }
+
+    REQUIRE(setJointDrive(world, id, drive));
+  }
+}
+
+MixedRun mixedJoints(uint32_t workers, uint32_t width) {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+
+  world.workerCount = workers;
+  world.simdWidth = width;
+  addFloor(world);
+
+  std::vector<uint32_t> pile;
+
+  for (int row = 0; row != 3; ++row) {
+    for (int column = 0; column != 3; ++column) {
+      for (int level = 0; level != 3; ++level) {
+        pile.push_back(addCrate(world, crate, glm::dvec3(-0.12 + 0.12 * row, 0.151 + 0.101 * level, -0.12 + 0.12 * column)));
+      }
+    }
+  }
+
+  const uint32_t held = addCrate(world, crate, glm::dvec3(-0.12, 0.454, 0.0));
+  std::vector<uint32_t> chain;
+  std::vector<uint32_t> balls;
+
+  for (int link = 0; link != 3; ++link) {
+    chain.push_back(addCrate(world, crate, glm::dvec3(-0.12 + 0.12 * link, 0.454, 0.12)));
+  }
+
+  for (size_t link = 0u; link + 1u != chain.size(); ++link) {
+    JointDef def = between(chain[link], chain[link + 1u]);
+    def.frameA.position = glm::dvec3(0.06, 0.0, 0.0);
+    def.frameB.position = glm::dvec3(-0.06, 0.0, 0.0);
+    balls.push_back(addJoint(world, def));
+    REQUIRE(balls.back() != 0u);
+  }
+
+  std::vector<uint32_t> limbs;
+  std::vector<fixture::Humanoid> humanoids;
+
+  for (const double x : {-0.3, 0.3}) {
+    humanoids.push_back(fixture::addHumanoid(world, glm::dvec3(x, 1.075, 0.0), true));
+    driveIntoTwistLimits(world, humanoids.back());
+    limbs.insert(limbs.end(), humanoids.back().bodies.begin(), humanoids.back().bodies.end());
+  }
+
+  JointDef grip = between(humanoidPart(world, humanoids.front(), "leftWrist"), held);
+  grip.kind = JointKind::Spring;
+  grip.frameA.position = glm::dvec3(0.0, -0.09, 0.0);
+  grip.frameB.position = glm::dvec3(0.0, 0.05, 0.0);
+  grip.spring.linearStiffness = 400.0;
+  grip.spring.linearDamping = 20.0;
+  grip.spring.maxForce = 30.0;
+  grip.spring.angularStiffness = 2.0;
+  grip.spring.angularDamping = 0.1;
+  grip.spring.maxTorque = 1.0;
+  REQUIRE(addJoint(world, grip) != 0u);
+
+  const auto contains = [](const std::vector<uint32_t>& ids, uint32_t id) { return std::ranges::find(ids, id) != ids.end(); };
+  MixedRun run;
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    const StepReport report = talus::dynamics::step(world);
+
+    if (report.nonFinite) {
+      return {};
+    }
+
+    run.limitPassRows += report.limitPassRows;
+
+    for (const Joint& joint : world.joints.all()) {
+      run.limited = run.limited || joint.report.limitActive;
+      run.driven = run.driven || joint.report.driveTorque != glm::dvec3(0.0);
+      run.saturated = run.saturated || joint.report.forceSaturated;
+    }
+
+    for (const Contact& contact : contactRecords(world)) {
+      if (contact.a.side != Side::Rigid || contact.b.side != Side::Rigid) {
+        continue;
+      }
+
+      const uint32_t a = world.bodies.rigids[contact.a.body].id;
+      const uint32_t b = world.bodies.rigids[contact.b.body].id;
+
+      run.touched = run.touched || (contains(limbs, a) && contains(pile, b)) || (contains(limbs, b) && contains(pile, a));
+    }
+  }
+
+  run.hash = 1469598103934665603ull;
+
+  for (const RigidBody& body : world.bodies.rigids) {
+    run.hash = bodyHash(run.hash, body);
+  }
+
+  for (const Joint& joint : world.joints.all()) {
+    for (int axis = 0; axis != 3; ++axis) {
+      run.hash = mixBits(run.hash, joint.report.force[axis]);
+      run.hash = mixBits(run.hash, joint.report.torque[axis]);
+      run.hash = mixBits(run.hash, joint.report.driveTorque[axis]);
+    }
+  }
+
+  for (const uint32_t ball : balls) {
+    run.loaded = run.loaded || jointReport(world, ball)->force != glm::dvec3(0.0);
+  }
+
+  return run;
+}
+
 }
 
 TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 and 8", "[dynamics][joints]") {
@@ -1057,7 +1206,15 @@ TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 an
   const JointedRun sprung = chainOnPile(1u, 1u, JointKind::Spring);
   const uint64_t deck = deckHash(1u, 1u);
   const uint64_t strained = latticeChainHash(1u, 1u);
+  const MixedRun mixed = mixedJoints(1u, 1u);
 
+  REQUIRE(mixed.hash != 0u);
+  REQUIRE(mixed.touched);
+  REQUIRE(mixed.limited);
+  REQUIRE(mixed.driven);
+  REQUIRE(mixed.saturated);
+  REQUIRE(mixed.loaded);
+  REQUIRE(mixed.limitPassRows != 0u);
   REQUIRE(serial.hash != 0u);
   REQUIRE(serial.loaded);
   REQUIRE(twisted.hash != 0u);
@@ -1080,6 +1237,9 @@ TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 an
       CHECK(chainOnPile(workers, width, JointKind::Spring).hash == sprung.hash);
       CHECK(deckHash(workers, width) == deck);
       CHECK(latticeChainHash(workers, width) == strained);
+      const MixedRun mixedRun = mixedJoints(workers, width);
+      CHECK(mixedRun.hash == mixed.hash);
+      CHECK(mixedRun.limitPassRows == mixed.limitPassRows);
     }
   }
 }
@@ -2638,6 +2798,263 @@ TEST_CASE("every humanoid limit holds with all joints at the cap, without self-c
 
 namespace {
 
+constexpr uint32_t standingSteps = 600u;
+constexpr uint32_t standingSettle = 60u;
+constexpr double standingPelvis = 1.075;
+constexpr double standingLean = 0.02;
+
+struct StandingCost {
+  double joints = 0.0;
+  double step = 0.0;
+  double steadyJoints = 0.0;
+  double steadyStep = 0.0;
+  double stepsPerSecond = 0.0;
+  double contactPoints = 0.0;
+  double selfPoints = 0.0;
+  uint32_t selfPairs = 0u;
+  double limitPassRows = 0.0;
+  uint32_t jointRows = 0u;
+  double lowestPelvis = 0.0;
+};
+
+struct StandingScene {
+  const char* label = "";
+  uint32_t humanoids = 0u;
+  bool selfContact = true;
+};
+
+void holdStandingPose(World& world, const fixture::Humanoid& humanoid) {
+  for (size_t joint = 0u; joint != humanoid.joints.size(); ++joint) {
+    const uint32_t id = humanoid.joints[joint];
+    const JointDef& def = world.joints.find(id)->def;
+    JointDrive drive = def.drive;
+
+    if (def.kind == JointKind::Hinge) {
+      drive.axes[0].targetAngle = hingeAngle(world, def);
+    } else {
+      const SwingTwistAngles angles = jointAngles(world, def);
+      drive.axes[0].targetAngle = angles.twist;
+      drive.axes[1].targetAngle = angles.swing.x;
+      drive.axes[2].targetAngle = angles.swing.y;
+    }
+
+    if (std::string_view(fixture::humanoidJointNames[joint]).ends_with("Ankle")) {
+      drive.axes[0].targetAngle -= standingLean;
+    }
+
+    for (AxisDrive& axis : drive.axes) {
+      axis.stiffness = 1.0e3;
+      axis.damping = 50.0;
+    }
+
+    REQUIRE(setJointDrive(world, id, drive));
+  }
+}
+
+StandingCost standingCost(const StandingScene& scene) {
+  const talus::field::SampledSdf ground = boxOf(glm::dvec3(2.0, 0.1, 2.0), 0.04);
+  const std::array<glm::dvec2, 4> spots{
+    glm::dvec2(-0.75, -0.75),
+    glm::dvec2(0.75, -0.75),
+    glm::dvec2(-0.75, 0.75),
+    glm::dvec2(0.75, 0.75)
+  };
+  World world;
+  std::vector<fixture::Humanoid> humanoids;
+
+  world.parameters.sleep = false;
+  (void)addStatic(world.bodies, ground, 0.5);
+
+  for (uint32_t index = 0u; index != scene.humanoids; ++index) {
+    humanoids.push_back(fixture::addHumanoid(world, glm::dvec3(spots[index].x, standingPelvis, spots[index].y), false));
+    holdStandingPose(world, humanoids.back());
+
+    if (!scene.selfContact) {
+      fixture::excludeSelfContact(world, humanoids.back());
+    }
+  }
+
+  std::vector<uint32_t> owner(world.bodies.rigids.size(), scene.humanoids);
+
+  for (uint32_t index = 0u; index != scene.humanoids; ++index) {
+    for (const uint32_t id : humanoids[index].bodies) {
+      owner[findBody(world.bodies, id)->index] = index;
+    }
+  }
+
+  StandingCost cost;
+  std::vector<uint64_t> selfPairs;
+  double seconds = 0.0;
+
+  for (uint32_t frame = 0u; frame != standingSteps; ++frame) {
+    const auto before = std::chrono::steady_clock::now();
+    const StepReport report = talus::dynamics::step(world);
+    seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - before).count();
+
+    REQUIRE_FALSE(report.nonFinite);
+    cost.joints += report.profile.joints;
+    cost.step += report.profile.total;
+
+    if (frame >= standingSettle) {
+      cost.steadyJoints += report.profile.joints;
+      cost.steadyStep += report.profile.total;
+    }
+
+    cost.limitPassRows += static_cast<double>(report.limitPassRows);
+    cost.jointRows = report.jointRows;
+
+    for (const Contact& contact : contactRecords(world)) {
+      cost.contactPoints += 1.0;
+
+      if (contact.a.side == Side::Rigid && contact.b.side == Side::Rigid && owner[contact.a.body] != scene.humanoids
+          && owner[contact.a.body] == owner[contact.b.body]) {
+        cost.selfPoints += 1.0;
+        selfPairs.push_back(contact.pair);
+      }
+    }
+  }
+
+  std::ranges::sort(selfPairs);
+
+  const double steps = static_cast<double>(standingSteps);
+  const double steady = static_cast<double>(standingSteps - standingSettle);
+
+  cost.selfPairs = static_cast<uint32_t>(std::ranges::distance(selfPairs.begin(), std::unique(selfPairs.begin(), selfPairs.end())));
+  cost.joints /= steps;
+  cost.step /= steps;
+  cost.steadyJoints /= steady;
+  cost.steadyStep /= steady;
+  cost.stepsPerSecond = steps / seconds;
+  cost.contactPoints /= steps;
+  cost.selfPoints /= steps;
+  cost.limitPassRows /= steps;
+  cost.lowestPelvis = standingPelvis;
+
+  for (const fixture::Humanoid& humanoid : humanoids) {
+    cost.lowestPelvis = std::min(cost.lowestPelvis, world.bodies.rigids[findBody(world.bodies, humanoid.bodies.front())->index].position.y);
+  }
+
+  return cost;
+}
+
+void printStandingSetup() {
+  const IntegrationParameters parameters;
+
+#if defined(_MSC_VER)
+  std::printf("jointcost compiler MSVC %d", _MSC_FULL_VER);
+#elif defined(__VERSION__)
+  std::printf("jointcost compiler %s", __VERSION__);
+#else
+  std::printf("jointcost compiler unknown");
+#endif
+
+#if defined(NDEBUG)
+  std::printf(", optimised build");
+#else
+  std::printf(", debug build (timings are not meaningful)");
+#endif
+
+  std::printf(
+    ", contact width %u, 1 worker, step %.4f s, %u substeps in jointed islands and %u in others\n",
+    resolveSimdWidth(0u),
+    parameters.dt,
+    parameters.jointSubsteps,
+    parameters.softstepSubsteps
+  );
+  std::printf(
+    "jointcost scene: unpinned 20-body humanoids standing on a static floor with sleep off; every drive axis k %.0f N.m/rad and c %.0f N.m.s/rad at the rig's torque caps holds the build pose, with the ankles pitched %.2f rad forward; %u steps; 'after 1 s' skips the first %u steps; 'inert springs' are fixture::excludeSelfContact's 171 zero-gain spring joints per humanoid\n",
+    1.0e3,
+    50.0,
+    standingLean,
+    standingSteps,
+    standingSettle
+  );
+}
+
+void printStandingCost(const StandingScene& scene, const StandingCost& cost) {
+  const double count = static_cast<double>(scene.humanoids);
+
+  std::printf(
+    "jointcost %-26s | joints %.4f ms/step, whole step %.4f ms/step, %.0f steps/s | after 1 s: joints %.4f, whole step %.4f | per humanoid: joints %.4f, whole step %.4f ms/step\n",
+    scene.label,
+    cost.joints,
+    cost.step,
+    cost.stepsPerSecond,
+    cost.steadyJoints,
+    cost.steadyStep,
+    cost.joints / count,
+    cost.step / count
+  );
+  std::printf(
+    "jointcost %-26s | joints solved %u per step, extra limit-pass rows %.1f per step, contact points %.1f per step, self-contact points %.1f per step on %u body pairs, lowest pelvis %.3f m (start %.3f m)\n",
+    scene.label,
+    cost.jointRows,
+    cost.limitPassRows,
+    cost.contactPoints,
+    cost.selfPoints,
+    cost.selfPairs,
+    cost.lowestPelvis,
+    standingPelvis
+  );
+}
+
+double medianOf(std::vector<double> values) {
+  std::ranges::sort(values);
+
+  return values[values.size() / 2u];
+}
+
+}
+
+TEST_CASE("standing humanoids cost this much joint and step time", "[.][jointcost]") {
+  const std::array<StandingScene, 4> scenes{
+    StandingScene{"4 humanoids, self-contact", 4u, true},
+    StandingScene{"4 humanoids, inert springs", 4u, false},
+    StandingScene{"1 humanoid, self-contact", 1u, true},
+    StandingScene{"1 humanoid, inert springs", 1u, false}
+  };
+  std::array<std::vector<StandingCost>, 4> rounds;
+
+  printStandingSetup();
+
+  for (uint32_t round = 0u; round != 3u; ++round) {
+    for (size_t scene = 0u; scene != scenes.size(); ++scene) {
+      const StandingCost cost = standingCost(scenes[scene]);
+
+      printStandingCost(scenes[scene], cost);
+      rounds[scene].push_back(cost);
+      CAPTURE(scenes[scene].label, cost.lowestPelvis);
+      CHECK(cost.lowestPelvis > standingPelvis - 0.1);
+    }
+  }
+
+  for (size_t scene = 0u; scene != scenes.size(); ++scene) {
+    std::vector<double> joints;
+    std::vector<double> steps;
+    std::vector<double> rates;
+
+    for (const StandingCost& cost : rounds[scene]) {
+      joints.push_back(cost.joints);
+      steps.push_back(cost.step);
+      rates.push_back(cost.stepsPerSecond);
+    }
+
+    const double count = static_cast<double>(scenes[scene].humanoids);
+
+    std::printf(
+      "jointcost median of 3, %-26s | joints %.4f ms/step, whole step %.4f ms/step, %.0f steps/s | per humanoid: joints %.4f, whole step %.4f ms/step\n",
+      scenes[scene].label,
+      medianOf(joints),
+      medianOf(steps),
+      medianOf(rates),
+      medianOf(joints) / count,
+      medianOf(steps) / count
+    );
+  }
+}
+
+namespace {
+
 struct HangingChain {
   std::vector<uint32_t> links;
   std::vector<JointDef> defs;
@@ -2805,34 +3222,47 @@ talus::PhysicalMaterial softRubber() {
   return material;
 }
 
-int firstPromotion(bool jointed) {
-  const std::vector<talus::PhysicalMaterial> lanes{softRubber()};
-  const talus::field::SampledSdf blockField = boxOf(glm::dvec3(0.1, 0.025, 0.1), 0.025);
-  const talus::field::SampledSdf crate = boxOf(glm::dvec3(0.025), 0.005);
-  World world;
-  addFloor(world);
-  const uint32_t block = addSwitchable(
+uint32_t addRubberBlock(World& world, const talus::field::SampledSdf& field, std::span<const talus::PhysicalMaterial> lanes) {
+  return addSwitchable(
     world.bodies,
     talus::deformable::buildMesh(
-      blockField,
+      field,
       lanes,
       glm::mat4(1.0f),
       std::span<const talus::deformable::SupportVolume>{},
       talus::deformable::VolumeElementType::Hex
     ),
     lanes,
-    blockField,
+    field,
     glm::dvec3(0.0, 0.125, 0.0),
     glm::dvec3(0.0),
     0.5,
     0.0
   );
+}
+
+uint32_t pinToWorld(World& world, uint32_t body) {
+  JointDef def = between(noBody, body);
+  def.frameA.position = world.bodies.rigids[findBody(world.bodies, body)->index].position;
+
+  return addJoint(world, def);
+}
+
+talus::field::SampledSdf rubberBlockField() {
+  return boxOf(glm::dvec3(0.1, 0.025, 0.1), 0.025);
+}
+
+int firstPromotion(bool jointed) {
+  const std::vector<talus::PhysicalMaterial> lanes{softRubber()};
+  const talus::field::SampledSdf blockField = rubberBlockField();
+  const talus::field::SampledSdf crate = boxOf(glm::dvec3(0.025), 0.005);
+  World world;
+  addFloor(world);
+  const uint32_t block = addRubberBlock(world, blockField, lanes);
   (void)addRigidBox(world.bodies, crate, glm::dvec3(0.025), 2.0, glm::dvec3(0.0, 0.175, 0.0), glm::dvec3(0.0), 0.5, 3u);
 
   if (jointed) {
-    JointDef def = between(noBody, block);
-    def.frameA.position = world.bodies.rigids[findBody(world.bodies, block)->index].position;
-    REQUIRE(addJoint(world, def) != 0u);
+    REQUIRE(pinToWorld(world, block) != 0u);
   }
 
   for (int frame = 0; frame != 30; ++frame) {
@@ -2852,6 +3282,28 @@ int firstPromotion(bool jointed) {
 TEST_CASE("a jointed switchable body stays rigid when struck", "[dynamics][joints]") {
   REQUIRE(firstPromotion(false) >= 0);
   CHECK(firstPromotion(true) < 0);
+}
+
+TEST_CASE("promoting a jointed switchable body is refused and keeps its joint", "[dynamics][joints]") {
+  const std::vector<talus::PhysicalMaterial> lanes{softRubber()};
+  const talus::field::SampledSdf blockField = rubberBlockField();
+  World world;
+  addFloor(world);
+  const uint32_t block = addRubberBlock(world, blockField, lanes);
+  const uint32_t joint = pinToWorld(world, block);
+
+  REQUIRE(joint != 0u);
+  CHECK_FALSE(promote(world, block));
+  REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+  CHECK(findBody(world.bodies, block)->side == Side::Rigid);
+  CHECK(world.bodies.switchables[0].tier == Tier::Rigid);
+  CHECK(jointReport(world, joint).has_value());
+
+  REQUIRE(removeJoint(world, joint));
+  CHECK(promote(world, block));
+  CHECK(findBody(world.bodies, block)->side == Side::Lattice);
+  CHECK(world.bodies.switchables[0].tier == Tier::Lattice);
+  CHECK_FALSE(promote(world, block));
 }
 
 TEST_CASE("a sleeping body wakes and follows the mass-0 body it hangs from", "[dynamics][joints]") {
@@ -3378,6 +3830,78 @@ TEST_CASE("a joint follows the piece holding its anchor when a compound splits",
   CHECK(jointOf(world, joint).def.bodyA == *holder);
   CHECK(islands.islandOf(hung) == islands.islandOf(*holder));
   CHECK(islands.islandOf(hung) != islands.islandOf(piece));
+}
+
+TEST_CASE("a split moves a joint's contact exclusion to the piece that holds its anchor", "[dynamics][joints]") {
+  const glm::dvec3 plankHalf(0.35, 0.05, 0.05);
+  const glm::dvec3 plankCentre(0.75, 11.549, 0.0);
+  const glm::dvec3 anchor(0.995, 11.45, 0.0);
+  const talus::field::SampledSdf plankField = boxOf(plankHalf, 0.02);
+
+  for (const bool collideConnected : {false, true}) {
+    CAPTURE(collideConnected);
+
+    World world;
+    DestructionWorld destruction;
+    world.parameters.gravity = glm::dvec3(0.0);
+    const BuildingReport built = destruction.addBuilding(world, beamOfFive(), concreteOnly(), evenChunks());
+
+    REQUIRE(built.settled);
+
+    const DestructionReport freed = destruction.update(world);
+
+    REQUIRE(freed.created.size() == 1u);
+
+    const uint32_t beam = freed.created[0];
+    const uint32_t plank =
+      world.bodies.rigids[addRigidBox(world.bodies, plankField, plankHalf, 20.0, plankCentre, glm::dvec3(0.0), 0.5, 3u)].id;
+    JointDef def = between(plank, beam);
+    def.collideConnected = collideConnected;
+    def.frameA = localFrame(world, plank, anchor, unturned);
+    def.frameB = localFrame(world, beam, anchor, unturned);
+    const uint32_t joint = addJoint(world, def);
+
+    REQUIRE(joint != 0u);
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+    CHECK(touching(world, plank, beam) == !excludesPair(def));
+
+    const glm::dvec3 before = worldAnchor(world, beam, jointOf(world, joint).def.frameB);
+    const std::vector<uint32_t> gaps{1u, 3u};
+
+    REQUIRE(destruction.removeChunks(world, built.building, gaps) == 2u);
+
+    const DestructionReport split = destruction.update(world);
+
+    REQUIRE(split.created.size() == 2u);
+
+    const std::optional<uint32_t> holder = destruction.bodyOf(built.building, 2u);
+    const std::optional<uint32_t> left = destruction.bodyOf(built.building, 0u);
+
+    REQUIRE(holder.has_value());
+    REQUIRE(left.has_value());
+    REQUIRE(*holder != beam);
+    REQUIRE(*left == beam);
+
+    const JointDef& after = jointOf(world, joint).def;
+
+    CHECK(after.bodyA == plank);
+    CHECK(after.bodyB == *holder);
+    CHECK(anchorGap(world, after.bodyB, after.frameB, before) < 1.0e-9);
+    CHECK(world.joints.excludes(plank, *holder) == excludesPair(after));
+    CHECK_FALSE(world.joints.excludes(plank, *left));
+
+    bool holderContact = false;
+    bool leftContact = false;
+
+    for (uint32_t frame = 0u; frame != 2u; ++frame) {
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+      holderContact = holderContact || touching(world, plank, *holder);
+      leftContact = leftContact || touching(world, plank, *left);
+    }
+
+    CHECK(holderContact == !excludesPair(after));
+    CHECK(leftContact);
+  }
 }
 
 TEST_CASE("a joint follows the chunks that break off an anchored building", "[dynamics][joints]") {

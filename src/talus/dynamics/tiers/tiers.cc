@@ -696,12 +696,20 @@ void moveLikeRigid(LatticeBody& lattice, const RestBody& rest, const RigidBody& 
   }
 }
 
-void toLattice(World& world, uint32_t id) {
+bool jointEnd(const World& world, uint32_t id) {
+  const std::span<const Joint> joints = world.joints.all();
+
+  return std::any_of(joints.begin(), joints.end(), [id](const Joint& joint) {
+    return joint.def.bodyA == id || joint.def.bodyB == id;
+  });
+}
+
+[[nodiscard]] bool toLattice(World& world, uint32_t id) {
   SwitchableBody* body = switchableOf(world.bodies, id);
   const std::optional<BodyRef> ref = findBody(world.bodies, id);
 
   if (body == nullptr || !ref || ref->side != Side::Rigid) {
-    return;
+    return false;
   }
 
   const RigidBody rigid = world.bodies.rigids[ref->index];
@@ -732,6 +740,8 @@ void toLattice(World& world, uint32_t id) {
   world.bodies.lattices.push_back(std::move(lattice));
   body->tier = Tier::Lattice;
   body->frames = 0u;
+
+  return true;
 }
 
 [[nodiscard]] bool toRigid(World& world, uint32_t id) {
@@ -959,13 +969,6 @@ void switchTiers(World& world, StepReport& report) {
 
     return *recorded;
   };
-  const auto jointed = [&](uint32_t id) {
-    const std::span<const Joint> joints = world.joints.all();
-
-    return std::any_of(joints.begin(), joints.end(), [id](const Joint& joint) {
-      return joint.def.bodyA == id || joint.def.bodyB == id;
-    });
-  };
 
   for (SwitchableBody& body : world.bodies.switchables) {
     const std::optional<BodyRef> ref = findBody(world.bodies, body.id);
@@ -974,7 +977,7 @@ void switchTiers(World& world, StepReport& report) {
       continue;
     }
 
-    if (body.tier == Tier::Rigid && jointed(body.id)) {
+    if (body.tier == Tier::Rigid && jointEnd(world, body.id)) {
       body.frames = 0u;
     } else if (body.tier == Tier::Rigid) {
       screenRigid(world, body, ref->index, recordedNow());
@@ -1019,7 +1022,7 @@ void switchTiers(World& world, StepReport& report) {
   }
 
   for (const uint32_t id : promoting) {
-    toLattice(world, id);
+    (void)toLattice(world, id);
     ++report.promotions;
   }
 
@@ -1035,16 +1038,22 @@ void switchTiers(World& world, StepReport& report) {
   resolveForces(world, pending);
 }
 
-void promote(World& world, uint32_t id) {
+bool promote(World& world, uint32_t id) {
+  if (jointEnd(world, id)) {
+    return false;
+  }
+
   std::vector<PendingForce> pending;
   std::vector<PendingMove> moves;
   const std::unordered_set<uint64_t> recorded = recordedPairs(world.contacts);
 
   collectForces(world, id, pending, recorded);
   collectMoves(world, id, moves, recorded);
-  toLattice(world, id);
+  const bool promoted = toLattice(world, id);
   applyMoves(world, moves);
   resolveForces(world, pending);
+
+  return promoted;
 }
 
 std::vector<uint8_t> shareCarriedForces(
