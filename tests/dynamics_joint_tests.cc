@@ -917,3 +917,258 @@ TEST_CASE("jointed and free boxes ride the same moving mass-0 deck", "[dynamics]
     CHECK(std::abs(offset.x - offsets[box].x) < 0.01);
   }
 }
+
+namespace {
+
+glm::dquat jointFrameRotation(const World& world, uint32_t id, const JointFrame& frame) {
+  if (id == noBody) {
+    return frame.rotation;
+  }
+
+  return world.bodies.rigids[findBody(world.bodies, id)->index].rotation * frame.rotation;
+}
+
+double hingeAngle(const World& world, const JointDef& def) {
+  glm::dquat relative =
+    glm::conjugate(jointFrameRotation(world, def.bodyA, def.frameA)) * jointFrameRotation(world, def.bodyB, def.frameB);
+
+  if (relative.w < 0.0) {
+    relative = -relative;
+  }
+
+  return 2.0 * std::atan2(relative.x, relative.w);
+}
+
+JointDef worldHinge(const World& world, uint32_t index, const glm::dvec3& pivot) {
+  const RigidBody& body = world.bodies.rigids[index];
+  JointDef def = between(noBody, body.id);
+  def.kind = JointKind::Hinge;
+  def.frameA.position = pivot;
+  def.frameB.position = glm::conjugate(body.rotation) * (pivot - body.position);
+
+  return def;
+}
+
+const glm::dvec3 hingePivot(0.0, 2.0, 0.0);
+const glm::dvec3 hingeLever(0.0, 0.1, 0.0);
+
+uint32_t addHingedCrate(World& world, const talus::field::SampledSdf& crate) {
+  return addRigidBox(world.bodies, crate, glm::dvec3(0.05), 1.0, hingePivot - hingeLever, glm::dvec3(0.0), 0.5, 3u);
+}
+
+std::vector<double> zeroCrossings(const std::vector<double>& samples, double dt) {
+  std::vector<double> crossings;
+
+  for (size_t index = 1u; index < samples.size(); ++index) {
+    const double before = samples[index - 1u];
+    const double after = samples[index];
+
+    if ((before < 0.0) != (after < 0.0)) {
+      crossings.push_back(dt * (static_cast<double>(index - 1u) + before / (before - after)));
+    }
+  }
+
+  return crossings;
+}
+
+}
+
+TEST_CASE("a hinge pendulum keeps its period", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  const double lever = 1.0;
+  const double release = 0.1;
+  const glm::dvec3 start = hingePivot + lever * glm::dvec3(0.0, -std::cos(release), std::sin(release));
+  const glm::dvec3 sideways(0.1, 0.0, 0.0);
+  const uint32_t index = addRigidBox(world.bodies, crate, glm::dvec3(0.05), 1.0, start, sideways, 0.5, 3u);
+  REQUIRE(addJoint(world, worldHinge(world, index, hingePivot)) != 0u);
+
+  const double dt = world.parameters.dt;
+  const uint32_t steps = static_cast<uint32_t>(std::lround(60.0 / dt));
+  std::vector<double> angles;
+  double peak = 0.0;
+  double drift = 0.0;
+
+  for (uint32_t frame = 1u; frame <= steps; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+    const glm::dvec3 arm = world.bodies.rigids[index].position - hingePivot;
+
+    angles.push_back(std::atan2(arm.z, -arm.y));
+    peak = std::max(peak, std::atan2(std::hypot(arm.x, arm.z), -arm.y));
+
+    if (dt * frame > 10.0) {
+      drift = std::max(drift, std::abs(arm.x));
+    }
+  }
+
+  const std::vector<double> crossings = zeroCrossings(angles, dt);
+
+  REQUIRE(crossings.size() >= 20u);
+
+  const double period = 2.0 * (crossings.back() - crossings.front()) / static_cast<double>(crossings.size() - 1u);
+  const double expected = 2.0 * std::numbers::pi * std::sqrt(lever / std::abs(world.parameters.gravity.y));
+
+  CHECK(std::abs(period - expected) <= 0.02 * expected);
+  CHECK(peak <= 1.01 * release);
+  CHECK(drift < 1.0e-3);
+}
+
+TEST_CASE("a hinge drive deflects by torque over stiffness", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  world.parameters.gravity = glm::dvec3(0.0);
+  world.parameters.sleep = false;
+  const double stiffness = 200.0;
+  const double torque = 10.0;
+  const uint32_t index = addHingedCrate(world, crate);
+  JointDef def = worldHinge(world, index, hingePivot);
+  def.drive.axes[0].stiffness = stiffness;
+  def.drive.axes[0].damping = 20.0;
+  def.drive.feedForward = glm::dvec3(torque, 0.0, 0.0);
+  const uint32_t joint = addJoint(world, def);
+  REQUIRE(joint != 0u);
+
+  for (uint32_t frame = 0u; frame != 180u; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+  }
+
+  const double deflection = torque / stiffness;
+  const std::optional<JointReport> report = jointReport(world, joint);
+
+  REQUIRE(report.has_value());
+  CHECK(std::abs(hingeAngle(world, def) - deflection) <= 0.02 * deflection);
+  CHECK(std::abs(report->driveTorque.x + torque) <= 0.02 * torque);
+}
+
+TEST_CASE("a hinge drive rings at sqrt(k over I) for any mass ratio", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const double stiffness = 0.5;
+  const double offset = 0.05;
+  const double half = 0.05;
+  const double leverA = 0.1;
+  const double leverB = 0.1;
+
+  for (const double mass : {1.0, 10.0, 75.0}) {
+    CAPTURE(mass);
+
+    World world;
+    world.parameters.gravity = glm::dvec3(0.0);
+    world.parameters.sleep = false;
+    const glm::dvec3 anchor(0.0, 2.0, 0.0);
+    const glm::dquat turned = glm::angleAxis(offset, glm::dvec3(1.0, 0.0, 0.0));
+    const glm::dvec3 parentAt = anchor + glm::dvec3(0.0, leverA, 0.0);
+    const glm::dvec3 childAt = anchor - turned * glm::dvec3(0.0, leverB, 0.0);
+    const uint32_t parent = addRigidBox(world.bodies, crate, glm::dvec3(half), mass, parentAt, glm::dvec3(0.0), 0.5, 3u);
+    const uint32_t child = addRigidBox(world.bodies, crate, glm::dvec3(half), 1.0, childAt, glm::dvec3(0.0), 0.5, 3u);
+    world.bodies.rigids[child].rotation = turned;
+    JointDef def = between(world.bodies.rigids[parent].id, world.bodies.rigids[child].id);
+    def.kind = JointKind::Hinge;
+    def.frameA.position = glm::dvec3(0.0, -leverA, 0.0);
+    def.frameB.position = glm::dvec3(0.0, leverB, 0.0);
+    def.drive.axes[0].stiffness = stiffness;
+    REQUIRE(addJoint(world, def) != 0u);
+    REQUIRE(std::abs(hingeAngle(world, def) - offset) < 1.0e-9);
+
+    const double dt = world.parameters.dt;
+    std::vector<double> angles;
+
+    for (uint32_t frame = 0u; frame != 360u; ++frame) {
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+      angles.push_back(hingeAngle(world, def));
+    }
+
+    std::vector<double> crossings = zeroCrossings(angles, dt);
+
+    REQUIRE(crossings.size() >= 8u);
+    crossings.resize(8u);
+
+    const double side = 2.0 * half;
+    const double inertiaA = mass * 2.0 * side * side / 12.0;
+    const double inertiaB = 1.0 * 2.0 * side * side / 12.0;
+    const double reduced = mass * 1.0 / (mass + 1.0);
+    const double inertia = (inertiaA * inertiaB + reduced * (leverA * leverA * inertiaB + leverB * leverB * inertiaA))
+      / (inertiaA + inertiaB + reduced * (leverA + leverB) * (leverA + leverB));
+    const double expected = std::sqrt(stiffness / inertia) / (2.0 * std::numbers::pi);
+    const double measured = static_cast<double>(crossings.size() - 1u) / (2.0 * (crossings.back() - crossings.front()));
+
+    CHECK(std::abs(measured - expected) <= 0.05 * expected);
+  }
+}
+
+TEST_CASE("hinge drive torque respects per-direction bounds and the cap", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const double slack = 1.0e-4;
+
+  const auto run = [&](double target, double cap, double lower, double upper, double reached) {
+    CAPTURE(target, cap);
+
+    World world;
+    world.parameters.gravity = glm::dvec3(0.0);
+    world.parameters.sleep = false;
+    const uint32_t index = addHingedCrate(world, crate);
+    JointDef def = worldHinge(world, index, hingePivot);
+    def.drive.axes[0].targetAngle = target;
+    def.drive.axes[0].stiffness = 100.0;
+    def.drive.axes[0].minTorque = -5.0;
+    def.drive.axes[0].maxTorque = 2.0;
+    def.drive.maxTorque = cap;
+    const uint32_t joint = addJoint(world, def);
+    REQUIRE(joint != 0u);
+
+    for (uint32_t frame = 0u; frame != 60u; ++frame) {
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+      const JointReport report = *jointReport(world, joint);
+
+      CHECK(report.driveTorque.x >= lower - slack);
+      CHECK(report.driveTorque.x <= upper + slack);
+
+      if (frame == 0u) {
+        CHECK(std::abs(report.driveTorque.x - reached) <= slack);
+        CHECK(report.driveSaturated);
+      }
+    }
+  };
+
+  run(1.0, jointInfinity, -5.0, 2.0, 2.0);
+  run(-1.0, jointInfinity, -5.0, 2.0, -5.0);
+  run(1.0, 1.0, -1.0, 1.0, 1.0);
+  run(-1.0, 1.0, -1.0, 1.0, -1.0);
+}
+
+TEST_CASE("a hinge limit holds at the drive cap", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const double bound = 0.5;
+
+  for (const double side : {1.0, -1.0}) {
+    CAPTURE(side);
+
+    World world;
+    world.parameters.sleep = false;
+    const uint32_t index = addHingedCrate(world, crate);
+    JointDef def = worldHinge(world, index, hingePivot);
+    def.hinge.enabled = true;
+    def.hinge.lower = -bound;
+    def.hinge.upper = bound;
+    def.drive.axes[0].targetAngle = 2.0 * side;
+    def.drive.axes[0].stiffness = 1.0e5;
+    def.drive.maxTorque = 150.0;
+    const uint32_t joint = addJoint(world, def);
+    REQUIRE(joint != 0u);
+
+    double furthest = 0.0;
+
+    for (uint32_t frame = 0u; frame != 120u; ++frame) {
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+      furthest = std::max(furthest, side * hingeAngle(world, def));
+    }
+
+    const JointReport report = *jointReport(world, joint);
+
+    CHECK(furthest <= 0.53);
+    CHECK(side * hingeAngle(world, def) >= bound - 0.02);
+    CHECK(report.limitActive);
+    CHECK(report.driveSaturated);
+  }
+}
