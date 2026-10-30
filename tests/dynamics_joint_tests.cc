@@ -1329,13 +1329,20 @@ JointDef worldSwingTwist(const World& world, uint32_t index) {
   return def;
 }
 
+ConeLimit ellipticalCone() {
+  ConeLimit cone;
+  cone.enabled = true;
+  cone.twistLower = -0.4;
+  cone.twistUpper = 0.2;
+  cone.swing = glm::dvec2(0.6, 0.3);
+  cone.centre = glm::dvec2(0.1, 0.0);
+
+  return cone;
+}
+
 JointDef shoulder(const World& world, uint32_t index) {
   JointDef def = worldSwingTwist(world, index);
-  def.cone.enabled = true;
-  def.cone.twistLower = -0.4;
-  def.cone.twistUpper = 0.2;
-  def.cone.swing = glm::dvec2(0.6, 0.3);
-  def.cone.centre = glm::dvec2(0.1, 0.0);
+  def.cone = ellipticalCone();
 
   return def;
 }
@@ -1354,11 +1361,9 @@ double ellipse(const ConeLimit& cone, const glm::dvec2& swing) {
   return glm::dot(scaled, scaled);
 }
 
-}
-
-TEST_CASE("a swing-twist cone holds an ellipse", "[dynamics][joints]") {
+void checkConeAtCap(const ConeLimit& cone, double reach) {
   const talus::field::SampledSdf crate = crateField();
-  const double margin = 0.03 / 0.3;
+  const double margin = 0.03 / std::min(cone.swing.x, cone.swing.y);
 
   for (uint32_t direction = 0u; direction != 8u; ++direction) {
     const double heading = 0.25 * std::numbers::pi * static_cast<double>(direction);
@@ -1367,10 +1372,11 @@ TEST_CASE("a swing-twist cone holds an ellipse", "[dynamics][joints]") {
     World world;
     world.parameters.sleep = false;
     const uint32_t index = addHingedCrate(world, crate);
-    JointDef def = shoulder(world, index);
+    JointDef def = worldSwingTwist(world, index);
+    def.cone = cone;
     pushAtCap(def);
-    def.drive.axes[1].targetAngle = 2.0 * std::cos(heading);
-    def.drive.axes[2].targetAngle = 2.0 * std::sin(heading);
+    def.drive.axes[1].targetAngle = reach * std::cos(heading);
+    def.drive.axes[2].targetAngle = reach * std::sin(heading);
     const uint32_t joint = addJoint(world, def);
     REQUIRE(joint != 0u);
 
@@ -1389,6 +1395,26 @@ TEST_CASE("a swing-twist cone holds an ellipse", "[dynamics][joints]") {
     CHECK(report.limitActive);
     CHECK(report.driveSaturated);
   }
+}
+
+ConeLimit reflexShoulder() {
+  ConeLimit cone;
+  cone.enabled = true;
+  cone.twistLower = -2.3;
+  cone.twistUpper = 1.1;
+  cone.swing = glm::dvec2(1.85, 1.86);
+
+  return cone;
+}
+
+}
+
+TEST_CASE("a swing-twist cone holds an ellipse", "[dynamics][joints]") {
+  checkConeAtCap(ellipticalCone(), 2.0);
+}
+
+TEST_CASE("a swing-twist cone holds Reflex's shoulder", "[dynamics][joints]") {
+  checkConeAtCap(reflexShoulder(), 2.5);
 }
 
 TEST_CASE("a swing-twist twist range holds", "[dynamics][joints]") {
@@ -1421,6 +1447,51 @@ TEST_CASE("a swing-twist twist range holds", "[dynamics][joints]") {
     CHECK(side * (jointAngles(world, def).twist - end) >= -0.02);
     CHECK(report.limitActive);
     CHECK(report.driveSaturated);
+  }
+}
+
+TEST_CASE("a swing-twist drive turns a wide twist range through its inside", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  const double start = 1.05;
+
+  for (const double target : {-2.0, -2.25}) {
+    CAPTURE(target);
+
+    World world;
+    world.parameters.sleep = false;
+    const uint32_t index = addHingedCrate(world, crate);
+    JointDef def = worldSwingTwist(world, index);
+    def.cone = reflexShoulder();
+    def.drive.maxTorque = 100.0;
+    def.drive.axes[0].targetAngle = target;
+
+    for (AxisDrive& axis : def.drive.axes) {
+      axis.stiffness = 100.0;
+      axis.damping = 5.0;
+    }
+
+    world.bodies.rigids[index].rotation = glm::angleAxis(start, limbDown * glm::dvec3(1.0, 0.0, 0.0));
+    REQUIRE(addJoint(world, def) != 0u);
+    REQUIRE(std::abs(jointAngles(world, def).twist - start) < 1.0e-9);
+
+    double previous = start;
+    double highest = start;
+    bool crossed = false;
+
+    for (uint32_t frame = 0u; frame != 120u; ++frame) {
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+      const double twist = jointAngles(world, def).twist;
+
+      highest = std::max(highest, twist);
+      crossed = crossed || (previous > 0.0 && twist <= 0.0 && previous - twist < 1.0);
+      previous = twist;
+    }
+
+    CAPTURE(highest, previous);
+    CHECK(highest <= def.cone.twistUpper + 0.03);
+    CHECK(crossed);
+    CHECK(std::abs(previous - target) < 0.02);
   }
 }
 
@@ -1505,11 +1576,16 @@ TEST_CASE("swing-twist ranges, cones and drive targets beyond their bounds are r
   const uint32_t index = addHingedCrate(world, crate);
   const double pi = std::numbers::pi;
 
-  const auto accepts = [&](double lower, double upper, const glm::dvec2& swing, const glm::dvec3& target) {
+  const glm::dvec2 cone(0.6, 0.3);
+  const glm::dvec2 offset(0.1, 0.0);
+  const glm::dvec3 still(0.0);
+
+  const auto accepts = [&](double lower, double upper, const glm::dvec2& swing, const glm::dvec2& centre, const glm::dvec3& target) {
     JointDef def = shoulder(world, index);
     def.cone.twistLower = lower;
     def.cone.twistUpper = upper;
     def.cone.swing = swing;
+    def.cone.centre = centre;
 
     for (int axis = 0; axis != 3; ++axis) {
       def.drive.axes[axis].targetAngle = target[axis];
@@ -1525,21 +1601,22 @@ TEST_CASE("swing-twist ranges, cones and drive targets beyond their bounds are r
     return joint != 0u;
   };
 
-  const glm::dvec2 cone(0.6, 0.3);
-  const glm::dvec3 still(0.0);
-
-  CHECK(accepts(-0.99 * pi, 0.99 * pi, glm::dvec2(0.495 * pi), glm::dvec3(pi, -pi, pi)));
-  CHECK(accepts(-0.4, 0.2, cone, still));
-  CHECK_FALSE(accepts(-3.12, 0.2, cone, still));
-  CHECK_FALSE(accepts(-0.4, 3.12, cone, still));
-  CHECK_FALSE(accepts(0.2, -0.4, cone, still));
-  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(0.0, 0.3), still));
-  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(0.6, -0.3), still));
-  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(1.56, 0.3), still));
-  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(0.6, 1.56), still));
-  CHECK_FALSE(accepts(-0.4, 0.2, cone, glm::dvec3(3.2, 0.0, 0.0)));
-  CHECK_FALSE(accepts(-0.4, 0.2, cone, glm::dvec3(0.0, -3.2, 0.0)));
-  CHECK_FALSE(accepts(-0.4, 0.2, cone, glm::dvec3(0.0, 0.0, 3.2)));
+  CHECK(accepts(-0.99 * pi, 0.99 * pi, glm::dvec2(0.99 * pi), glm::dvec2(0.0), glm::dvec3(pi, -pi, pi)));
+  CHECK(accepts(-0.4, 0.2, cone, offset, still));
+  CHECK(accepts(-2.3, 1.1, glm::dvec2(1.85, 1.86), glm::dvec2(0.0), still));
+  CHECK(accepts(-0.6, 0.6, glm::dvec2(1.3, 0.65), glm::dvec2(-0.8, 0.15), still));
+  CHECK_FALSE(accepts(-3.12, 0.2, cone, offset, still));
+  CHECK_FALSE(accepts(-0.4, 3.12, cone, offset, still));
+  CHECK_FALSE(accepts(0.2, -0.4, cone, offset, still));
+  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(0.0, 0.3), offset, still));
+  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(0.6, -0.3), offset, still));
+  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(3.12, 0.3), glm::dvec2(0.0), still));
+  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(0.6, 3.12), glm::dvec2(0.0), still));
+  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(1.85, 1.86), glm::dvec2(1.0, 0.8), still));
+  CHECK_FALSE(accepts(-0.4, 0.2, glm::dvec2(0.99 * pi, 0.3), offset, still));
+  CHECK_FALSE(accepts(-0.4, 0.2, cone, offset, glm::dvec3(3.2, 0.0, 0.0)));
+  CHECK_FALSE(accepts(-0.4, 0.2, cone, offset, glm::dvec3(0.0, -3.2, 0.0)));
+  CHECK_FALSE(accepts(-0.4, 0.2, cone, offset, glm::dvec3(0.0, 0.0, 3.2)));
   CHECK(world.joints.empty());
 
   JointDef unlimited = shoulder(world, index);

@@ -3,6 +3,7 @@
 #include <talus/dynamics/sleep/sleep.h>
 #include <talus/dynamics/tiers/tiers.h>
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 #include <vector>
@@ -59,7 +60,7 @@ bool validDrive(const JointDrive& drive) {
 }
 
 bool validHalfAngle(double angle) {
-  return angle > 0.0 && withinTurn(angle, 0.495);
+  return angle > 0.0 && withinTurn(angle, 0.99);
 }
 
 bool validCone(const ConeLimit& cone) {
@@ -68,7 +69,8 @@ bool validCone(const ConeLimit& cone) {
     && (!cone.enabled
         || (cone.twistLower <= cone.twistUpper && withinTurn(cone.twistLower, 0.99)
             && withinTurn(cone.twistUpper, 0.99) && validHalfAngle(cone.swing.x)
-            && validHalfAngle(cone.swing.y)));
+            && validHalfAngle(cone.swing.y)
+            && withinTurn(glm::length(cone.centre) + std::max(cone.swing.x, cone.swing.y), 0.99)));
 }
 
 bool validDef(const JointDef& def) {

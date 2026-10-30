@@ -59,6 +59,9 @@ template <typename Real>
 struct JointDriveRow {
   JointSoftness<Real> softness;
   JointVec<Real> axis{Real(0)};
+  Real stiffness = Real(0);
+  Real damping = Real(0);
+  Real step = Real(0);
   Real mass = Real(0);
   Real target = Real(0);
   Real speed = Real(0);
@@ -93,7 +96,6 @@ struct JointRow {
   JointPair<Real> coneHalf{Real(0)};
   JointVec<Real> coneAxis{Real(0)};
   Real coneImpulse = Real(0);
-  JointQuat<Real> target{Real(1), Real(0), Real(0), Real(0)};
   std::array<JointDriveRow<Real>, 3> drives;
   JointVec<Real> feedForward{Real(0)};
 };
@@ -278,35 +280,6 @@ JointSwing<Real> jointSwingTwist(const JointQuat<Real>& rotation) {
 }
 
 template <typename Real>
-JointQuat<Real> jointSwingTwistRotation(Real twist, const JointPair<Real>& swing) {
-  const Real half = Real(0.5) * twist;
-  const JointQuat<Real> turn(std::cos(half), std::sin(half), Real(0), Real(0));
-  const Real angle = glm::length(swing);
-
-  if (angle < static_cast<Real>(jointSmall)) {
-    return glm::normalize(JointQuat<Real>(Real(1), Real(0), Real(0.5) * swing.x, Real(0.5) * swing.y)) * turn;
-  }
-
-  const JointPair<Real> axis = swing / angle;
-  const Real sine = std::sin(Real(0.5) * angle);
-
-  return JointQuat<Real>(std::cos(Real(0.5) * angle), Real(0), axis.x * sine, axis.y * sine) * turn;
-}
-
-template <typename Real>
-JointVec<Real> jointRotationVector(const JointQuat<Real>& rotation) {
-  const JointQuat<Real> q = rotation.w < Real(0) ? -rotation : rotation;
-  const JointVec<Real> v(q.x, q.y, q.z);
-  const Real sine = glm::length(v);
-
-  if (sine < static_cast<Real>(jointSmall)) {
-    return Real(2) * v;
-  }
-
-  return (Real(2) * std::atan2(sine, q.w) / sine) * v;
-}
-
-template <typename Real>
 JointVec<Real> jointTwistAxis(const JointSwing<Real>& angles) {
   if (angles.cosine < static_cast<Real>(jointSmall)) {
     return JointVec<Real>(Real(1), Real(0), Real(0));
@@ -417,19 +390,24 @@ void prepareJointDrive(
   drive.active = (axisDrive.stiffness > 0.0 || axisDrive.damping > 0.0) && mass > Real(0);
 
   if (drive.active) {
+    drive.stiffness = static_cast<Real>(axisDrive.stiffness);
+    drive.damping = static_cast<Real>(axisDrive.damping);
+    drive.step = h;
     drive.mass = mass;
-    drive.softness = jointDriveSoftness(
-      static_cast<Real>(axisDrive.stiffness),
-      static_cast<Real>(axisDrive.damping),
-      drive.mass,
-      h
-    );
+    drive.softness = jointDriveSoftness(drive.stiffness, drive.damping, drive.mass, h);
     drive.speed = static_cast<Real>(axisDrive.targetVelocity);
     drive.lower = static_cast<Real>(axisDrive.minTorque * step);
     drive.upper = static_cast<Real>(axisDrive.maxTorque * step);
     drive.cap = static_cast<Real>(jointDrive.maxTorque * step);
     drive.impulse = static_cast<Real>(stored * step);
   }
+}
+
+template <typename Real>
+void aimJointDrive(JointDriveRow<Real>& drive, const JointMat<Real>& invI, const JointVec<Real>& axis) {
+  drive.axis = axis;
+  drive.mass = jointAngularMass(invI, axis);
+  drive.softness = jointDriveSoftness(drive.stiffness, drive.damping, drive.mass, drive.step);
 }
 
 template <typename Real>
@@ -562,34 +540,37 @@ Real jointConeGap(JointRow<Real>& row, const JointQuat<Real>& frameA, const Join
 }
 
 template <typename Real>
+std::array<JointVec<Real>, 3> jointSwingTwistAxes(const JointQuat<Real>& frameA, const JointSwing<Real>& angles) {
+  return {
+    frameA * jointTwistAxis(angles),
+    frameA * jointSwingAxis(angles, JointPair<Real>(Real(1), Real(0))),
+    frameA * jointSwingAxis(angles, JointPair<Real>(Real(0), Real(1)))
+  };
+}
+
+template <typename Real>
 void prepareSwingTwistRows(const Joint& joint, Real h, JointRow<Real>& row) {
   const JointDef& def = joint.def;
   const JointImpulses& impulses = joint.impulses;
-  const std::array<AxisDrive, 3>& axes = def.drive.axes;
   const double step = static_cast<double>(h);
   const JointMat<Real> invI = row.a.invI + row.b.invI;
-  const std::array<JointVec<Real>, 3> frameAxes{
-    row.b.frame * JointVec<Real>(Real(1), Real(0), Real(0)),
-    row.b.frame * JointVec<Real>(Real(0), Real(1), Real(0)),
-    row.b.frame * JointVec<Real>(Real(0), Real(0), Real(1))
-  };
+  const JointSwing<Real> angles = jointSwingTwist(jointRelative(row.a.frame, row.b.frame));
+  const std::array<JointVec<Real>, 3> directions = jointSwingTwistAxes(row.a.frame, angles);
 
-  row.target = JointQuat<Real>(
-    jointSwingTwistRotation(axes[0].targetAngle, glm::dvec2(axes[1].targetAngle, axes[2].targetAngle))
-  );
-
-  for (size_t index = 0u; index != frameAxes.size(); ++index) {
-    const JointVec<Real>& axis = frameAxes[index];
+  for (size_t index = 0u; index != directions.size(); ++index) {
+    const AxisDrive& axisDrive = def.drive.axes[index];
+    const JointVec<Real>& direction = directions[index];
 
     prepareJointDrive(
-      axes[index],
+      axisDrive,
       def.drive,
       impulses.drive[static_cast<glm::length_t>(index)],
-      axis,
-      jointAngularMass(invI, axis),
+      direction,
+      jointAngularMass(invI, direction),
       h,
       row.drives[index]
     );
+    row.drives[index].target = static_cast<Real>(axisDrive.targetAngle);
   }
 
   row.feedForward = JointVec<Real>(def.drive.feedForward * step);
@@ -603,10 +584,7 @@ void prepareSwingTwistRows(const Joint& joint, Real h, JointRow<Real>& row) {
     row.lowerImpulse = static_cast<Real>(impulses.twistLower * step);
     row.upperImpulse = static_cast<Real>(impulses.twistUpper * step);
     row.coneImpulse = static_cast<Real>(impulses.cone * step);
-
-    const JointSwing<Real> angles = jointSwingTwist(jointRelative(row.a.frame, row.b.frame));
-
-    row.axis = row.a.frame * jointTwistAxis(angles);
+    row.axis = directions[0];
     (void)jointConeGap(row, row.a.frame, angles);
   }
 }
@@ -624,30 +602,33 @@ JointVec<Real> swingTwistWarmImpulse(const JointRow<Real>& row) {
 }
 
 template <typename Real>
-void solveSwingTwistDrive(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>& b, const JointVec<Real>& error) {
+void solveSwingTwistDrive(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>& b, const JointSwing<Real>& angles) {
   const JointMat<Real>& iA = row.a.invI;
   const JointMat<Real>& iB = row.b.invI;
+  const std::array<Real, 3> coordinates{angles.twist, angles.swing.x, angles.swing.y};
   Real cap = Real(0);
-  Real total = Real(0);
+  JointVec<Real> torque(Real(0));
 
-  for (JointDriveRow<Real>& drive : row.drives) {
+  for (size_t index = 0u; index != row.drives.size(); ++index) {
+    JointDriveRow<Real>& drive = row.drives[index];
+
     if (!drive.active) {
       continue;
     }
 
-    const Real impulse = jointDriveImpulse(drive, glm::dot(error, drive.axis), glm::dot(b.w - a.w, drive.axis));
+    const Real impulse = jointDriveImpulse(drive, coordinates[index], glm::dot(b.w - a.w, drive.axis));
 
     a.w -= impulse * (iA * drive.axis);
     b.w += impulse * (iB * drive.axis);
     cap = drive.cap;
-    total += drive.impulse * drive.impulse;
+    torque += drive.impulse * drive.axis;
   }
 
-  if (total <= cap * cap) {
+  if (glm::dot(torque, torque) <= cap * cap) {
     return;
   }
 
-  const Real scale = cap / std::sqrt(total);
+  const Real scale = cap / glm::length(torque);
 
   for (JointDriveRow<Real>& drive : row.drives) {
     if (!drive.active) {
@@ -668,20 +649,24 @@ template <typename Real>
 void solveSwingTwistRows(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>& b, Real invH, bool useBias) {
   const JointMat<Real>& iA = row.a.invI;
   const JointMat<Real>& iB = row.b.invI;
+  const JointMat<Real> invI = iA + iB;
   const JointQuat<Real> frameA = a.dq * row.a.frame;
-  const JointQuat<Real> frameB = b.dq * row.b.frame;
-  const JointQuat<Real> relative = jointRelative(frameA, frameB);
+  const JointSwing<Real> angles = jointSwingTwist(jointRelative(frameA, b.dq * row.b.frame));
+  const std::array<JointVec<Real>, 3> directions = jointSwingTwistAxes(frameA, angles);
 
-  solveSwingTwistDrive(row, a, b, frameB * jointRotationVector(glm::conjugate(row.target) * relative));
+  for (size_t index = 0u; index != directions.size(); ++index) {
+    if (row.drives[index].active) {
+      aimJointDrive(row.drives[index], invI, directions[index]);
+    }
+  }
+
+  solveSwingTwistDrive(row, a, b, angles);
 
   if (!row.limit) {
     return;
   }
 
-  const JointSwing<Real> angles = jointSwingTwist(relative);
-  const JointMat<Real> invI = iA + iB;
-
-  row.axis = frameA * jointTwistAxis(angles);
+  row.axis = directions[0];
 
   const Real twistMass = jointAngularMass(invI, row.axis);
   const JointVec<Real> turnA = iA * row.axis;
