@@ -7,7 +7,7 @@
 #include <talus/dynamics/compound/compound.h>
 #include <talus/dynamics/contact/contact.h>
 #include <talus/dynamics/edits/edits.h>
-#include <talus/dynamics/joints/jointedits.h>
+#include <talus/dynamics/joints/jointrecords.h>
 #include <talus/dynamics/manifoldcache/manifoldcache.h>
 #include <talus/dynamics/scheduler/stopwatch.h>
 #include <talus/dynamics/tiers/tiers.h>
@@ -2228,11 +2228,7 @@ void DestructionWorld::splitAnchored(dynamics::World& world, uint32_t at, Destru
   const dynamics::JointFrame pose =
     jointed ? poseOf(world, body) : dynamics::JointFrame{};
 
-  if (emptied) {
-    if (!dynamics::removeBody(world, body)) {
-      throw std::logic_error("A destruction body could not be removed");
-    }
-  } else if (!dynamics::removeCompoundChildren(world, body, keys)) {
+  if (!emptied && !dynamics::removeCompoundChildren(world, body, keys)) {
     throw std::logic_error("A destruction body refused to give up its chunks");
   }
 
@@ -2281,6 +2277,10 @@ void DestructionWorld::splitAnchored(dynamics::World& world, uint32_t at, Destru
 
   if (jointed) {
     rebaseLeaving(world, body, pose, emptied, fresh.size());
+  }
+
+  if (emptied && !dynamics::removeBody(world, body)) {
+    throw std::logic_error("A destruction body could not be removed");
   }
 
   forget(at, locals);

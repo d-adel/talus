@@ -13,6 +13,7 @@
 #include <talus/dynamics/compound/compound.h>
 #include <talus/dynamics/edits/edits.h>
 #include <talus/dynamics/joints/jointedits.h>
+#include <talus/dynamics/joints/jointrecords.h>
 #include <talus/dynamics/pipeline/pipeline.h>
 #include <talus/dynamics/sleep/sleep.h>
 #include <talus/dynamics/softstep/simdwidth.h>
@@ -38,11 +39,19 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace {
 
 using namespace talus::dynamics;
+
+template<typename Set>
+concept recordsEditable =
+  requires(Set& set, const JointDef& def) { set.add(def); }
+  || requires(Set& set, uint32_t id) { set.remove(id); }
+  || requires(Set& set, uint32_t id) { set.rebind(id, id, id); };
 
 talus::field::SampledSdf crateField() {
   const glm::vec3 reach(0.09f);
@@ -411,6 +420,10 @@ TEST_CASE("invalid joint definitions are rejected", "[dynamics][joints]") {
   def.hertz = 0.0;
   rejects(def);
 
+  def = between(a, b);
+  def.kind = static_cast<JointKind>(4);
+  rejects(def);
+
   CHECK(addJoint(world, between(a, b)) == 1u);
   CHECK(addJoint(world, between(noBody, b)) == 2u);
 }
@@ -445,6 +458,142 @@ TEST_CASE(
   CHECK_FALSE(setSpringTarget(world, joint, target));
 }
 
+TEST_CASE(
+  "drive torque bounds and caps must allow zero torque",
+  "[dynamics][joints]"
+) {
+  const talus::field::SampledSdf crate = crateField();
+  const double inf = jointInfinity;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const auto hinge = [](uint32_t body) {
+    JointDef def = between(noBody, body);
+    def.kind = JointKind::Hinge;
+    def.frameA.position = glm::dvec3(0.0, 1.2, 0.0);
+    def.frameB.position = glm::dvec3(0.0, 0.2, 0.0);
+    def.drive.axes[0].targetAngle = 0.5;
+    def.drive.axes[0].stiffness = 100.0;
+    def.drive.axes[0].damping = 1.0;
+
+    return def;
+  };
+  const auto accepts = [&](double lower, double upper, double cap) {
+    World world;
+    const uint32_t box = addCrate(world, crate, glm::dvec3(0.0, 1.0, 0.0));
+    JointDef def = hinge(box);
+    def.drive.axes[0].minTorque = lower;
+    def.drive.axes[0].maxTorque = upper;
+    def.drive.maxTorque = cap;
+    const uint32_t joint = addJoint(world, def);
+    const uint32_t plain = addJoint(world, hinge(box));
+    const bool set = setJointDrive(world, plain, def.drive);
+
+    CAPTURE(lower, upper, cap);
+    CHECK((joint != 0u) == set);
+
+    if (joint != 0u) {
+      for (uint32_t frame = 0u; frame != 30u; ++frame) {
+        REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+      }
+
+      CHECK(std::isfinite(glm::length(world.bodies.rigids[0].angularVelocity)));
+    }
+
+    return joint != 0u;
+  };
+
+  CHECK_FALSE(accepts(inf, inf, inf));
+  CHECK_FALSE(accepts(-inf, -inf, inf));
+  CHECK_FALSE(accepts(1.0, 2.0, inf));
+  CHECK_FALSE(accepts(1.0, inf, inf));
+  CHECK_FALSE(accepts(-2.0, -1.0, inf));
+  CHECK_FALSE(accepts(-inf, -1.0, inf));
+  CHECK_FALSE(accepts(nan, 1.0, inf));
+  CHECK_FALSE(accepts(-1.0, nan, inf));
+  CHECK_FALSE(accepts(-inf, inf, -inf));
+  CHECK_FALSE(accepts(-inf, inf, -1.0));
+  CHECK_FALSE(accepts(-inf, inf, nan));
+
+  CHECK(accepts(-inf, inf, inf));
+  CHECK(accepts(0.0, 0.0, inf));
+  CHECK(accepts(-5.0, 0.0, inf));
+  CHECK(accepts(0.0, 5.0, inf));
+  CHECK(accepts(-inf, 0.0, inf));
+  CHECK(accepts(0.0, inf, inf));
+  CHECK(accepts(-5.0, 2.0, 0.0));
+  CHECK(accepts(-5.0, 2.0, 3.0));
+
+  World world;
+  const uint32_t a = addCrate(world, crate, glm::dvec3(0.0, 1.0, 0.0));
+  const auto springAccepts = [&](double force, double torque) {
+    JointDef def = between(noBody, a);
+    def.kind = JointKind::Spring;
+    def.spring.maxForce = force;
+    def.spring.maxTorque = torque;
+    const uint32_t joint = addJoint(world, def);
+
+    return joint != 0u && removeJoint(world, joint);
+  };
+
+  CHECK_FALSE(springAccepts(-inf, inf));
+  CHECK_FALSE(springAccepts(inf, -inf));
+  CHECK_FALSE(springAccepts(nan, inf));
+  CHECK(springAccepts(inf, inf));
+  CHECK(springAccepts(0.0, 0.0));
+}
+
+TEST_CASE(
+  "hosts read joint records without changing them",
+  "[dynamics][joints]"
+) {
+  using Found = decltype(std::declval<World&>().joints.find(1u));
+  using All = decltype(std::declval<World&>().joints.all());
+
+  CHECK(std::is_same_v<Found, const Joint*>);
+  CHECK(std::is_same_v<All, std::span<const Joint>>);
+  CHECK_FALSE(recordsEditable<JointSet>);
+
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  const uint32_t a = addCrate(world, crate, glm::dvec3(0.0, 1.0, 0.0));
+  JointDef def = between(noBody, a);
+  def.kind = JointKind::Hinge;
+  def.frameB.rotation = glm::dquat(2.0, 0.0, 0.0, 0.0);
+  const uint32_t joint = addJoint(world, def);
+  REQUIRE(joint != 0u);
+
+  const std::optional<JointDef> stored = jointDef(world, joint);
+
+  REQUIRE(stored.has_value());
+  CHECK(stored->kind == JointKind::Hinge);
+  CHECK(stored->bodyB == a);
+  CHECK(stored->frameB.rotation.w == 1.0);
+  CHECK_FALSE(jointDef(world, joint + 1u).has_value());
+}
+
+TEST_CASE(
+  "removing a joint whose record holds no exclusion keeps the others",
+  "[dynamics][joints]"
+) {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  const uint32_t a = addCrate(world, crate, glm::dvec3(0.0, 1.0, 0.0));
+  const uint32_t b = addCrate(world, crate, glm::dvec3(0.2, 1.0, 0.0));
+  const uint32_t c = addCrate(world, crate, glm::dvec3(0.4, 1.0, 0.0));
+  JointDef touching = between(a, b);
+  touching.collideConnected = true;
+  const uint32_t joint = addJoint(world, touching);
+  const uint32_t held = addJoint(world, between(b, c));
+
+  REQUIRE(joint != 0u);
+  REQUIRE(held != 0u);
+  JointRecords::find(world.joints, joint)->def.collideConnected = false;
+  CHECK(removeJoint(world, joint));
+  CHECK_FALSE(world.joints.excludes(a, b));
+  CHECK(world.joints.excludes(b, c));
+  CHECK(removeJoint(world, held));
+  CHECK_FALSE(world.joints.excludes(b, c));
+}
+
 TEST_CASE("editing a joint wakes both bodies", "[dynamics][joints]") {
   const talus::field::SampledSdf crate = crateField();
   World world;
@@ -472,10 +621,7 @@ TEST_CASE("editing a joint wakes both bodies", "[dynamics][joints]") {
   CHECK_FALSE(world.bodies.rigids[1].asleep);
 }
 
-TEST_CASE(
-  "a removed body's joints disappear at the next step",
-  "[dynamics][joints]"
-) {
+TEST_CASE("a removed body's joints disappear at once", "[dynamics][joints]") {
   const talus::field::SampledSdf crate = crateField();
   World world;
   const uint32_t a = addCrate(world, crate, glm::dvec3(0.0, 1.0, 0.0));
@@ -484,14 +630,129 @@ TEST_CASE(
   REQUIRE(joint != 0u);
 
   CHECK(removeBody(world, a));
-  CHECK(jointReport(world, joint).has_value());
-
-  const StepReport report = step(world);
-
   CHECK_FALSE(jointReport(world, joint).has_value());
   CHECK(world.joints.empty());
   CHECK_FALSE(world.joints.excludes(a, b));
+
+  const StepReport report = step(world);
+
+  CHECK(world.joints.empty());
   CHECK_FALSE(report.nonFinite);
+}
+
+TEST_CASE(
+  "removing several bodies removes their joints and keeps the others",
+  "[dynamics][joints]"
+) {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  std::vector<uint32_t> ids;
+
+  for (uint32_t index = 0u; index != 5u; ++index) {
+    ids.push_back(addCrate(
+      world,
+      crate,
+      glm::dvec3(0.2 * static_cast<double>(index), 1.0, 0.0)
+    ));
+  }
+
+  for (uint32_t index = 0u; index + 1u != ids.size(); ++index) {
+    REQUIRE(addJoint(world, between(ids[index], ids[index + 1u])) != 0u);
+  }
+
+  const uint32_t pinned = addJoint(world, between(noBody, ids[4]));
+  const uint32_t across = addJoint(world, between(ids[0], ids[2]));
+  const std::array<uint32_t, 2> leaving{ids[1], ids[3]};
+
+  REQUIRE(removeBodies(world, leaving) == 2u);
+  REQUIRE(world.joints.all().size() == 2u);
+  CHECK(world.joints.all()[0].id == pinned);
+  CHECK(world.joints.all()[1].id == across);
+  CHECK_FALSE(world.joints.excludes(ids[0], ids[1]));
+  CHECK_FALSE(world.joints.excludes(ids[3], ids[4]));
+  CHECK(world.joints.excludes(ids[0], ids[2]));
+  CHECK_FALSE(talus::dynamics::step(world).nonFinite);
+  CHECK(jointReport(world, pinned).has_value());
+  CHECK(jointReport(world, across).has_value());
+}
+
+TEST_CASE(
+  "removing a holder wakes the box that hangs from it",
+  "[dynamics][joints]"
+) {
+  const talus::field::SampledSdf crate = crateField();
+  const double gravity = std::abs(IntegrationParameters{}.gravity.y);
+
+  for (const double holderMass : {0.0, 2.0}) {
+    for (const bool batch : {false, true}) {
+      World world;
+      const uint32_t holderIndex = addRigidBox(
+        world.bodies,
+        crate,
+        glm::dvec3(0.05),
+        holderMass,
+        glm::dvec3(0.0, 2.0, 0.0),
+        glm::dvec3(0.0),
+        0.5,
+        3u
+      );
+      const uint32_t boxIndex = addRigidBox(
+        world.bodies,
+        crate,
+        glm::dvec3(0.05),
+        1.0,
+        glm::dvec3(0.0, 1.5, 0.0),
+        glm::dvec3(0.0),
+        0.5,
+        3u
+      );
+      const uint32_t holder = world.bodies.rigids[holderIndex].id;
+      const uint32_t box = world.bodies.rigids[boxIndex].id;
+      const auto boxBody = [&]() -> const RigidBody& {
+        return world.bodies.rigids[findBody(world.bodies, box)->index];
+      };
+
+      if (holderMass > 0.0) {
+        JointDef top = between(noBody, holder);
+        top.frameA.position = glm::dvec3(0.0, 2.0, 0.0);
+        REQUIRE(addJoint(world, top) != 0u);
+      }
+
+      JointDef hang = between(holder, box);
+      hang.frameA.position = glm::dvec3(0.0, -0.25, 0.0);
+      hang.frameB.position = glm::dvec3(0.0, 0.25, 0.0);
+      REQUIRE(addJoint(world, hang) != 0u);
+
+      for (uint32_t frame = 0u; frame != 600u && !boxBody().asleep; ++frame) {
+        (void)talus::dynamics::step(world);
+      }
+
+      REQUIRE(boxBody().asleep);
+
+      const double start = boxBody().position.y;
+      const std::array<uint32_t, 1> gone{holder};
+
+      if (batch) {
+        REQUIRE(removeBodies(world, gone) == 1u);
+      } else {
+        REQUIRE(removeBody(world, holder));
+      }
+
+      CHECK_FALSE(boxBody().asleep);
+
+      const uint32_t steps = 10u;
+      const double time = static_cast<double>(steps) * world.parameters.dt;
+
+      for (uint32_t frame = 0u; frame != steps; ++frame) {
+        REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+      }
+
+      CAPTURE(holderMass, batch, boxBody().velocity.y, boxBody().position.y);
+      CHECK(world.joints.empty());
+      CHECK(boxBody().velocity.y < -0.95 * gravity * time);
+      CHECK(start - boxBody().position.y > 0.5 * gravity * time * time);
+    }
+  }
 }
 
 TEST_CASE("a jointed chain sleeps and wakes together", "[dynamics][joints]") {
@@ -978,7 +1239,7 @@ TEST_CASE(
   def.frameA.position = glm::dvec3(0.0, -0.1, 0.0);
   def.frameB.position = glm::dvec3(0.0, 0.5, 0.0);
   JointSet joints;
-  REQUIRE(joints.add(def) == 1u);
+  REQUIRE(JointRecords::add(joints, def) == 1u);
 
   IslandStore islands;
   ManifoldCache cache;
@@ -2716,6 +2977,72 @@ TEST_CASE(
   CHECK(heavy.report.forceSaturated);
   CHECK(std::abs(glm::length(heavy.report.force) - cap) <= 0.01 * cap);
   CHECK(heavy.strongest <= 1.01 * cap);
+}
+
+TEST_CASE(
+  "a spring grip's strength changes without re-creating the joint",
+  "[dynamics][joints]"
+) {
+  const talus::field::SampledSdf crate = crateField();
+  const glm::dvec3 target(0.0, 2.0, 0.0);
+  const double tired = 20.0;
+  World world;
+  const uint32_t index = addRigidBox(
+    world.bodies,
+    crate,
+    glm::dvec3(0.05),
+    3.0,
+    target,
+    glm::dvec3(0.0),
+    0.5,
+    3u
+  );
+  const uint32_t joint =
+    addJoint(world, worldSpring(world.bodies.rigids[index].id, target));
+  REQUIRE(joint != 0u);
+
+  for (uint32_t frame = 0u; frame != 60u; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+  }
+
+  REQUIRE_FALSE(jointReport(world, joint)->forceSaturated);
+  REQUIRE(world.bodies.rigids[index].position.y > target.y - 0.02);
+
+  SpringSettings weaker = jointDef(world, joint)->spring;
+  weaker.maxForce = tired;
+  SpringSettings bad = weaker;
+  bad.linearStiffness = -1.0;
+  CHECK_FALSE(setSpringSettings(world, joint, bad));
+  bad = weaker;
+  bad.angularDamping = std::numeric_limits<double>::quiet_NaN();
+  CHECK_FALSE(setSpringSettings(world, joint, bad));
+  bad = weaker;
+  bad.maxForce = -jointInfinity;
+  CHECK_FALSE(setSpringSettings(world, joint, bad));
+  bad = weaker;
+  bad.target.rotation = glm::dquat(0.0, 0.0, 0.0, 0.0);
+  CHECK_FALSE(setSpringSettings(world, joint, bad));
+  CHECK_FALSE(setSpringSettings(world, joint + 1u, weaker));
+  CHECK(jointDef(world, joint)->spring.maxForce == 50.0);
+
+  world.bodies.rigids[index].asleep = true;
+  weaker.target.rotation = glm::dquat(2.0, 0.0, 0.0, 0.0);
+  REQUIRE(setSpringSettings(world, joint, weaker));
+  CHECK_FALSE(world.bodies.rigids[index].asleep);
+  CHECK(jointDef(world, joint)->spring.maxForce == tired);
+  CHECK(jointDef(world, joint)->spring.target.position == target);
+  CHECK(jointDef(world, joint)->spring.target.rotation.w == 1.0);
+
+  for (uint32_t frame = 0u; frame != 60u; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+  }
+
+  const JointReport report = *jointReport(world, joint);
+
+  CAPTURE(world.bodies.rigids[index].position.y, glm::length(report.force));
+  CHECK(report.forceSaturated);
+  CHECK(std::abs(glm::length(report.force) - tired) <= 0.01 * tired);
+  CHECK(world.bodies.rigids[index].position.y < target.y - 0.5);
 }
 
 TEST_CASE(

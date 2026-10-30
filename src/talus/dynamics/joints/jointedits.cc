@@ -1,5 +1,6 @@
 #include <talus/dynamics/joints/jointedits.h>
 
+#include <talus/dynamics/joints/jointrecords.h>
 #include <talus/dynamics/sleep/sleep.h>
 #include <talus/dynamics/tiers/tiers.h>
 
@@ -49,8 +50,7 @@ bool withinTurn(double angle, double reach) {
 bool validAxis(const AxisDrive& axis) {
   return withinTurn(axis.targetAngle, 1.0) && finite(axis.targetVelocity)
          && validGain(axis.stiffness) && validGain(axis.damping)
-         && !std::isnan(axis.minTorque) && !std::isnan(axis.maxTorque)
-         && axis.minTorque <= axis.maxTorque;
+         && axis.minTorque <= 0.0 && axis.maxTorque >= 0.0;
 }
 
 bool validDrive(const JointDrive& drive) {
@@ -80,18 +80,20 @@ bool validCone(const ConeLimit& cone) {
             && withinTurn(glm::length(cone.centre) + std::max(cone.swing.x, cone.swing.y), swingReach)));
 }
 
-bool validDef(const JointDef& def) {
-  const SpringSettings& spring = def.spring;
+bool validSpring(const SpringSettings& spring) {
+  return validFrame(spring.target) && validGain(spring.linearStiffness)
+         && validGain(spring.linearDamping) && validCap(spring.maxForce)
+         && validGain(spring.angularStiffness)
+         && validGain(spring.angularDamping) && validCap(spring.maxTorque);
+}
 
-  return validFrame(def.frameA) && validFrame(def.frameB) && validFrame(spring.target)
+bool validDef(const JointDef& def) {
+  return def.kind <= JointKind::Spring && validFrame(def.frameA) && validFrame(def.frameB)
     && finite(def.hertz) && def.hertz > 0.0 && finite(def.dampingRatio)
     && def.dampingRatio >= 0.0 && finite(def.hinge.lower) && finite(def.hinge.upper)
     && (!def.hinge.enabled
         || (def.hinge.lower <= def.hinge.upper && withinTurn(def.hinge.lower, 0.99) && withinTurn(def.hinge.upper, 0.99)))
-    && validCone(def.cone) && validDrive(def.drive) && validGain(spring.linearStiffness)
-    && validGain(spring.linearDamping) && validCap(spring.maxForce)
-    && validGain(spring.angularStiffness) && validGain(spring.angularDamping)
-    && validCap(spring.maxTorque);
+    && validCone(def.cone) && validDrive(def.drive) && validSpring(def.spring);
 }
 
 JointFrame normalised(const JointFrame& frame) {
@@ -116,6 +118,16 @@ void wakeJointBodies(World& world, const JointDef& def) {
     if (const std::optional<BodyRef> ref = findBody(world.bodies, id)) {
       wakeBody(world.bodies, *ref);
     }
+  }
+}
+
+void dropJoint(World& world, uint32_t joint, const JointDef& def) {
+  wakeJointBodies(world, def);
+  JointRecords::remove(world.joints, joint);
+
+  if (excludesPair(def) && !world.joints.excludes(def.bodyA, def.bodyB)) {
+    world.broadPhase.markMoved(def.bodyA);
+    world.broadPhase.markMoved(def.bodyB);
   }
 }
 
@@ -188,7 +200,7 @@ uint32_t addJoint(World& world, const JointDef& def) {
     world.manifolds.forgetPair(stored.bodyA, stored.bodyB);
   }
 
-  return world.joints.add(stored);
+  return JointRecords::add(world.joints, stored);
 }
 
 bool removeJoint(World& world, uint32_t joint) {
@@ -200,24 +212,18 @@ bool removeJoint(World& world, uint32_t joint) {
 
   const JointDef def = found->def;
 
-  wakeJointBodies(world, def);
-  world.joints.remove(joint);
+  dropJoint(world, joint, def);
 
   if (def.bodyA != noBody) {
     world.islandStore.markRemoved(def.bodyB);
     world.islandStore.requestSplit(def.bodyB);
   }
 
-  if (excludesPair(def) && !world.joints.excludes(def.bodyA, def.bodyB)) {
-    world.broadPhase.markMoved(def.bodyA);
-    world.broadPhase.markMoved(def.bodyB);
-  }
-
   return true;
 }
 
 bool setJointDrive(World& world, uint32_t joint, const JointDrive& drive) {
-  Joint* found = world.joints.find(joint);
+  Joint* found = JointRecords::find(world.joints, joint);
 
   if (found == nullptr || !validDrive(drive)) {
     return false;
@@ -230,13 +236,31 @@ bool setJointDrive(World& world, uint32_t joint, const JointDrive& drive) {
 }
 
 bool setSpringTarget(World& world, uint32_t joint, const JointFrame& target) {
-  Joint* found = world.joints.find(joint);
+  Joint* found = JointRecords::find(world.joints, joint);
 
   if (found == nullptr || !validFrame(target)) {
     return false;
   }
 
   found->def.spring.target = normalised(target);
+  wakeJointBodies(world, found->def);
+
+  return true;
+}
+
+bool setSpringSettings(
+  World& world,
+  uint32_t joint,
+  const SpringSettings& spring
+) {
+  Joint* found = JointRecords::find(world.joints, joint);
+
+  if (found == nullptr || !validSpring(spring)) {
+    return false;
+  }
+
+  found->def.spring = spring;
+  found->def.spring.target = normalised(spring.target);
   wakeJointBodies(world, found->def);
 
   return true;
@@ -261,7 +285,7 @@ void rebaseJoints(
 
   uint32_t split = noBody;
 
-  for (Joint& joint : world.joints.all()) {
+  for (Joint& joint : JointRecords::all(world.joints)) {
     const bool onA = joint.def.bodyA == oldBody;
 
     if (!onA && joint.def.bodyB != oldBody) {
@@ -278,7 +302,8 @@ void rebaseJoints(
       const JointDef before = joint.def;
       const uint32_t other = onA ? before.bodyB : before.bodyA;
 
-      world.joints.rebind(
+      JointRecords::rebind(
+        world.joints,
         joint.id,
         onA ? piece.body : other,
         onA ? other : piece.body
@@ -308,6 +333,16 @@ void rebaseJoints(
   }
 }
 
+std::optional<JointDef> jointDef(const World& world, uint32_t joint) {
+  const Joint* found = world.joints.find(joint);
+
+  if (found == nullptr) {
+    return std::nullopt;
+  }
+
+  return found->def;
+}
+
 std::optional<JointReport> jointReport(const World& world, uint32_t joint) {
   const Joint* found = world.joints.find(joint);
 
@@ -318,24 +353,27 @@ std::optional<JointReport> jointReport(const World& world, uint32_t joint) {
   return found->report;
 }
 
-void pruneJoints(World& world) {
-  if (world.joints.empty()) {
+void removeBodyJoints(World& world, std::span<const uint32_t> bodies) {
+  if (world.joints.empty() || bodies.empty()) {
     return;
   }
 
+  std::vector<uint32_t> gone(bodies.begin(), bodies.end());
   std::vector<uint32_t> dead;
 
-  for (const Joint& joint : world.joints.all()) {
-    const bool aLive =
-      joint.def.bodyA == noBody || resolves(world, joint.def.bodyA);
+  std::sort(gone.begin(), gone.end());
 
-    if (!aLive || !resolves(world, joint.def.bodyB)) {
+  for (const Joint& joint : world.joints.all()) {
+    if (std::binary_search(gone.begin(), gone.end(), joint.def.bodyA)
+        || std::binary_search(gone.begin(), gone.end(), joint.def.bodyB)) {
       dead.push_back(joint.id);
     }
   }
 
   for (const uint32_t id : dead) {
-    world.joints.remove(id);
+    const JointDef def = world.joints.find(id)->def;
+
+    dropJoint(world, id, def);
   }
 }
 

@@ -696,12 +696,22 @@ void moveLikeRigid(LatticeBody& lattice, const RestBody& rest, const RigidBody& 
   }
 }
 
-bool jointEnd(const World& world, uint32_t id) {
-  const std::span<const Joint> joints = world.joints.all();
+std::vector<uint32_t> jointEnds(const JointSet& joints) {
+  std::vector<uint32_t> ends;
 
-  return std::any_of(joints.begin(), joints.end(), [id](const Joint& joint) {
-    return joint.def.bodyA == id || joint.def.bodyB == id;
-  });
+  for (const Joint& joint : joints.all()) {
+    ends.push_back(joint.def.bodyA);
+    ends.push_back(joint.def.bodyB);
+  }
+
+  std::sort(ends.begin(), ends.end());
+  ends.erase(std::unique(ends.begin(), ends.end()), ends.end());
+
+  return ends;
+}
+
+bool jointEnd(std::span<const uint32_t> ends, uint32_t id) {
+  return std::binary_search(ends.begin(), ends.end(), id);
 }
 
 [[nodiscard]] bool toLattice(World& world, uint32_t id) {
@@ -969,6 +979,7 @@ void switchTiers(World& world, StepReport& report) {
 
     return *recorded;
   };
+  const std::vector<uint32_t> ends = jointEnds(world.joints);
 
   for (SwitchableBody& body : world.bodies.switchables) {
     const std::optional<BodyRef> ref = findBody(world.bodies, body.id);
@@ -977,7 +988,7 @@ void switchTiers(World& world, StepReport& report) {
       continue;
     }
 
-    if (body.tier == Tier::Rigid && jointEnd(world, body.id)) {
+    if (body.tier == Tier::Rigid && jointEnd(ends, body.id)) {
       body.frames = 0u;
     } else if (body.tier == Tier::Rigid) {
       screenRigid(world, body, ref->index, recordedNow());
@@ -1039,7 +1050,7 @@ void switchTiers(World& world, StepReport& report) {
 }
 
 bool promote(World& world, uint32_t id) {
-  if (jointEnd(world, id)) {
+  if (jointEnd(jointEnds(world.joints), id)) {
     return false;
   }
 

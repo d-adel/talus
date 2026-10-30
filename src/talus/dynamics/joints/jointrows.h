@@ -2,6 +2,7 @@
 
 #include <talus/dynamics/bodyset/bodyset.h>
 #include <talus/dynamics/islands/islands.h>
+#include <talus/dynamics/joints/jointrecords.h>
 #include <talus/dynamics/joints/joints.h>
 
 #include <glm/glm.hpp>
@@ -1315,7 +1316,7 @@ void storeJointRows(
   std::span<const JointRow<Real>> rows,
   Real invH
 ) {
-  const std::span<Joint> all = joints.all();
+  const std::span<Joint> all = JointRecords::all(joints);
 
   for (const JointRow<Real>& row : rows) {
     Joint& joint = all[row.joint];

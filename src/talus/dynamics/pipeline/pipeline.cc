@@ -2,7 +2,6 @@
 
 #include <talus/dynamics/edits/edits.h>
 #include <talus/dynamics/events/events.h>
-#include <talus/dynamics/joints/jointedits.h>
 #include <talus/dynamics/sleep/sleep.h>
 #include <talus/dynamics/tiers/tiers.h>
 #include <talus/dynamics/broadphase/broadphase.h>
@@ -383,7 +382,6 @@ std::vector<Contact> contactsOf(
 StepReport step(World& world) {
   Stopwatch clock;
   StepReport report;
-  pruneJoints(world);
 
   if (!world.parameters.sleep) {
     wakeAll(world.bodies);

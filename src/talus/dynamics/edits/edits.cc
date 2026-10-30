@@ -1,7 +1,7 @@
 #include "edits.h"
 
 #include <talus/dynamics/compound/compound.h>
-#include <talus/dynamics/joints/jointedits.h>
+#include <talus/dynamics/joints/jointrecords.h>
 #include <talus/dynamics/sleep/sleep.h>
 #include <talus/dynamics/tiers/tiers.h>
 
@@ -331,6 +331,7 @@ bool removeBody(World& world, uint32_t id) {
   }
 
   wakeTouching(world, *ref, id);
+  removeBodyJoints(world, std::span<const uint32_t>(&id, 1u));
 
   if (ref->side == Side::Rigid) {
     world.bodies.rigids.erase(world.bodies.rigids.begin() + ref->index);
@@ -370,6 +371,8 @@ uint32_t removeBodies(World& world, std::span<const uint32_t> ids) {
   if (removed.empty()) {
     return 0u;
   }
+
+  removeBodyJoints(world, removed);
 
   std::vector<uint8_t> pairs(world.manifolds.size(), 0u);
   std::vector<Frozen> thawing;
