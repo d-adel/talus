@@ -708,25 +708,6 @@ TEST_CASE("a joint follows a mass-0 body outside the solve", "[dynamics][joints]
   CHECK(std::abs(offset.y + 0.5) < 0.01);
 }
 
-TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 and 8", "[dynamics][joints]") {
-  std::vector<uint32_t> widths{1u, 4u};
-
-  if (hasAvx2()) {
-    widths.push_back(8u);
-  }
-
-  const JointedRun serial = chainOnPile(1u, 1u);
-
-  REQUIRE(serial.hash != 0u);
-  REQUIRE(serial.loaded);
-
-  for (const uint32_t width : widths) {
-    for (const uint32_t workers : {1u, 4u, 8u}) {
-      CHECK(chainOnPile(workers, width).hash == serial.hash);
-    }
-  }
-}
-
 namespace {
 
 void addJointedPair(World& world, const talus::field::SampledSdf& crate, const glm::dvec3& at) {
@@ -734,6 +715,20 @@ void addJointedPair(World& world, const talus::field::SampledSdf& crate, const g
   const uint32_t b = addCrate(world, crate, at + glm::dvec3(0.25, 0.0, 0.0));
 
   REQUIRE(addJoint(world, anchored(a, b)) != 0u);
+}
+
+uint64_t bodyHash(uint64_t hash, const RigidBody& body) {
+  for (int axis = 0; axis != 3; ++axis) {
+    hash = mixBits(hash, body.position[axis]);
+    hash = mixBits(hash, body.velocity[axis]);
+    hash = mixBits(hash, body.angularVelocity[axis]);
+  }
+
+  for (int axis = 0; axis != 4; ++axis) {
+    hash = mixBits(hash, body.rotation[axis]);
+  }
+
+  return hash;
 }
 
 uint64_t freeBoxHash(bool besideJoint) {
@@ -752,22 +747,111 @@ uint64_t freeBoxHash(bool besideJoint) {
     (void)talus::dynamics::step(world);
   }
 
-  const RigidBody& body = world.bodies.rigids[findBody(world.bodies, box)->index];
-  uint64_t hash = 1469598103934665603ull;
+  return bodyHash(1469598103934665603ull, world.bodies.rigids[findBody(world.bodies, box)->index]);
+}
 
-  for (int axis = 0; axis != 3; ++axis) {
-    hash = mixBits(hash, body.position[axis]);
-    hash = mixBits(hash, body.velocity[axis]);
-    hash = mixBits(hash, body.angularVelocity[axis]);
+uint64_t pendulumHash(uint32_t softstepSubsteps, uint32_t jointSubsteps) {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  world.parameters.softstepSubsteps = softstepSubsteps;
+  world.parameters.jointSubsteps = jointSubsteps;
+  addFloor(world);
+  (void)addResting(world, crate, 0.0);
+
+  const glm::dvec3 pivot(3.0, 2.0, 0.0);
+  const glm::dvec3 start = pivot + glm::dvec3(0.3, -0.4, 0.0);
+  const uint32_t index = addRigidBox(world.bodies, crate, glm::dvec3(0.05), 1.0, start, glm::dvec3(0.0), 0.5, 3u);
+  JointDef def = between(noBody, world.bodies.rigids[index].id);
+  def.frameA.position = pivot;
+  def.frameB.position = pivot - start;
+  REQUIRE(addJoint(world, def) != 0u);
+
+  for (uint32_t frame = 0u; frame != 60u; ++frame) {
+    (void)talus::dynamics::step(world);
   }
 
-  for (int axis = 0; axis != 4; ++axis) {
-    hash = mixBits(hash, body.rotation[axis]);
+  return bodyHash(1469598103934665603ull, world.bodies.rigids[index]);
+}
+
+struct DeckScene {
+  uint32_t deck = 0u;
+  std::vector<uint32_t> boxes;
+  std::vector<glm::dvec3> offsets;
+};
+
+DeckScene addDeckScene(World& world, const talus::field::SampledSdf& crate) {
+  const glm::dvec3 speed(1.0, 0.0, 0.0);
+  DeckScene scene;
+
+  world.parameters.sleep = false;
+  scene.deck = addRigidBox(world.bodies, floor(), glm::dvec3(1.0, 0.1, 1.0), 0.0, glm::dvec3(0.0, 1.0, 0.0), speed, 0.8, 3u);
+
+  for (const double x : {-0.3, -0.05, 0.4}) {
+    const uint32_t id = addCrate(world, crate, glm::dvec3(x, 1.15, 0.0));
+    RigidBody& body = world.bodies.rigids[findBody(world.bodies, id)->index];
+
+    body.velocity = speed;
+    scene.boxes.push_back(id);
+    scene.offsets.push_back(body.position - world.bodies.rigids[scene.deck].position);
+  }
+
+  REQUIRE(addJoint(world, anchored(scene.boxes[0], scene.boxes[1])) != 0u);
+
+  return scene;
+}
+
+uint64_t deckHash(uint32_t workers, uint32_t width) {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+
+  world.workerCount = workers;
+  world.simdWidth = width;
+  (void)addDeckScene(world, crate);
+
+  for (uint32_t frame = 0u; frame != 60u; ++frame) {
+    if (talus::dynamics::step(world).nonFinite) {
+      return 0u;
+    }
+  }
+
+  uint64_t hash = 1469598103934665603ull;
+
+  for (const RigidBody& body : world.bodies.rigids) {
+    hash = bodyHash(hash, body);
+  }
+
+  for (const Joint& joint : world.joints.all()) {
+    for (int axis = 0; axis != 3; ++axis) {
+      hash = mixBits(hash, joint.report.force[axis]);
+    }
   }
 
   return hash;
 }
 
+}
+
+TEST_CASE("jointed worlds step the same at widths 1, 4 and 8 and workers 1, 4 and 8", "[dynamics][joints]") {
+  std::vector<uint32_t> widths{1u, 4u};
+
+  if (hasAvx2()) {
+    widths.push_back(8u);
+  }
+
+  const JointedRun serial = chainOnPile(1u, 1u);
+  const uint64_t deck = deckHash(1u, 1u);
+
+  REQUIRE(serial.hash != 0u);
+  REQUIRE(serial.loaded);
+  REQUIRE(deck != 0u);
+
+  for (const uint32_t width : widths) {
+    for (const uint32_t workers : {1u, 4u, 8u}) {
+      CAPTURE(width, workers);
+      CHECK(chainOnPile(workers, width).hash == serial.hash);
+      CHECK(deckHash(workers, width) == deck);
+    }
+  }
 }
 
 TEST_CASE("jointed islands step at the joint substep count", "[dynamics][joints]") {
@@ -799,27 +883,20 @@ TEST_CASE("a free island steps the same beside a jointed island", "[dynamics][jo
   CHECK(freeBoxHash(true) == freeBoxHash(false));
 }
 
+TEST_CASE("jointed islands move at the joint substep count whatever the world's", "[dynamics][joints]") {
+  const uint64_t jointed = pendulumHash(4u, 16u);
+
+  CHECK(jointed == pendulumHash(16u, 16u));
+  CHECK(jointed != pendulumHash(4u, 4u));
+}
+
 TEST_CASE("jointed and free boxes ride the same moving mass-0 deck", "[dynamics][joints]") {
   const talus::field::SampledSdf crate = crateField();
   World world;
-  world.parameters.sleep = false;
-  const glm::dvec3 speed(1.0, 0.0, 0.0);
-  const uint32_t deck = addRigidBox(world.bodies, floor(), glm::dvec3(1.0, 0.1, 1.0), 0.0, glm::dvec3(0.0, 1.0, 0.0), speed, 0.8, 3u);
-  const std::vector<uint32_t> boxes{
-    addCrate(world, crate, glm::dvec3(-0.3, 1.15, 0.0)),
-    addCrate(world, crate, glm::dvec3(-0.05, 1.15, 0.0)),
-    addCrate(world, crate, glm::dvec3(0.4, 1.15, 0.0))
-  };
-  std::vector<glm::dvec3> offsets;
-
-  for (const uint32_t id : boxes) {
-    RigidBody& body = world.bodies.rigids[findBody(world.bodies, id)->index];
-
-    body.velocity = speed;
-    offsets.push_back(body.position - world.bodies.rigids[deck].position);
-  }
-
-  REQUIRE(addJoint(world, anchored(boxes[0], boxes[1])) != 0u);
+  const DeckScene scene = addDeckScene(world, crate);
+  const uint32_t deck = scene.deck;
+  const std::vector<uint32_t>& boxes = scene.boxes;
+  const std::vector<glm::dvec3>& offsets = scene.offsets;
 
   StepReport report;
 

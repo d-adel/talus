@@ -496,7 +496,8 @@ StepReport step(World& world) {
     IntegrationParameters jointedParameters = parameters;
 
     jointedParameters.softstepSubsteps = parameters.jointSubsteps;
-    report.widePairs += solveSoftstep(
+
+    const SoftstepResult jointedRun = solveSoftstep(
       bodies,
       world.manifolds,
       jointedSet,
@@ -510,12 +511,15 @@ StepReport step(World& world) {
       nullptr,
       &world.joints,
       &world.islandStore,
-      guests
+      guests,
+      true
     );
-    report.jointSubsteps = std::max(parameters.jointSubsteps, 1u);
+
+    report.widePairs += jointedRun.widePairs;
+    report.jointSubsteps = jointedRun.substeps;
   }
 
-  report.widePairs += solveSoftstep(
+  const SoftstepResult freeRun = solveSoftstep(
     bodies,
     world.manifolds,
     unjointed,
@@ -528,11 +532,15 @@ StepReport step(World& world) {
     &softstepTouching,
     &alongside,
     separate ? nullptr : &world.joints,
-    separate ? nullptr : &world.islandStore
+    separate ? nullptr : &world.islandStore,
+    {},
+    separate
   );
 
+  report.widePairs += freeRun.widePairs;
+
   if (!unjointed.empty()) {
-    report.softstepSubsteps = std::max(parameters.softstepSubsteps, 1u);
+    report.softstepSubsteps = freeRun.substeps;
   }
 
   if (separate) {

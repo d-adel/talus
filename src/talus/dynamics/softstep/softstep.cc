@@ -582,6 +582,7 @@ struct SoftstepArena {
   std::vector<uint32_t> pointFirst;
   std::vector<uint32_t> colourItems;
   std::vector<uint32_t> laneSlot;
+  std::vector<uint32_t> wideSlots;
   std::vector<WideContact<4u>> batches4;
   std::vector<WideContact<8u>> batches8;
   std::vector<JointRow<float>> jointRows;
@@ -592,7 +593,7 @@ std::shared_ptr<SoftstepArena> makeSoftstepArena() {
   return std::make_shared<SoftstepArena>();
 }
 
-uint32_t solveSoftstep(
+SoftstepResult solveSoftstep(
   BodySet& bodies,
   ManifoldCache& cache,
   std::span<const uint32_t> rigids,
@@ -606,7 +607,8 @@ uint32_t solveSoftstep(
   const std::function<void()>* alongside,
   JointSet* joints,
   const IslandStore* islandStore,
-  std::span<const uint32_t> guests
+  std::span<const uint32_t> guests,
+  bool partial
 ) {
   const uint32_t substeps = std::max(parameters.softstepSubsteps, 1u);
   const double step = parameters.dt / static_cast<double>(substeps);
@@ -717,6 +719,33 @@ uint32_t solveSoftstep(
 
   colourStart[colourCount] = static_cast<uint32_t>(ordered.size());
 
+  std::vector<uint32_t>& wideSlots = scratch.wideSlots;
+  std::array<uint32_t, colourCount + 1u> wideBegin{};
+
+  wideSlots.clear();
+
+  if (partial && batchWidth != 0u) {
+    for (uint32_t colour = 0u; colour != colourCount; ++colour) {
+      wideBegin[colour] = static_cast<uint32_t>(wideSlots.size());
+
+      for (const uint32_t slot : cache.widePairs(colour)) {
+        if (active(slot)) {
+          wideSlots.push_back(slot);
+        }
+      }
+    }
+
+    wideBegin[colourCount] = static_cast<uint32_t>(wideSlots.size());
+  }
+
+  const auto wideList = [&](uint32_t colour) {
+    if (!partial) {
+      return cache.widePairs(colour);
+    }
+
+    return std::span<const uint32_t>(wideSlots).subspan(wideBegin[colour], wideBegin[colour + 1u] - wideBegin[colour]);
+  };
+
   std::vector<Constraint>& constraints = scratch.constraints;
   std::vector<Point>& points = scratch.points;
   std::vector<uint32_t>& pairFirst = scratch.pairFirst;
@@ -765,7 +794,7 @@ uint32_t solveSoftstep(
     wideStart[order] = wideTotal;
 
     if (batchWidth != 0u) {
-      const uint32_t size = static_cast<uint32_t>(cache.widePairs(order - 1u).size());
+      const uint32_t size = static_cast<uint32_t>(wideList(order - 1u).size());
 
       batchCount += (size + batchWidth - 1u) / batchWidth;
       wideTotal += size;
@@ -790,7 +819,7 @@ uint32_t solveSoftstep(
       }
 
       const uint32_t index = entry - wideStart[order];
-      const uint32_t slot = cache.widePairs(order - 1u)[index];
+      const uint32_t slot = wideList(order - 1u)[index];
 
       if (!active(slot)) {
         continue;
@@ -1584,7 +1613,7 @@ uint32_t solveSoftstep(
     profile->joints = jointTime;
   }
 
-  return widePairs;
+  return {widePairs, substeps};
 }
 
 }

@@ -5261,7 +5261,7 @@ WideRun wideRun(uint32_t width) {
   const std::vector<uint32_t> one = rigidIndices(island);
   WideRun run;
 
-  run.widePairs = talus::dynamics::solveSoftstep(bodies, cache, one, parameters, stateOf, talus::dynamics::Workers{}, width);
+  run.widePairs = talus::dynamics::solveSoftstep(bodies, cache, one, parameters, stateOf, talus::dynamics::Workers{}, width).widePairs;
 
   const auto put = [&](double value) {
     run.bits.push_back(std::bit_cast<uint64_t>(value));
