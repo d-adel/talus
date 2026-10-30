@@ -1044,16 +1044,17 @@ TEST_CASE("a hinge drive deflects by torque over stiffness", "[dynamics][joints]
   CHECK(std::abs(report->driveTorque.x + torque) <= 0.02 * torque);
 }
 
-TEST_CASE("a hinge drive rings at sqrt(k over I) for any mass ratio", "[dynamics][joints][!mayfail]") {
+namespace {
+
+void checkRinging(double stiffness) {
   const talus::field::SampledSdf crate = crateField();
-  const double stiffness = 200.0;
   const double offset = 0.05;
   const double half = 0.05;
   const double leverA = 0.1;
   const double leverB = 0.1;
 
   for (const double mass : {1.0, 10.0, 75.0}) {
-    CAPTURE(mass);
+    CAPTURE(stiffness, mass);
 
     World world;
     world.parameters.gravity = glm::dvec3(0.0);
@@ -1100,6 +1101,16 @@ TEST_CASE("a hinge drive rings at sqrt(k over I) for any mass ratio", "[dynamics
     CAPTURE(expected, measured);
     CHECK(std::abs(measured - expected) <= 0.05 * expected);
   }
+}
+
+}
+
+TEST_CASE("a hinge drive rings at sqrt(k over I) for any mass ratio", "[dynamics][joints][!mayfail]") {
+  checkRinging(200.0);
+}
+
+TEST_CASE("a hinge drive rings at sqrt(k over I) within its accurate range", "[dynamics][joints]") {
+  checkRinging(10.0);
 }
 
 TEST_CASE("hinge drive torque respects per-direction bounds and the cap", "[dynamics][joints]") {

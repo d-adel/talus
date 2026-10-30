@@ -141,7 +141,10 @@ The only ray query today, `rayBlockers` and `firstHit`, serves blast occlusion. 
   1. A hinge pendulum's small-angle period matches 2π√(L/g) within 2 %. Its energy does not grow over 60 s.
   2. A 20-body chain with a 40:1 mass ratio hangs and settles with no explosion and no creep over 60 s.
   3. With every drive of Reflex's reference humanoid pushing into its limit at its torque cap, with that rig's body masses, no hinge or cone-twist limit is exceeded by more than 0.03 rad (about 1.7°, owner's decision 2026-10-30, at the jointed islands' 16 substeps).
-  4. A drive's static deflection under a known torque is τ/k within 2 %. Its response frequency is √(k/I) within 5 %, for joined-mass ratios from 1 to 75. This is the planted-ankle case.
+  4. A drive's static deflection under a known torque is τ/k within 2 %. Its response frequency is √(k/I) within 5 %, for joined-mass ratios from 1 to 75, up to the measured frequency range (owner's ruling 2026-10-30). This is the planted-ankle case.
+     - At the default 1/960 s substep (1/60 s × 16), the bound holds up to about 39 Hz at a mass ratio of 1, 19 Hz at 10 and 12 Hz at 75. The worst error in that range is 4.3 % slow. Measured in Task 4 on two 0.1 m crates hinged 0.1 m from each centre.
+     - Above that range, stiff drives ring slower. At 78, 38 and 24 Hz (k = 200 N·m/rad on the same bodies), the frequency is 10 %, 7 % and 10 % low.
+     - Raising `jointSubsteps` shortens the substep and restores the accuracy, at proportional cost. At 64 substeps (1/3840 s), the same 24–78 Hz drives are within 2 %, and 54–174 Hz drives are within 5 %.
   5. Per-direction torque bounds and the magnitude cap hold.
   6. A spring joint capped at 50 N holds a 3 kg box and lets a 10 kg box slip and fall.
   7. A planar velocity joint brings a capsule to its target speed within its force cap and never rotates it.
