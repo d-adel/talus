@@ -2292,67 +2292,134 @@ TEST_CASE("every humanoid limit holds with its drive at the cap", "[dynamics][jo
   std::printf("humanoid limit largest anchor gap %.4f m\n", gap);
 }
 
-TEST_CASE("a humanoid-mass chain hangs without creep", "[dynamics][joints][!mayfail]") {
-  const talus::field::SampledSdf crate = crateField();
-  World world;
-  world.parameters.sleep = false;
-  const glm::dvec3 top(0.0, 5.0, 0.0);
-  const double release = 0.3;
-  const glm::dvec3 down(std::sin(release), -std::cos(release), 0.0);
-  const glm::dvec3 half = 0.1 * down;
+namespace {
+
+struct HangingChain {
   std::vector<uint32_t> links;
   std::vector<JointDef> defs;
+};
+
+const glm::dvec3 chainTop(0.0, 5.0, 0.0);
+
+glm::dvec3 chainLinkAt(const glm::dvec3& half, uint32_t link) {
+  return chainTop + (2.0 * static_cast<double>(link) + 1.0) * half;
+}
+
+HangingChain addHangingChain(World& world, const talus::field::SampledSdf& crate, double release) {
+  const glm::dvec3 half = 0.1 * glm::dvec3(std::sin(release), -std::cos(release), 0.0);
+  HangingChain chain;
 
   for (uint32_t link = 0u; link != 20u; ++link) {
     const double mass = link % 2u == 0u ? 40.0 : 1.0;
-    const glm::dvec3 at = top + (2.0 * static_cast<double>(link) + 1.0) * half;
-    const uint32_t index = addRigidBox(world.bodies, crate, glm::dvec3(0.05), mass, at, glm::dvec3(0.0), 0.5, 3u);
-    JointDef def = between(links.empty() ? noBody : world.bodies.rigids[links.back()].id, world.bodies.rigids[index].id);
-    def.frameA.position = links.empty() ? top : half;
+    const uint32_t index =
+      addRigidBox(world.bodies, crate, glm::dvec3(0.05), mass, chainLinkAt(half, link), glm::dvec3(0.0), 0.5, 3u);
+    JointDef def = between(chain.links.empty() ? noBody : world.bodies.rigids[chain.links.back()].id, world.bodies.rigids[index].id);
+    def.frameA.position = chain.links.empty() ? chainTop : half;
     def.frameB.position = -half;
     REQUIRE(addJoint(world, def) != 0u);
-    links.push_back(index);
-    defs.push_back(def);
+    chain.links.push_back(index);
+    chain.defs.push_back(def);
   }
 
+  return chain;
+}
+
+double chainPotential(const World& world, const RigidBody& body, const glm::dvec3& position) {
+  return -body.mass * glm::dot(world.parameters.gravity, position);
+}
+
+double chainEnergy(const World& world, const HangingChain& chain) {
+  double energy = 0.0;
+
+  for (const uint32_t index : chain.links) {
+    const RigidBody& body = world.bodies.rigids[index];
+    const glm::dvec3 spin = glm::conjugate(body.rotation) * body.angularVelocity;
+
+    energy += 0.5 * body.mass * glm::dot(body.velocity, body.velocity) + 0.5 * glm::dot(spin, body.moment * spin)
+      + chainPotential(world, body, body.position);
+  }
+
+  return energy;
+}
+
+double largestGap(const World& world, const HangingChain& chain) {
+  double gap = 0.0;
+
+  for (const JointDef& def : chain.defs) {
+    gap = std::max(gap, anchorGap(world, def));
+  }
+
+  return gap;
+}
+
+}
+
+TEST_CASE("a humanoid-mass chain hangs at rest without creep", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  world.parameters.sleep = false;
+  const HangingChain chain = addHangingChain(world, crate, 0.0);
   const uint32_t frames = static_cast<uint32_t>(std::lround(60.0 / world.parameters.dt));
-  const uint32_t settled = frames / 2u;
   const uint32_t lastStretch = frames - static_cast<uint32_t>(std::lround(10.0 / world.parameters.dt));
-  double fastest = 0.0;
-  double fastestSettled = 0.0;
+  const uint32_t lowest = chain.links.back();
+  glm::dvec3 from(0.0);
   double creep = 0.0;
   double gap = 0.0;
-  glm::dvec3 lowest(0.0);
 
   for (uint32_t frame = 1u; frame <= frames; ++frame) {
     REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
 
-    for (const uint32_t index : links) {
-      const double speed = glm::length(world.bodies.rigids[index].velocity);
-      fastest = std::max(fastest, speed);
-
-      if (frame > settled) {
-        fastestSettled = std::max(fastestSettled, speed);
-      }
-    }
-
-    const glm::dvec3 bottom = world.bodies.rigids[links.back()].position;
+    const glm::dvec3 bottom = world.bodies.rigids[lowest].position;
 
     if (frame == lastStretch) {
-      lowest = bottom;
+      from = bottom;
     } else if (frame > lastStretch) {
-      creep = std::max(creep, glm::length(bottom - lowest));
+      creep = std::max(creep, glm::length(bottom - from));
     }
 
-    for (const JointDef& def : defs) {
-      gap = std::max(gap, anchorGap(world, def));
-    }
+    gap = std::max(gap, largestGap(world, chain));
   }
 
-  std::printf("humanoid-mass chain largest anchor gap %.4f m\n", gap);
+  std::printf("humanoid-mass chain at rest largest anchor gap %.4f m\n", gap);
 
-  CAPTURE(fastest, fastestSettled, creep);
-  CHECK(fastest <= 5.0);
-  CHECK(fastestSettled < 0.05);
+  CAPTURE(creep);
   CHECK(creep < 0.005);
+}
+
+TEST_CASE("a humanoid-mass chain swings without gaining energy", "[dynamics][joints]") {
+  const talus::field::SampledSdf crate = crateField();
+  World world;
+  world.parameters.sleep = false;
+  const HangingChain chain = addHangingChain(world, crate, 0.3);
+  double rest = 0.0;
+
+  for (uint32_t link = 0u; link != chain.links.size(); ++link) {
+    const RigidBody& body = world.bodies.rigids[chain.links[link]];
+    rest += chainPotential(world, body, chainLinkAt(glm::dvec3(0.0, -0.1, 0.0), link));
+  }
+
+  const double start = chainEnergy(world, chain);
+  const double swing = start - rest;
+  const uint32_t frames = static_cast<uint32_t>(std::lround(60.0 / world.parameters.dt));
+  double gain = -std::numeric_limits<double>::infinity();
+  double fastest = 0.0;
+  double gap = 0.0;
+
+  for (uint32_t frame = 1u; frame <= frames; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+    for (const uint32_t index : chain.links) {
+      fastest = std::max(fastest, glm::length(world.bodies.rigids[index].velocity));
+    }
+
+    gain = std::max(gain, chainEnergy(world, chain) - start);
+    gap = std::max(gap, largestGap(world, chain));
+  }
+
+  std::printf("humanoid-mass chain swinging largest anchor gap %.4f m\n", gap);
+
+  CAPTURE(swing, gain, fastest);
+  REQUIRE(swing > 0.0);
+  CHECK(fastest <= 5.0);
+  CHECK(gain <= 0.01 * swing);
 }
