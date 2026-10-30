@@ -56,11 +56,13 @@ bool validDrive(const JointDrive& drive) {
     }
   }
 
-  return validCap(drive.maxTorque) && finite(drive.feedForward);
+  const glm::dvec2 swing(drive.axes[1].targetAngle, drive.axes[2].targetAngle);
+
+  return withinTurn(glm::length(swing), 0.99) && validCap(drive.maxTorque) && finite(drive.feedForward);
 }
 
 bool validHalfAngle(double angle) {
-  return angle > 0.0 && withinTurn(angle, 0.99);
+  return angle >= 1.0e-3 && withinTurn(angle, 0.99);
 }
 
 bool validCone(const ConeLimit& cone) {
