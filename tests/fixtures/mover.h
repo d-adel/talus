@@ -43,6 +43,11 @@ struct Character {
   bool onGround = false;
 };
 
+struct MoverResult {
+  std::optional<talus::dynamics::WorldRayHit> hit;
+  bool applied = false;
+};
+
 struct Grip {
   uint32_t hand = talus::dynamics::noBody;
   uint32_t held = talus::dynamics::noBody;
@@ -80,7 +85,7 @@ struct SoftBlock {
   double heldMass
 );
 
-void driveGrip(
+[[nodiscard]] bool driveGrip(
   talus::dynamics::World& world,
   const Grip& grip,
   uint32_t body,
@@ -92,6 +97,12 @@ void driveGrip(
 [[nodiscard]] talus::dynamics::PogoSettings pogoFor(
   const talus::dynamics::World& world,
   const glm::dvec3& normal
+);
+
+[[nodiscard]] MoverResult tryMoveCharacter(
+  talus::dynamics::World& world,
+  Character& character,
+  const MoverStep& step
 );
 
 std::optional<talus::dynamics::WorldRayHit> moveCharacter(

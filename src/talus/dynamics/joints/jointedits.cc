@@ -124,9 +124,20 @@ JointFrame normalised(const JointFrame& frame) {
 }
 
 bool resolves(const World& world, uint32_t id) {
-  const std::optional<BodyRef> ref = findBody(world.bodies, id);
+  const std::optional<BodyRef> ref = locateBody(world, id);
 
   return ref && ref->side == Side::Rigid;
+}
+
+bool heavy(const World& world, uint32_t id) {
+  if (id == noBody) {
+    return false;
+  }
+
+  const std::optional<BodyRef> ref = locateBody(world, id);
+
+  return ref && ref->side == Side::Rigid
+         && world.bodies.rigids[ref->index].mass > 0.0;
 }
 
 bool standsOn(const World& world, const JointDef& def) {
@@ -135,7 +146,7 @@ bool standsOn(const World& world, const JointDef& def) {
   }
 
   const RigidBody& body =
-    world.bodies.rigids[findBody(world.bodies, def.bodyB)->index];
+    world.bodies.rigids[locateBody(world, def.bodyB)->index];
   const glm::dvec3 axis =
     body.rotation * def.frameB.rotation * glm::dvec3(0.0, 1.0, 0.0);
 
@@ -148,7 +159,7 @@ void wakeJointBodies(World& world, const JointDef& def) {
       continue;
     }
 
-    if (const std::optional<BodyRef> ref = findBody(world.bodies, id)) {
+    if (const std::optional<BodyRef> ref = locateBody(world, id)) {
       wakeBody(world.bodies, *ref);
     }
   }
@@ -250,12 +261,13 @@ bool removeJoint(World& world, uint32_t joint) {
   }
 
   const JointDef def = found->def;
+  const bool linksIslands = heavy(world, def.bodyA) && heavy(world, def.bodyB);
 
   dropJoint(world, joint, def);
 
-  if (def.bodyA != noBody) {
+  if (linksIslands) {
     world.islandStore.markRemoved(def.bodyB);
-    world.islandStore.requestSplit(def.bodyB);
+    world.islandStore.offerSplit(def.bodyB);
   }
 
   return true;
@@ -420,7 +432,7 @@ void rebaseJoints(
   }
 
   if (split != noBody) {
-    world.islandStore.requestSplit(split);
+    world.islandStore.offerSplit(split);
   }
 }
 

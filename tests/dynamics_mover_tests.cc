@@ -1918,12 +1918,151 @@ TEST_CASE(
 
 namespace {
 
+JointDef ballBetween(uint32_t a, uint32_t b, const glm::dvec3& halfway) {
+  JointDef def;
+  def.kind = JointKind::Ball;
+  def.bodyA = a;
+  def.bodyB = b;
+  def.frameA.position = halfway;
+  def.frameB.position = -halfway;
+
+  return def;
+}
+
+uint32_t splitsOver(World& world, uint32_t frames) {
+  uint32_t total = 0u;
+
+  for (uint32_t frame = 0u; frame != frames; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+    total += world.islandStore.splits();
+  }
+
+  return total;
+}
+
+}
+
+TEST_CASE(
+  "removing a joint to the world or a mass-0 body never splits an island",
+  "[dynamics][joints][mover]"
+) {
+  World world;
+  const glm::dvec3 half(0.2);
+  const talus::field::SampledSdf field = boxField(half, 0.05);
+
+  world.parameters.gravity = glm::dvec3(0.0);
+
+  const uint32_t b = addBox(world, field, half, 10.0, glm::dvec3(0.0));
+  const uint32_t c = addBox(world, field, half, 10.0, glm::dvec3(1.0, 0.0, 0.0));
+  const uint32_t hand =
+    addBox(world, field, half, 0.0, glm::dvec3(0.0, 1.0, 0.0));
+  JointDef spring;
+
+  spring.kind = JointKind::Spring;
+  spring.bodyA = hand;
+  spring.bodyB = b;
+  spring.frameA.position = glm::dvec3(0.0, -1.0, 0.0);
+  spring.spring.linearStiffness = 2000.0;
+  spring.spring.linearDamping = 100.0;
+
+  const uint32_t pair =
+    addJoint(world, ballBetween(b, c, glm::dvec3(0.5, 0.0, 0.0)));
+  const uint32_t held = addJoint(world, spring);
+  const uint32_t upright = fixture::addUprightSpring(world, b);
+
+  REQUIRE(pair != 0u);
+  REQUIRE(held != 0u);
+  run(world, 3u);
+  REQUIRE(world.islandStore.islandOf(b) == world.islandStore.islandOf(c));
+
+  REQUIRE(removeJoint(world, held));
+  CHECK(splitsOver(world, 5u) == 0u);
+
+  REQUIRE(removeJoint(world, upright));
+  CHECK(splitsOver(world, 5u) == 0u);
+  CHECK(world.islandStore.islandOf(b) == world.islandStore.islandOf(c));
+
+  REQUIRE(removeJoint(world, pair));
+  CHECK(splitsOver(world, 5u) == 1u);
+  CHECK(world.islandStore.islandOf(b) != world.islandStore.islandOf(c));
+}
+
+TEST_CASE(
+  "a joint removed every step does not keep other islands awake",
+  "[dynamics][joints][mover]"
+) {
+  World world;
+  const glm::dvec3 crateHalf(0.3, 0.1, 0.3);
+  const talus::field::SampledSdf crateField = boxField(crateHalf, 0.05);
+  const glm::dvec3 pairHalf(0.2);
+  const talus::field::SampledSdf pairField = boxField(pairHalf, 0.05);
+
+  addGround(world);
+
+  const uint32_t crate = addBox(
+    world,
+    crateField,
+    crateHalf,
+    20.0,
+    glm::dvec3(-1.5, crateHalf.y, 0.0)
+  );
+  const std::array<uint32_t, 2> pair{
+    addBox(world, pairField, pairHalf, 10.0, glm::dvec3(1.0, pairHalf.y, 0.0)),
+    addBox(world, pairField, pairHalf, 10.0, glm::dvec3(2.0, pairHalf.y, 0.0))
+  };
+  const uint32_t joint =
+    addJoint(world, ballBetween(pair[0], pair[1], glm::dvec3(0.5, 0.0, 0.0)));
+  fixture::Character character = fixture::addCharacter(
+    world,
+    glm::dvec3(-1.5, centreAbove(2.0 * crateHalf.y, 0.0), 0.0)
+  );
+
+  REQUIRE(joint != 0u);
+  character.onGround = true;
+
+  const uint32_t removedAt = 10u;
+  const uint32_t deadline =
+    removedAt
+    + static_cast<uint32_t>(std::lround(
+      (world.parameters.timeToSleep + 1.0) / world.parameters.dt
+    ));
+  uint32_t onCrate = 0u;
+  uint32_t asleepAt = deadline;
+
+  for (uint32_t frame = 0u; frame != deadline; ++frame) {
+    INFO("frame " << frame);
+
+    if (frame == removedAt) {
+      REQUIRE(removeJoint(world, joint));
+    }
+
+    (void)fixture::moveCharacter(world, character, fixture::MoverStep{});
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+    if (frame >= removedAt && character.ground == crate) {
+      ++onCrate;
+    }
+
+    if (asleepAt == deadline && bothAsleep(world, pair)) {
+      asleepAt = frame;
+    }
+  }
+
+  CAPTURE(asleepAt, onCrate);
+  CHECK(onCrate == deadline - removedAt);
+  CHECK(bothAsleep(world, pair));
+  CHECK(world.islandStore.islandOf(pair[0]) != world.islandStore.islandOf(pair[1]));
+}
+
+namespace {
+
 struct CostRun {
   double hostMs = 0.0;
   double stepMs = 0.0;
   double jointsMs = 0.0;
   double splits = 0.0;
   double awake = 0.0;
+  double planarSaturated = 0.0;
   size_t jointedBodies = 0u;
 };
 
@@ -1952,6 +2091,7 @@ CostRun runCost(const CostCase& scenario) {
 
   World world;
 
+  world.workerCount = 1u;
   (void)addStatic(
     world.bodies,
     floorField,
@@ -2029,6 +2169,8 @@ CostRun runCost(const CostCase& scenario) {
     REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
   }
 
+  REQUIRE(allAsleep());
+
   const double top = scenario.crateGround ? 2.0 * standHalf.y : 0.0;
   const std::array<glm::dvec3, 2> offsets{
     glm::dvec3(-0.4, 0.2, 0.3),
@@ -2065,14 +2207,16 @@ CostRun runCost(const CostCase& scenario) {
     );
   }
 
-  const uint32_t splitsBefore = world.islandStore.splits();
   double hostMs = 0.0;
   double stepMs = 0.0;
   double jointsMs = 0.0;
   double awake = 0.0;
+  uint32_t splits = 0u;
+  uint32_t saturated = 0u;
 
   for (uint32_t frame = 0u; frame != costSteps; ++frame) {
     const double time = static_cast<double>(frame) / 60.0;
+    bool applied = true;
     const Clock::time_point start = Clock::now();
 
     for (size_t index = 0u; index != characters.size(); ++index) {
@@ -2092,26 +2236,33 @@ CostRun runCost(const CostCase& scenario) {
           );
       }
 
-      (void)fixture::moveCharacter(world, characters[index], move);
+      applied = fixture::tryMoveCharacter(world, characters[index], move).applied
+                && applied;
 
       for (size_t hand = 0u; hand != 2u; ++hand) {
-        fixture::driveGrip(
-          world,
-          grips[index][hand],
-          characters[index].body,
-          offsets[hand]
-        );
+        applied = fixture::driveGrip(
+                    world,
+                    grips[index][hand],
+                    characters[index].body,
+                    offsets[hand]
+                  )
+                  && applied;
       }
     }
 
     hostMs +=
       std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 
+    REQUIRE(applied);
+
     const StepReport report = talus::dynamics::step(world);
 
     REQUIRE_FALSE(report.nonFinite);
     stepMs += report.profile.total;
     jointsMs += report.profile.joints;
+    splits += world.islandStore.splits();
+    saturated +=
+      jointReport(world, characters.front().planar)->forceSaturated ? 1u : 0u;
     awake += static_cast<double>(std::ranges::count_if(
       world.bodies.rigids,
       [](const RigidBody& body) { return !body.asleep; }
@@ -2124,9 +2275,9 @@ CostRun runCost(const CostCase& scenario) {
   result.hostMs = hostMs / steps;
   result.stepMs = stepMs / steps;
   result.jointsMs = jointsMs / steps;
-  result.splits =
-    static_cast<double>(world.islandStore.splits() - splitsBefore) / steps;
+  result.splits = static_cast<double>(splits) / steps;
   result.awake = awake / steps;
+  result.planarSaturated = static_cast<double>(saturated) / steps;
 
   for (const Island& island : world.islands) {
     for (const BodyRef& ref : island.bodies) {
@@ -2157,6 +2308,8 @@ TEST_CASE(
       if (pile && crateGround) {
         continue;
       }
+
+      std::array<double, 2> hostAt5000{};
 
       for (const uint32_t background : {0u, 5000u, 20000u}) {
         for (const fixture::PogoUpdate update :
@@ -2222,11 +2375,33 @@ TEST_CASE(
 
           if (pile) {
             std::printf(
-              "movercost pile bodies %u update %s jointed_island_bodies %zu\n",
+              "movercost pile bodies %u update %s jointed_island_bodies %zu "
+              "planar_saturated_share %.3f\n",
               background,
               updateName,
-              runs[0].jointedBodies
+              runs[0].jointedBodies,
+              median(pick(&CostRun::planarSaturated))
             );
+          }
+
+          INFO(
+            "bodies " << background << " update " << updateName << " ground "
+                      << groundName
+          );
+
+          const double host = median(pick(&CostRun::hostMs));
+          const size_t slot = update == fixture::PogoUpdate::Recreate ? 0u : 1u;
+
+          if (background == 5000u) {
+            hostAt5000[slot] = host;
+          } else if (background == 20000u) {
+            CHECK(host <= 1.5 * hostAt5000[slot]);
+          }
+
+          if (!pile && (update == fixture::PogoUpdate::InPlace || !crateGround)) {
+            for (const CostRun& run : runs) {
+              CHECK(run.splits == 0.0);
+            }
           }
         }
       }

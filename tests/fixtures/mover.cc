@@ -80,7 +80,7 @@ const Island* islandWith(const World& world, uint32_t index) {
 }
 
 const RigidBody& rigidOf(const World& world, uint32_t id) {
-  return world.bodies.rigids[findBody(world.bodies, id)->index];
+  return world.bodies.rigids[locateBody(world, id)->index];
 }
 
 glm::dvec3 groundPoint(
@@ -235,7 +235,7 @@ Grip addGrip(
   return grip;
 }
 
-void driveGrip(
+bool driveGrip(
   World& world,
   const Grip& grip,
   uint32_t body,
@@ -245,9 +245,9 @@ void driveGrip(
   const glm::dvec3 at = owner.position + owner.rotation * offset;
   const glm::dvec3 velocity = owner.velocity;
   const glm::dquat rotation = owner.rotation;
+  const bool posed = setRigidPose(world, grip.hand, at, rotation);
 
-  REQUIRE(setRigidPose(world, grip.hand, at, rotation));
-  REQUIRE(setVelocity(world, grip.hand, velocity));
+  return setVelocity(world, grip.hand, velocity) && posed;
 }
 
 double weightOf(const World& world) {
@@ -269,7 +269,7 @@ PogoSettings pogoFor(const World& world, const glm::dvec3& normal) {
   return pogo;
 }
 
-std::optional<WorldRayHit> moveCharacter(
+MoverResult tryMoveCharacter(
   World& world,
   Character& character,
   const MoverStep& step
@@ -304,6 +304,8 @@ std::optional<WorldRayHit> moveCharacter(
   character.onGround = onGround;
   character.ground = ground;
 
+  MoverResult result{hit, true};
+
   if (keep) {
     JointFrame frameA;
     JointFrame frameB;
@@ -313,10 +315,10 @@ std::optional<WorldRayHit> moveCharacter(
     frameB.position = footAnchor;
     pogo.force = force;
     pogo.speed = speed;
-    REQUIRE(setPogo(world, character.pogo, frameA, frameB, pogo));
+    result.applied = setPogo(world, character.pogo, frameA, frameB, pogo);
   } else {
     if (character.pogo != 0u) {
-      REQUIRE(removeJoint(world, character.pogo));
+      result.applied = removeJoint(world, character.pogo);
       character.pogo = 0u;
     }
 
@@ -333,17 +335,27 @@ std::optional<WorldRayHit> moveCharacter(
       def.pogo.speed = speed;
 
       character.pogo = addJoint(world, def);
-      REQUIRE(character.pogo != 0u);
+      result.applied = result.applied && character.pogo != 0u;
     }
   }
 
-  REQUIRE(setPlanarVelocity(
-    world,
-    character.planar,
-    {step.velocity, step.maxForce}
-  ));
+  result.applied =
+    setPlanarVelocity(world, character.planar, {step.velocity, step.maxForce})
+    && result.applied;
 
-  return hit;
+  return result;
+}
+
+std::optional<WorldRayHit> moveCharacter(
+  World& world,
+  Character& character,
+  const MoverStep& step
+) {
+  const MoverResult result = tryMoveCharacter(world, character, step);
+
+  REQUIRE(result.applied);
+
+  return result.hit;
 }
 
 double springResponse(
