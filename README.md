@@ -253,7 +253,10 @@ Skips do not apply to statics.
 
 - Both kinds need `collideConnected = true`. A pogo refuses ground with
   dot(normal, frame B's y) < 0.25. Keep the body upright with an angular-only
-  `Spring` to the world.
+  `Spring` to the world: the planar joint's plane tilts with frame B, so a
+  tilted character drifts sideways in the air.
+- The pogo's ground point (frame A) is in body A's frame, or in world
+  coordinates for `noBody`. `pogo.normal` is in world axes.
 - Scale pogo caps with the substeps: 100 × weight × `jointSubsteps` / 4. The
   caps also limit the spring's speed, so soften it with `hertz`, not a low cap.
 - A contact that holds the body below its rest length (a ceiling, a ledge
@@ -267,8 +270,15 @@ A host step for each character, before `world.step()`, as in Box3D's sample:
 2. With no walkable hit, remove the pogo.
 3. On the same ground body, call `setPogo` with the new point and normal, and
    `jointReport`'s `pogoForce` and `pogoSpeed` as `force` and `speed`.
-4. On a new ground body, remove the pogo and add one (`noBody` for statics).
-5. Call `setPlanarVelocity` with the input velocity and a force cap.
+4. On a new ground body, remove the pogo and add one, with the old pogo's
+   `pogoForce` and `pogoSpeed` as `force` and `speed`. Body A is the hit body,
+   or `noBody` for static and lattice hits.
+5. The planar joint's body A is the ground body when that is a moving mass-0
+   platform or deck, so the character moves with it (as in Box3D's sample), and
+   the world otherwise; re-create the joint when A changes. Call
+   `setPlanarVelocity` with the input velocity relative to A and a force cap.
+
+During a jump, set the pogo's `maxTension` to 0; restore it on landing.
 
 ### Failure handling
 
