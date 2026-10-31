@@ -5,6 +5,7 @@
 #include <talus/dynamics/broadphase/broadphase.h>
 #include <talus/dynamics/contact/contact.h>
 #include <talus/dynamics/islands/islands.h>
+#include <talus/dynamics/joints/joints.h>
 #include <talus/dynamics/manifoldcache/manifoldcache.h>
 #include <talus/dynamics/scheduler/scheduler.h>
 
@@ -45,6 +46,7 @@ struct StepProfile {
   double integrate = 0.0;
   double restitute = 0.0;
   double storeBack = 0.0;
+  double joints = 0.0;
   double continuous = 0.0;
   double events = 0.0;
   double sleep = 0.0;
@@ -54,11 +56,15 @@ struct StepProfile {
 
 struct StepReport {
   uint32_t substeps = 0u;
+  uint32_t softstepSubsteps = 0u;
+  uint32_t jointSubsteps = 0u;
   uint32_t contacts = 0u;
   uint32_t activeContacts = 0u;
   uint32_t softstepIslands = 0u;
   uint32_t strainstepIslands = 0u;
   uint32_t widePairs = 0u;
+  uint32_t jointRows = 0u;
+  uint32_t limitPassRows = 0u;
   uint32_t promotions = 0u;
   uint32_t demotions = 0u;
   uint32_t thawed = 0u;
@@ -74,6 +80,7 @@ struct World {
   ManifoldCache manifolds;
   BroadPhase broadPhase;
   IslandStore islandStore;
+  JointSet joints;
   uint32_t workerCount = 1u;
   EnqueueTaskCallback* enqueueTask = nullptr;
   FinishTaskCallback* finishTask = nullptr;

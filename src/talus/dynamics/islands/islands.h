@@ -3,6 +3,7 @@
 #include <talus/dynamics/bodyset/bodyset.h>
 #include <talus/dynamics/broadphase/broadphase.h>
 #include <talus/dynamics/contact/contact.h>
+#include <talus/dynamics/joints/joints.h>
 #include <talus/dynamics/manifoldcache/manifoldcache.h>
 #include <talus/dynamics/scheduler/scheduler.h>
 
@@ -44,19 +45,22 @@ public:
   void markRemoved(uint32_t id);
   void linkPairs(const BodySet& bodies, const ManifoldCache& cache);
   void linkContacts(const BodySet& bodies, std::span<const Contact> contacts);
+  void linkJoints(const BodySet& bodies, const JointSet& joints);
   void build(
     BodySet& bodies,
     const ManifoldCache& cache,
     std::span<const uint32_t> changed,
     bool separated,
     std::span<const Contact> contacts,
-    std::vector<Island>& islands
+    std::vector<Island>& islands,
+    const JointSet& joints
   );
   [[nodiscard]] std::vector<uint32_t> split(
     const BodySet& bodies,
     uint32_t island,
     const ManifoldCache& cache,
-    std::span<const Contact> contacts
+    std::span<const Contact> contacts,
+    const JointSet& joints
   );
   void requestSplit(uint32_t id);
   [[nodiscard]] uint32_t takeSplit();
@@ -71,6 +75,7 @@ public:
 
 private:
   uint32_t create();
+  [[nodiscard]] bool heavyId(const BodySet& bodies, uint32_t id) const;
 
   std::vector<uint32_t> m_islandOf;
   std::vector<BodyRef> m_ref;

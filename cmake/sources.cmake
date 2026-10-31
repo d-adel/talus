@@ -26,6 +26,8 @@ set(TALUS_SOURCES
     src/talus/dynamics/fieldbody/fieldbody.cc
     src/talus/dynamics/islands/islands.cc
     src/talus/dynamics/jacobi/jacobi.cc
+    src/talus/dynamics/joints/jointedits.cc
+    src/talus/dynamics/joints/joints.cc
     src/talus/dynamics/ledger/ledger.cc
     src/talus/dynamics/manifold/boxhull.cc
     src/talus/dynamics/manifold/manifold.cc

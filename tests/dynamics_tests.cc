@@ -5261,7 +5261,16 @@ WideRun wideRun(uint32_t width) {
   const std::vector<uint32_t> one = rigidIndices(island);
   WideRun run;
 
-  run.widePairs = talus::dynamics::solveSoftstep(bodies, cache, one, parameters, stateOf, talus::dynamics::Workers{}, width);
+  run.widePairs = talus::dynamics::solveSoftstep(
+                    bodies,
+                    cache,
+                    one,
+                    parameters,
+                    stateOf,
+                    talus::dynamics::Workers{},
+                    width
+  )
+                    .widePairs;
 
   const auto put = [&](double value) {
     run.bits.push_back(std::bit_cast<uint64_t>(value));
@@ -6083,7 +6092,7 @@ TEST_CASE("a split asked for a body that is then removed is dropped, and one ask
   const uint32_t island = store.takeSplit();
 
   REQUIRE(island == store.islandOf(ids[2]));
-  (void)store.split(bodies, island, cache, {});
+  (void)store.split(bodies, island, cache, {}, talus::dynamics::JointSet{});
   CHECK(store.islandOf(ids[0]) != store.islandOf(ids[2]));
   CHECK(store.islandOf(ids[2]) != store.islandOf(ids[3]));
   CHECK(store.pendingSplit() == talus::dynamics::noBody);
@@ -6185,7 +6194,13 @@ TEST_CASE("splitting an island costs time in proportion to its members and conta
   }
 
   const auto start = std::chrono::steady_clock::now();
-  const std::vector<uint32_t> pieces = store.split(bodies, store.islandOf(bodies.rigids[0].id), cache, contacts);
+  const std::vector<uint32_t> pieces = store.split(
+    bodies,
+    store.islandOf(bodies.rigids[0].id),
+    cache,
+    contacts,
+    talus::dynamics::JointSet{}
+  );
   const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 
   CHECK(pieces.size() == 1u);

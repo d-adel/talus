@@ -1,6 +1,7 @@
 #include "softstep.h"
 #include "widecontact.h"
 
+#include <talus/dynamics/joints/jointrows.h>
 #include <talus/dynamics/pipeline/pipeline.h>
 #include <talus/dynamics/scheduler/stopwatch.h>
 
@@ -581,8 +582,10 @@ struct SoftstepArena {
   std::vector<uint32_t> pointFirst;
   std::vector<uint32_t> colourItems;
   std::vector<uint32_t> laneSlot;
+  std::vector<uint32_t> wideSlots;
   std::vector<WideContact<4u>> batches4;
   std::vector<WideContact<8u>> batches8;
+  std::vector<JointRow<float>> jointRows;
   StageRunner runner;
 };
 
@@ -590,7 +593,7 @@ std::shared_ptr<SoftstepArena> makeSoftstepArena() {
   return std::make_shared<SoftstepArena>();
 }
 
-uint32_t solveSoftstep(
+SoftstepResult solveSoftstep(
   BodySet& bodies,
   ManifoldCache& cache,
   std::span<const uint32_t> rigids,
@@ -601,7 +604,12 @@ uint32_t solveSoftstep(
   SoftstepArena* arena,
   StepProfile* profile,
   SoftstepTouching* touching,
-  const std::function<void()>* alongside
+  const std::function<void()>* alongside,
+  JointSet* joints,
+  const IslandStore* islandStore,
+  std::span<const uint32_t> guests,
+  bool partial,
+  bool jointed
 ) {
   const uint32_t substeps = std::max(parameters.softstepSubsteps, 1u);
   const double step = parameters.dt / static_cast<double>(substeps);
@@ -616,7 +624,9 @@ uint32_t solveSoftstep(
   const Softness staticSoftness = makeSoft(2.0f * hertz, 0.5f * zeta, h);
   const float contactSpeed = static_cast<float>(parameters.contactSpeed);
   const float maxLinearSpeed = static_cast<float>(parameters.maxLinearSpeed);
-  const float maxAngularSpeed = 0.25f * std::numbers::pi_v<float> / dt;
+  const float maxAngularSpeed =
+    0.25f * std::numbers::pi_v<float>
+    * (jointed ? static_cast<float>(substeps) : 1.0f) / dt;
   const float threshold = static_cast<float>(parameters.restitutionThreshold);
   const float speculativeDistance =
     static_cast<float>(parameters.speculativeDistance);
@@ -629,7 +639,8 @@ uint32_t solveSoftstep(
   SoftstepArena& scratch = arena != nullptr ? *arena : local;
   std::vector<State>& states = scratch.states;
   std::vector<uint32_t>& rigidOf = scratch.rigidOf;
-  const uint32_t rigidCount = static_cast<uint32_t>(rigids.size());
+  const uint32_t ownedCount = static_cast<uint32_t>(rigids.size());
+  const uint32_t rigidCount = ownedCount + static_cast<uint32_t>(guests.size());
 
   states.resize(rigidCount + 1u);
   rigidOf.resize(rigidCount + 1u);
@@ -637,8 +648,11 @@ uint32_t solveSoftstep(
   rigidOf[0] = 0u;
 
   for (uint32_t entry = 0u; entry != rigidCount; ++entry) {
-    rigidOf[entry + 1u] = rigids[entry];
-    stateOf[rigids[entry]] = entry + 1u;
+    const uint32_t index =
+      entry < ownedCount ? rigids[entry] : guests[entry - ownedCount];
+
+    rigidOf[entry + 1u] = index;
+    stateOf[index] = entry + 1u;
   }
 
   const auto gather = [&](uint32_t item) {
@@ -669,13 +683,17 @@ uint32_t solveSoftstep(
   const auto solved = [&](const BodyRef& end) {
     return end.side == Side::Rigid && stateIndex(stateOf, end) != 0u;
   };
+  const auto owned = [&](const BodyRef& end) {
+    return solved(end) && stateIndex(stateOf, end) <= ownedCount;
+  };
   const auto held = [&](const BodyRef& end) {
     return end.side != Side::Rigid || solved(end) || !(bodies.rigids[end.index].mass > 0.0);
   };
   const auto active = [&](uint32_t slot) {
     const CachedBodyPair& pair = cache.at(slot);
 
-    return (solved(pair.first) || solved(pair.second)) && held(pair.first) && held(pair.second);
+    return (owned(pair.first) || owned(pair.second)) && held(pair.first)
+           && held(pair.second);
   };
   const uint32_t batchWidth = width == 4u || width == 8u ? width : 0u;
   std::vector<uint32_t>& ordered = scratch.ordered;
@@ -705,6 +723,36 @@ uint32_t solveSoftstep(
   }
 
   colourStart[colourCount] = static_cast<uint32_t>(ordered.size());
+
+  std::vector<uint32_t>& wideSlots = scratch.wideSlots;
+  std::array<uint32_t, colourCount + 1u> wideBegin{};
+
+  wideSlots.clear();
+
+  if (partial && batchWidth != 0u) {
+    for (uint32_t colour = 0u; colour != colourCount; ++colour) {
+      wideBegin[colour] = static_cast<uint32_t>(wideSlots.size());
+
+      for (const uint32_t slot : cache.widePairs(colour)) {
+        if (active(slot)) {
+          wideSlots.push_back(slot);
+        }
+      }
+    }
+
+    wideBegin[colourCount] = static_cast<uint32_t>(wideSlots.size());
+  }
+
+  const auto wideList = [&](uint32_t colour) {
+    if (!partial) {
+      return cache.widePairs(colour);
+    }
+
+    return std::span<const uint32_t>(wideSlots).subspan(
+      wideBegin[colour],
+      wideBegin[colour + 1u] - wideBegin[colour]
+    );
+  };
 
   std::vector<Constraint>& constraints = scratch.constraints;
   std::vector<Point>& points = scratch.points;
@@ -754,7 +802,7 @@ uint32_t solveSoftstep(
     wideStart[order] = wideTotal;
 
     if (batchWidth != 0u) {
-      const uint32_t size = static_cast<uint32_t>(cache.widePairs(order - 1u).size());
+      const uint32_t size = static_cast<uint32_t>(wideList(order - 1u).size());
 
       batchCount += (size + batchWidth - 1u) / batchWidth;
       wideTotal += size;
@@ -779,7 +827,7 @@ uint32_t solveSoftstep(
       }
 
       const uint32_t index = entry - wideStart[order];
-      const uint32_t slot = cache.widePairs(order - 1u)[index];
+      const uint32_t slot = wideList(order - 1u)[index];
 
       if (!active(slot)) {
         continue;
@@ -1364,7 +1412,7 @@ uint32_t solveSoftstep(
   const uint32_t unpackStage = add(Kind::Unpack, 0u, batchCount, 4u);
   const uint32_t memoryStage =
     add(Kind::StoreMemory, 0u, static_cast<uint32_t>(constraints.size()), 4u);
-  const uint32_t bodyStage = add(Kind::StoreBodies, 1u, stateCount, 32u);
+  const uint32_t bodyStage = add(Kind::StoreBodies, 1u, ownedCount + 1u, 32u);
 
   StageRunner& runner = scratch.runner;
 
@@ -1439,6 +1487,11 @@ uint32_t solveSoftstep(
   double solveTime = 0.0;
   double restituteTime = 0.0;
   double storeTime = 0.0;
+  const bool jointWork = joints != nullptr && !joints->empty();
+  std::vector<JointRow<float>>& jointRows = scratch.jointRows;
+  Stopwatch jointClock;
+  double jointTime = 0.0;
+  uint32_t limitPassRows = 0u;
 
   runner.run([&] {
     (void)clock.lap();
@@ -1452,17 +1505,45 @@ uint32_t solveSoftstep(
     gatherTime = clock.lap();
     runner.execute(prepareStage);
     runner.execute(packStage);
+
+    if (jointWork) {
+      (void)jointClock.lap();
+      prepareJointRows<float, State>(
+        *joints,
+        bodies,
+        *islandStore,
+        states,
+        stateOf,
+        h,
+        jointRows
+      );
+      jointTime += jointClock.lap();
+    }
+
     prepareTime = clock.lap();
 
     for (uint32_t substep = 0u; substep != substeps; ++substep) {
       runner.execute(substepStages[substep][0]);
       integrateTime += clock.lap();
 
+      if (jointWork) {
+        (void)jointClock.lap();
+        warmStartJointRows<float, State>(states, jointRows);
+        jointTime += jointClock.lap();
+      }
+
       for (uint32_t item = 0u; item != overflowEnd; ++item) {
         warmStart(states, constraints[item], points);
       }
 
       runColours(substepStages[substep][1]);
+
+      if (jointWork) {
+        (void)jointClock.lap();
+        limitPassRows +=
+          solveJointRows<float, State>(states, jointRows, invH, true);
+        jointTime += jointClock.lap();
+      }
 
       for (uint32_t item = 0u; item != overflowEnd; ++item) {
         push(states, constraints[item], points, invH, contactSpeed);
@@ -1472,6 +1553,14 @@ uint32_t solveSoftstep(
       solveTime += clock.lap();
       runner.execute(substepStages[substep][3]);
       integrateTime += clock.lap();
+
+      if (jointWork) {
+        (void)jointClock.lap();
+        advanceJointRows<float>(jointRows, h);
+        limitPassRows +=
+          solveJointRows<float, State>(states, jointRows, invH, false);
+        jointTime += jointClock.lap();
+      }
 
       for (uint32_t item = 0u; item != overflowEnd; ++item) {
         relax(states, constraints[item], points, invH);
@@ -1495,11 +1584,22 @@ uint32_t solveSoftstep(
     substepTime = integrateTime + solveTime + restituteTime;
     runner.execute(unpackStage);
     runner.execute(memoryStage);
+
+    if (jointWork) {
+      (void)jointClock.lap();
+      storeJointRows<float>(*joints, jointRows, invH);
+      jointTime += jointClock.lap();
+    }
+
     runner.execute(bodyStage);
     storeTime = clock.lap();
   }, alongside);
 
   for (const uint32_t index : rigids) {
+    stateOf[index] = 0u;
+  }
+
+  for (const uint32_t index : guests) {
     stateOf[index] = 0u;
   }
 
@@ -1529,9 +1629,14 @@ uint32_t solveSoftstep(
     profile->integrate = integrateTime;
     profile->restitute = restituteTime;
     profile->storeBack = storeTime + clock.lap();
+    profile->joints = jointTime;
   }
 
-  return widePairs;
+  return {
+    widePairs,
+    substeps,
+    jointWork ? static_cast<uint32_t>(jointRows.size()) : 0u,
+    limitPassRows
+  };
 }
-
 }

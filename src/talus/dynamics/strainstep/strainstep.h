@@ -2,8 +2,10 @@
 
 #include <talus/dynamics/bodyset/bodyset.h>
 #include <talus/dynamics/contact/contact.h>
+#include <talus/dynamics/continuous/continuous.h>
 #include <talus/dynamics/integrationparameters/integrationparameters.h>
 #include <talus/dynamics/islands/islands.h>
+#include <talus/dynamics/joints/joints.h>
 #include <talus/dynamics/manifoldcache/manifoldcache.h>
 #include <talus/dynamics/scheduler/scheduler.h>
 
@@ -26,6 +28,12 @@ struct StrainstepStats {
   uint32_t parallelBatches = 0u;
 };
 
+struct StrainstepResult {
+  uint32_t substeps = 0u;
+  uint32_t jointRows = 0u;
+  uint32_t limitPassRows = 0u;
+};
+
 [[nodiscard]] std::shared_ptr<StrainstepArena> makeStrainstepArena();
 
 [[nodiscard]] StrainstepStats strainstepStats(const StrainstepArena& arena);
@@ -38,14 +46,16 @@ void forgetLattices(StrainstepArena& arena, const BodySet& bodies);
   const IntegrationParameters& parameters
 );
 
-uint32_t solveStrainstep(
+StrainstepResult solveStrainstep(
   BodySet& bodies,
   ManifoldCache& cache,
   std::span<Contact> contacts,
   const Island& island,
   const IntegrationParameters& parameters,
   StrainstepArena& arena,
-  const Workers& workers
+  const Workers& workers,
+  JointSet* joints = nullptr,
+  const IslandStore* islandStore = nullptr,
+  std::span<const RigidPose> start = {}
 );
-
 }

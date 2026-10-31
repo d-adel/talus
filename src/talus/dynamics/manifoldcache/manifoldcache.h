@@ -14,6 +14,8 @@
 
 namespace talus::dynamics {
 
+class JointSet;
+
 inline constexpr uint32_t colourCount = 24u;
 inline constexpr uint32_t overflowColour = colourCount - 1u;
 inline constexpr uint32_t dynamicColourCount = colourCount - 4u;
@@ -146,7 +148,12 @@ public:
   [[nodiscard]] std::span<const uint32_t> otherPairs(uint32_t colour) const;
   void touchingPairs(std::vector<uint32_t>& slots) const;
 
-  void createPairs(const BodySet& bodies, std::span<const BodyPair> pairs);
+  void createPairs(
+    const BodySet& bodies,
+    std::span<const BodyPair> pairs,
+    const JointSet* joints = nullptr
+  );
+  void forgetPair(uint32_t idA, uint32_t idB);
   void destroyPair(uint32_t slot);
   [[nodiscard]] uint32_t dropChildren(
     const BodySet& bodies,

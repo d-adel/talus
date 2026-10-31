@@ -364,11 +364,25 @@ void IslandStore::linkContacts(const BodySet& bodies, std::span<const Contact> c
   }
 }
 
+bool IslandStore::heavyId(const BodySet& bodies, uint32_t id) const {
+  return id < m_islandOf.size() && m_islandOf[id] != noIsland
+         && heavy(bodies, m_ref[id]);
+}
+
+void IslandStore::linkJoints(const BodySet& bodies, const JointSet& joints) {
+  for (const Joint& joint : joints.all()) {
+    if (heavyId(bodies, joint.def.bodyA) && heavyId(bodies, joint.def.bodyB)) {
+      link(joint.def.bodyA, joint.def.bodyB);
+    }
+  }
+}
+
 std::vector<uint32_t> IslandStore::split(
   const BodySet& bodies,
   uint32_t island,
   const ManifoldCache& cache,
-  std::span<const Contact> contacts
+  std::span<const Contact> contacts,
+  const JointSet& joints
 ) {
   const std::vector<uint32_t> members = m_members[island];
   const uint32_t count = static_cast<uint32_t>(members.size());
@@ -431,6 +445,12 @@ std::vector<uint32_t> IslandStore::split(
     }
   }
 
+  for (const Joint& joint : joints.all()) {
+    if (heavyId(bodies, joint.def.bodyA) && heavyId(bodies, joint.def.bodyB)) {
+      join(joint.def.bodyA, joint.def.bodyB);
+    }
+  }
+
   std::vector<uint32_t> pieces;
   std::vector<uint32_t> pieceOf(count, noIsland);
 
@@ -458,7 +478,8 @@ void IslandStore::build(
   std::span<const uint32_t> changed,
   bool separated,
   std::span<const Contact> contacts,
-  std::vector<Island>& islands
+  std::vector<Island>& islands,
+  const JointSet& joints
 ) {
   m_splits = 0u;
 
@@ -486,6 +507,7 @@ void IslandStore::build(
   }
 
   linkContacts(bodies, contacts);
+  linkJoints(bodies, joints);
 
   std::vector<uint8_t> settled(m_members.size(), 0u);
 
@@ -497,7 +519,8 @@ void IslandStore::build(
       continue;
     }
 
-    for (const uint32_t piece : split(bodies, island, cache, contacts)) {
+    for (const uint32_t piece :
+         split(bodies, island, cache, contacts, joints)) {
       if (piece >= settled.size()) {
         settled.resize(piece + 1u, 0u);
       }
@@ -597,6 +620,23 @@ void IslandStore::build(
           islands[m_output[m_islandOf[pair.secondId]]].external = true;
         }
       }
+    }
+  }
+
+  for (const Joint& joint : joints.all()) {
+    const uint32_t a = joint.def.bodyA;
+    const uint32_t b = joint.def.bodyB;
+
+    if (b >= m_islandOf.size() || m_islandOf[b] == noIsland) {
+      continue;
+    }
+
+    if (a == noBody) {
+      islands[m_output[m_islandOf[b]]].external = true;
+    } else if (a < m_islandOf.size() && m_islandOf[a] != noIsland
+               && (!heavyId(bodies, a) || !heavyId(bodies, b))) {
+      islands[m_output[m_islandOf[a]]].external = true;
+      islands[m_output[m_islandOf[b]]].external = true;
     }
   }
 

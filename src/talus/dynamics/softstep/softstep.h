@@ -23,9 +23,16 @@ struct SoftstepTouching {
   std::vector<uint32_t> hits;
 };
 
+struct SoftstepResult {
+  uint32_t widePairs = 0u;
+  uint32_t substeps = 0u;
+  uint32_t jointRows = 0u;
+  uint32_t limitPassRows = 0u;
+};
+
 [[nodiscard]] std::shared_ptr<SoftstepArena> makeSoftstepArena();
 
-uint32_t solveSoftstep(
+SoftstepResult solveSoftstep(
   BodySet& bodies,
   ManifoldCache& cache,
   std::span<const uint32_t> rigids,
@@ -36,7 +43,11 @@ uint32_t solveSoftstep(
   SoftstepArena* arena = nullptr,
   StepProfile* profile = nullptr,
   SoftstepTouching* touching = nullptr,
-  const std::function<void()>* alongside = nullptr
+  const std::function<void()>* alongside = nullptr,
+  JointSet* joints = nullptr,
+  const IslandStore* islandStore = nullptr,
+  std::span<const uint32_t> guests = {},
+  bool partial = false,
+  bool jointed = false
 );
-
 }

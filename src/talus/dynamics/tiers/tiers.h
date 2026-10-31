@@ -39,7 +39,7 @@ namespace talus::dynamics {
 
 void switchTiers(World& world, StepReport& report);
 
-void promote(World& world, uint32_t id);
+bool promote(World& world, uint32_t id);
 
 struct LatticeFit {
   glm::dvec3 centre{0.0};

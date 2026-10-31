@@ -24,6 +24,21 @@ Three-storey concrete-frame collapse, rendered with the original Talus testbed.
 - Compound-child removal and splitting, with mass and inertia recomputed for
   the resulting pieces.
 
+### Joints
+
+- Ball, hinge and swing-twist joints between rigid bodies or to the world,
+  with rigid angle limits and an elliptical swing cone.
+- Drives with physical stiffness and damping on each axis, per-direction
+  torque bounds and a torque cap, so a response does not depend on how light
+  the joined bodies are.
+- Strength-limited spring joints that slip at their force or torque cap, for
+  grips and tethers.
+- Joined pairs that do not collide, and per-joint force, torque and saturation
+  read-back.
+- Islands that contain a joint, with every body they touch, step with their
+  own substep count; other islands are unaffected. Joints keep their anchors
+  through compound splits.
+
 ### Deformation and material history
 
 - Finite-element deformation with elastic recovery, plastic flow and hardening.
@@ -57,9 +72,10 @@ Three-storey concrete-frame collapse, rendered with the original Talus testbed.
   builds, worker counts and SIMD widths.
 - CMake embedding or an installed `Talus::Physics` package, with headless examples.
 
-Current performance, contact and fracture limitations are documented in
+Current performance, contact, fracture and joint limitations are documented in
 [physics status](docs/physics-status.md). The workload controller is not a hard
-real-time guarantee, and game-engine adapters remain separate work.
+real-time guarantee, and game-engine adapters remain separate work. Joint usage
+is described in [integration](docs/integration.md#joints).
 
 ## Use from another CMake project
 

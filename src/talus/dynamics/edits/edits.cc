@@ -1,6 +1,7 @@
 #include "edits.h"
 
 #include <talus/dynamics/compound/compound.h>
+#include <talus/dynamics/joints/jointrecords.h>
 #include <talus/dynamics/sleep/sleep.h>
 #include <talus/dynamics/tiers/tiers.h>
 
@@ -194,6 +195,12 @@ void reframe(
   body.inertialRotation = body.rotation;
 }
 
+JointFrame oldToNew(const PrincipalFrame& frame) {
+  const glm::dquat back = glm::conjugate(frame.rotation);
+
+  return {back * -frame.centre, back};
+}
+
 bool fills(const CompoundChild& child, std::span<const CompoundChild> parts) {
   if (parts.empty()) {
     return false;
@@ -324,6 +331,7 @@ bool removeBody(World& world, uint32_t id) {
   }
 
   wakeTouching(world, *ref, id);
+  removeBodyJoints(world, std::span<const uint32_t>(&id, 1u));
 
   if (ref->side == Side::Rigid) {
     world.bodies.rigids.erase(world.bodies.rigids.begin() + ref->index);
@@ -363,6 +371,8 @@ uint32_t removeBodies(World& world, std::span<const uint32_t> ids) {
   if (removed.empty()) {
     return 0u;
   }
+
+  removeBodyJoints(world, removed);
 
   std::vector<uint8_t> pairs(world.manifolds.size(), 0u);
   std::vector<Frozen> thawing;
@@ -490,6 +500,7 @@ bool setRigidPose(
   body.initialRotation = turn;
   body.inertialRotation = turn;
   wakeTouching(world, *ref, id);
+  wakeJointPartners(world, id);
   dropContacts(world, Side::Rigid, ref->index, false);
   destroyBodyContacts(world, id);
 
@@ -504,6 +515,7 @@ bool setVelocity(World& world, uint32_t id, const glm::dvec3& velocity) {
   }
 
   wakeBody(world.bodies, *ref);
+  wakeJointPartners(world, id);
 
   if (ref->side == Side::Rigid) {
     if (frozenAt(world.bodies, *ref)) {
@@ -848,6 +860,12 @@ bool removeCompoundChildren(World& world, uint32_t id, std::span<const uint32_t>
 
     reframe(body, remaining, frame);
     wakeBody(world.bodies, *ref);
+
+    if (!world.joints.empty()) {
+      const BodyRebase rebase{id, oldToNew(frame), body.compound->children};
+
+      rebaseJoints(world, id, std::span<const BodyRebase>(&rebase, 1u));
+    }
   } else {
     removeChildren(body.compound, removed);
   }
@@ -989,6 +1007,25 @@ std::vector<uint32_t> splitCompound(
     piece.id = world.bodies.nextId++;
     ids.push_back(piece.id);
     world.bodies.rigids.push_back(std::move(piece));
+  }
+
+  if (!world.joints.empty()) {
+    const RigidBody& keeper = world.bodies.rigids[ref->index];
+    std::vector<BodyRebase> rebases{
+      BodyRebase{id, oldToNew(frames[kept]), keeper.compound->children}
+    };
+    size_t made = world.bodies.rigids.size() - ids.size();
+
+    for (size_t index = 0u; index != sorted.size(); ++index) {
+      if (index != kept) {
+        const RigidBody& piece = world.bodies.rigids[made++];
+        const JointFrame shift = oldToNew(frames[index]);
+
+        rebases.push_back({piece.id, shift, piece.compound->children});
+      }
+    }
+
+    rebaseJoints(world, id, rebases);
   }
 
   return ids;

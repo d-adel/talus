@@ -1,5 +1,6 @@
 #include "manifoldcache.h"
 
+#include <talus/dynamics/joints/joints.h>
 #include <talus/dynamics/narrowphase/narrowphase.h>
 #include <talus/dynamics/sleep/sleep.h>
 
@@ -481,9 +482,24 @@ void ManifoldCache::touchingPairs(std::vector<uint32_t>& slots) const {
   }
 }
 
-void ManifoldCache::createPairs(const BodySet& bodies, std::span<const BodyPair> pairs) {
+void ManifoldCache::createPairs(
+  const BodySet& bodies,
+  std::span<const BodyPair> pairs,
+  const JointSet* joints
+) {
+  const bool filter = joints != nullptr && !joints->empty();
+
   for (const BodyPair& pair : pairs) {
     if (!storable(pair)) {
+      continue;
+    }
+
+    if (filter && pair.first.side == Side::Rigid
+        && pair.second.side == Side::Rigid
+        && joints->excludes(
+          bodies.rigids[pair.first.index].id,
+          bodies.rigids[pair.second.index].id
+        )) {
       continue;
     }
 
@@ -491,6 +507,23 @@ void ManifoldCache::createPairs(const BodySet& bodies, std::span<const BodyPair>
 
     if (find(key) == noSlot) {
       (void)create(bodies, pair, key);
+    }
+  }
+}
+
+void ManifoldCache::forgetPair(uint32_t idA, uint32_t idB) {
+  if (idA >= m_byBody.size()) {
+    return;
+  }
+
+  for (const uint32_t slot : m_byBody[idA]) {
+    const CachedBodyPair& pair = m_pairs[slot];
+
+    if ((pair.firstId == idA && pair.secondId == idB)
+        || (pair.firstId == idB && pair.secondId == idA)) {
+      remove(slot);
+
+      return;
     }
   }
 }
