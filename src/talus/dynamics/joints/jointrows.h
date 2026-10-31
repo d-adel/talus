@@ -1268,7 +1268,7 @@ void solvePogoRows(
   const Real bounded = std::clamp(unbounded, pogo.lower, pogo.upper);
   const Real impulse = bounded - pogo.impulse;
 
-  pogo.saturated = bounded != unbounded;
+  pogo.saturated = pogo.saturated || bounded != unbounded;
   pogo.impulse = bounded;
   jointPogoPush(row, a, b, impulse);
 }

@@ -777,6 +777,57 @@ TEST_CASE(
 }
 
 TEST_CASE(
+  "a pogo held short of its rest length by a ceiling reports saturation on "
+  "every frame at its compression cap",
+  "[dynamics][joints][mover]"
+) {
+  World world;
+  world.parameters.sleep = false;
+  const double held = 0.1;
+  const PogoSettings pogo = fixture::pogoFor(world, up);
+  const fixture::Character character = addFloating(world, -held, pogo);
+  const double head =
+    rigidOf(world, character.body).position.y + fixture::characterHalf.y;
+
+  (void)addStatic(
+    world.bodies,
+    fixture::groundField(),
+    0.5,
+    0.0,
+    glm::dvec3(0.0, head + 0.5, 0.0)
+  );
+
+  std::optional<uint32_t> reached;
+  uint32_t unsaturated = 0u;
+  double worst = 0.0;
+  double highest = anchorOf(world, character.body).y;
+
+  for (uint32_t frame = 1u; frame <= 120u; ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+    const JointReport report = *jointReport(world, character.pogo);
+
+    if (!reached && report.pogoForce >= pogo.maxCompression * (1.0 - 1.0e-6)) {
+      reached = frame;
+    }
+
+    if (reached) {
+      unsaturated += report.forceSaturated ? 0u : 1u;
+      worst = std::max(worst, std::abs(report.pogoForce - pogo.maxCompression));
+    }
+
+    highest = std::max(highest, anchorOf(world, character.body).y);
+  }
+
+  REQUIRE(reached.has_value());
+  CAPTURE(*reached, unsaturated, worst, highest);
+  REQUIRE(*reached <= 60u);
+  CHECK(highest < fixture::pogoRest - 0.5 * held);
+  CHECK(unsaturated == 0u);
+  CHECK(worst <= 1.0e-6 * pogo.maxCompression);
+}
+
+TEST_CASE(
   "a pogo's tension cap lets a body leave the ground",
   "[dynamics][joints][mover]"
 ) {
