@@ -9,6 +9,7 @@
 #include <talus/dynamics/joints/jointedits.h>
 #include <talus/dynamics/narrowphase/narrowphase.h>
 #include <talus/dynamics/pipeline/pipeline.h>
+#include <talus/dynamics/softstep/simdwidth.h>
 #include <talus/dynamics/tiers/tiers.h>
 #include <talus/field/sampledsdf/sampledsdf.h>
 
@@ -22,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <numbers>
 #include <optional>
@@ -194,6 +196,12 @@ double worstSpringError(
 
 bool bothAsleep(const World& world, const std::array<uint32_t, 2>& bodies) {
   return rigidOf(world, bodies[0]).asleep && rigidOf(world, bodies[1]).asleep;
+}
+
+double tiltOf(const RigidBody& body) {
+  const glm::dvec3 axis = body.rotation * up;
+
+  return std::atan2(glm::length(glm::cross(axis, up)), glm::dot(axis, up));
 }
 
 }
@@ -2070,6 +2078,451 @@ TEST_CASE(
   CHECK(asleepAt > removedAt + sleepFrames);
   CHECK(bothAsleep(world, pair));
   CHECK(world.islandStore.islandOf(pair[0]) != world.islandStore.islandOf(pair[1]));
+}
+
+TEST_CASE(
+  "a character does not lift itself on the crate it carries",
+  "[dynamics][joints][mover]"
+) {
+  World world;
+  const glm::dvec3 hand(0.0, -1.0, 0.0);
+  const glm::dvec3 crateHalf(0.15);
+
+  addGround(world);
+
+  fixture::Character character =
+    fixture::addCharacter(world, glm::dvec3(0.0, centreAbove(0.0, 0.0), 0.0));
+
+  character.onGround = true;
+  (void)fixture::addUprightSpring(world, character.body);
+
+  const fixture::Grip grip =
+    fixture::addGrip(world, character.body, hand, crateHalf, 10.0);
+  fixture::MoverStep move;
+
+  move.skips = {RaySkip{grip.held, noChild}, RaySkip{grip.hand, noChild}};
+
+  bool onFloor = true;
+  double drift = 0.0;
+
+  for (uint32_t frame = 1u; frame <= 180u; ++frame) {
+    const std::optional<WorldRayHit> hit =
+      fixture::moveCharacter(world, character, move);
+
+    REQUIRE(fixture::driveGrip(world, grip, character.body, hand));
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+    onFloor =
+      onFloor && character.ground == noBody && hit && hit->side == Side::Static;
+
+    if (frame > 120u) {
+      drift = std::max(
+        drift,
+        std::abs(anchorOf(world, character.body).y - fixture::pogoRest)
+      );
+    }
+  }
+
+  const glm::dvec3 foot = anchorOf(world, character.body);
+  const std::array<RaySkip, 2> bodyAndHand{
+    RaySkip{character.body, noChild},
+    RaySkip{grip.hand, noChild}
+  };
+  const std::optional<WorldRayHit> unskipped = castRay(
+    world,
+    foot,
+    foot - glm::dvec3(0.0, 2.0 * fixture::pogoRest, 0.0),
+    bodyAndHand
+  );
+
+  CHECK(onFloor);
+  CHECK(drift < 2.0e-3);
+  REQUIRE(unskipped.has_value());
+  CHECK(unskipped->body == grip.held);
+}
+
+TEST_CASE(
+  "a character pressing a wall at its force cap stays upright, level and still",
+  "[dynamics][joints][mover]"
+) {
+  World world;
+  const glm::dvec3 wallHalf(0.1, 2.0, 2.0);
+  const talus::field::SampledSdf wallField = boxField(wallHalf, 0.05);
+  const double wallFace = 0.9;
+  const double cap = 600.0;
+
+  addGround(world);
+
+  const uint32_t wall = addStatic(
+    world.bodies,
+    wallField,
+    0.5,
+    0.0,
+    glm::dvec3(wallFace + wallHalf.x, wallHalf.y, 0.0)
+  );
+  fixture::Character character =
+    fixture::addCharacter(world, glm::dvec3(0.0, centreAbove(0.0, 0.0), 0.0));
+
+  (void)fixture::addUprightSpring(world, character.body);
+
+  const double weight = fixture::weightOf(world);
+  fixture::MoverStep push;
+
+  push.velocity = glm::dvec3(3.0, 0.0, 0.0);
+  push.maxForce = cap;
+
+  double speed = 0.0;
+  double press = 0.0;
+  double climb = 0.0;
+  double tilt = 0.0;
+  double carry = 0.0;
+  bool wallOnly = true;
+
+  for (uint32_t frame = 1u; frame <= 180u; ++frame) {
+    (void)fixture::moveCharacter(world, character, push);
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+    if (frame <= 120u) {
+      continue;
+    }
+
+    const RigidBody& body = rigidOf(world, character.body);
+    const BodyRef ref = *findBody(world.bodies, character.body);
+    const std::vector<Contact> contacts = contactsOf(world, ref);
+
+    wallOnly = wallOnly && !contacts.empty();
+
+    for (const Contact& contact : contacts) {
+      const bool first =
+        contact.a.side == Side::Rigid && contact.a.body == ref.index;
+      const ContactSide& other = first ? contact.b : contact.a;
+
+      wallOnly = wallOnly && other.side == Side::Static && other.body == wall;
+    }
+
+    speed = std::max(speed, glm::length(body.velocity));
+    press = std::max(press, std::abs(normalForceOn(world, ref) - cap));
+    climb = std::max(
+      climb,
+      std::abs(anchorOf(world, character.body).y - fixture::pogoRest)
+    );
+    tilt = std::max(tilt, tiltOf(body));
+    carry = std::max(
+      carry,
+      std::abs(jointReport(world, character.pogo)->pogoForce - weight)
+    );
+  }
+
+  CHECK(wallOnly);
+  CHECK(speed < 1.0e-3);
+  CHECK(press < 0.01 * cap);
+  CHECK(climb < 1.0e-3);
+  CHECK(tilt < 0.01);
+  CHECK(carry < 0.01 * weight);
+}
+
+TEST_CASE(
+  "a character standing on a sleeping crate wakes it, and the crate sleeps again after the character leaves",
+  "[dynamics][joints][mover]"
+) {
+  const glm::dvec3 crateHalf(0.3, 0.1, 0.3);
+  const talus::field::SampledSdf crateField = boxField(crateHalf, 0.05);
+
+  for (const fixture::PogoUpdate update :
+       {fixture::PogoUpdate::Recreate, fixture::PogoUpdate::InPlace}) {
+    INFO((
+      update == fixture::PogoUpdate::Recreate ? "re-created" : "edited in place"
+    ));
+
+    World world;
+    addGround(world);
+
+    const uint32_t crate = addBox(
+      world,
+      crateField,
+      crateHalf,
+      20.0,
+      glm::dvec3(0.0, crateHalf.y, 0.0)
+    );
+
+    for (uint32_t frame = 0u; frame != 300u && !rigidOf(world, crate).asleep;
+         ++frame) {
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+    }
+
+    REQUIRE(rigidOf(world, crate).asleep);
+
+    const double rest = rigidOf(world, crate).position.y;
+    fixture::Character character = fixture::addCharacter(
+      world,
+      glm::dvec3(0.0, centreAbove(2.0 * crateHalf.y, 0.0), 0.0)
+    );
+
+    character.onGround = true;
+    (void)fixture::addUprightSpring(world, character.body);
+
+    fixture::MoverStep move;
+
+    move.update = update;
+
+    double sink = 0.0;
+    bool onCrate = true;
+
+    for (uint32_t frame = 1u; frame <= 120u; ++frame) {
+      (void)fixture::moveCharacter(world, character, move);
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+      if (frame == 1u) {
+        CHECK_FALSE(rigidOf(world, crate).asleep);
+      }
+
+      onCrate = onCrate && character.ground == crate;
+      sink = std::max(sink, std::abs(rigidOf(world, crate).position.y - rest));
+    }
+
+    CHECK(onCrate);
+    CHECK(sink < 1.0e-3);
+
+    std::optional<uint32_t> left;
+    std::optional<uint32_t> slept;
+
+    for (uint32_t frame = 0u; frame != 300u && !slept; ++frame) {
+      move.velocity = anchorOf(world, character.body).x < 1.5
+                        ? glm::dvec3(1.0, 0.0, 0.0)
+                        : glm::dvec3(0.0);
+
+      REQUIRE(fixture::moveCharacter(world, character, move).has_value());
+
+      if (!left && character.ground == noBody) {
+        left = frame;
+      }
+
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+      if (left && rigidOf(world, crate).asleep) {
+        slept = frame;
+      }
+    }
+
+    REQUIRE(left.has_value());
+    REQUIRE(slept.has_value());
+    CAPTURE(*left, *slept);
+    CHECK(*slept - *left <= 90u);
+  }
+}
+
+namespace {
+
+uint64_t mixBits(uint64_t hash, double value) {
+  uint64_t bits = 0u;
+
+  std::memcpy(&bits, &value, sizeof(bits));
+
+  for (int byte = 0; byte != 8; ++byte) {
+    hash ^= (bits >> (8 * byte)) & 0xFFu;
+    hash *= 1099511628211ull;
+  }
+
+  return hash;
+}
+
+uint64_t bodyHash(uint64_t hash, const RigidBody& body) {
+  for (int axis = 0; axis != 3; ++axis) {
+    hash = mixBits(hash, body.position[axis]);
+    hash = mixBits(hash, body.velocity[axis]);
+    hash = mixBits(hash, body.angularVelocity[axis]);
+  }
+
+  for (int axis = 0; axis != 4; ++axis) {
+    hash = mixBits(hash, body.rotation[axis]);
+  }
+
+  return hash;
+}
+
+uint64_t worldHash(uint64_t hash, const World& world) {
+  for (const RigidBody& body : world.bodies.rigids) {
+    hash = bodyHash(hash, body);
+  }
+
+  for (const LatticeBody& lattice : world.bodies.lattices) {
+    for (const glm::dvec3& node : lattice.position) {
+      for (int axis = 0; axis != 3; ++axis) {
+        hash = mixBits(hash, node[axis]);
+      }
+    }
+  }
+
+  for (const Joint& joint : world.joints.all()) {
+    for (int axis = 0; axis != 3; ++axis) {
+      hash = mixBits(hash, joint.report.force[axis]);
+      hash = mixBits(hash, joint.report.torque[axis]);
+    }
+
+    hash = mixBits(hash, joint.report.pogoForce);
+    hash = mixBits(hash, joint.report.pogoSpeed);
+  }
+
+  return hash;
+}
+
+bool ownedByStrainstep(const World& world, uint32_t id) {
+  const uint32_t index = findBody(world.bodies, id)->index;
+
+  return std::ranges::any_of(world.islands, [&](const Island& island) {
+    return island.owner == Owner::Strainstep
+           && std::ranges::any_of(island.bodies, [&](const BodyRef& ref) {
+                return ref.side == Side::Rigid && ref.index == index;
+              });
+  });
+}
+
+bool touchesLattice(const World& world, uint32_t id) {
+  const uint32_t index = findBody(world.bodies, id)->index;
+
+  return std::ranges::any_of(
+    contactRecords(world),
+    [&](const Contact& contact) {
+      const auto rigid = [&](const ContactSide& side) {
+        return side.side == Side::Rigid && side.body == index;
+      };
+
+      return (rigid(contact.a) && contact.b.side == Side::Lattice)
+             || (rigid(contact.b) && contact.a.side == Side::Lattice);
+    }
+  );
+}
+
+struct MoverRun {
+  uint64_t hash = 0u;
+  bool saturated = false;
+  bool onStand = true;
+  std::vector<uint32_t> grounds;
+  bool strainstep = false;
+  bool touched = false;
+};
+
+MoverRun moverScene(uint32_t workers, uint32_t width) {
+  static const glm::dvec3 pileHalf(0.1);
+  static const talus::field::SampledSdf pileField = boxField(pileHalf, 0.05);
+  static const glm::dvec3 standHalf(0.3, 0.1, 0.3);
+  static const talus::field::SampledSdf standField = boxField(standHalf, 0.05);
+  static const glm::dvec3 blockHalf(0.4);
+  static const fixture::SoftBlock block = fixture::softBlock(blockHalf, 0.2);
+  static const glm::dvec3 gripOffset(0.5, 0.0, 0.0);
+  World world;
+
+  world.workerCount = workers;
+  world.simdWidth = width;
+  addGround(world);
+
+  for (int column = 0; column != 3; ++column) {
+    for (int row = 0; row != 3; ++row) {
+      for (int level = 0; level != 2; ++level) {
+        (void)addBox(
+          world,
+          pileField,
+          pileHalf,
+          10.0,
+          glm::dvec3(
+            -0.86 + 0.21 * column,
+            pileHalf.y + 2.01 * pileHalf.y * level,
+            0.6 + 0.21 * row
+          )
+        );
+      }
+    }
+  }
+
+  fixture::addSoftBlock(world, block, glm::dvec3(0.0, blockHalf.y, 0.0));
+
+  const glm::dvec3 standAt(1.5, standHalf.y, -1.5);
+  const uint32_t stand = addBox(world, standField, standHalf, 20.0, standAt);
+  fixture::Character walker =
+    fixture::addCharacter(world, glm::dvec3(-1.0, centreAbove(0.0, 0.0), 0.0));
+  fixture::Character stander = fixture::addCharacter(
+    world,
+    glm::dvec3(standAt.x, centreAbove(2.0 * standHalf.y, 0.0), standAt.z)
+  );
+
+  walker.onGround = true;
+  stander.onGround = true;
+  (void)fixture::addUprightSpring(world, walker.body);
+  (void)fixture::addUprightSpring(world, stander.body);
+
+  const fixture::Grip grip =
+    fixture::addGrip(world, stander.body, gripOffset, glm::dvec3(0.1), 3.0);
+  MoverRun run;
+
+  run.hash = 1469598103934665603ull;
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    fixture::MoverStep walk;
+    fixture::MoverStep still;
+
+    walk.velocity =
+      frame < 60u ? glm::dvec3(1.0, 0.0, 0.0) : glm::dvec3(0.0, 0.0, 1.5);
+    walk.maxForce = 600.0;
+    still.update = fixture::PogoUpdate::InPlace;
+    still.skips = {RaySkip{grip.hand, noChild}, RaySkip{grip.held, noChild}};
+
+    if (
+      !fixture::tryMoveCharacter(world, walker, walk).applied
+      || !fixture::tryMoveCharacter(world, stander, still).applied
+      || !fixture::driveGrip(world, grip, stander.body, gripOffset)
+      || talus::dynamics::step(world).nonFinite
+    ) {
+      return {};
+    }
+
+    run.saturated =
+      run.saturated || jointReport(world, walker.planar)->forceSaturated;
+    run.onStand = run.onStand && stander.pogo != 0u
+                  && jointDef(world, stander.pogo)->bodyA == stand;
+
+    if (walker.pogo != 0u) {
+      const uint32_t ground = jointDef(world, walker.pogo)->bodyA;
+
+      if (std::ranges::find(run.grounds, ground) == run.grounds.end()) {
+        run.grounds.push_back(ground);
+      }
+    }
+
+    run.strainstep = run.strainstep || ownedByStrainstep(world, walker.body);
+    run.touched = run.touched || touchesLattice(world, walker.body);
+    run.hash = worldHash(run.hash, world);
+  }
+
+  return run;
+}
+
+}
+
+TEST_CASE(
+  "mover worlds step the same at widths 1, 4 and 8 and workers 1, 4 and 8",
+  "[dynamics][joints][mover]"
+) {
+  std::vector<uint32_t> widths{1u, 4u};
+
+  if (hasAvx2()) {
+    widths.push_back(8u);
+  }
+
+  const MoverRun serial = moverScene(1u, 1u);
+
+  REQUIRE(serial.hash != 0u);
+  REQUIRE(serial.saturated);
+  REQUIRE(serial.onStand);
+  REQUIRE(serial.grounds.size() >= 2u);
+  REQUIRE(serial.strainstep);
+  REQUIRE(serial.touched);
+
+  for (const uint32_t width : widths) {
+    for (const uint32_t workers : {1u, 4u, 8u}) {
+      CAPTURE(width, workers);
+      CHECK(moverScene(workers, width).hash == serial.hash);
+    }
+  }
 }
 
 namespace {
