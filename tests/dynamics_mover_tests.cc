@@ -1999,28 +1999,41 @@ TEST_CASE(
 
   addGround(world);
 
-  const uint32_t crate = addBox(
-    world,
-    crateField,
-    crateHalf,
-    20.0,
-    glm::dvec3(-1.5, crateHalf.y, 0.0)
-  );
+  const std::array<double, 2> sides{-1.2, 1.2};
+  std::array<uint32_t, 2> crates{};
+  std::array<fixture::Character, 2> characters{};
+
+  for (size_t index = 0u; index != sides.size(); ++index) {
+    crates[index] = addBox(
+      world,
+      crateField,
+      crateHalf,
+      20.0,
+      glm::dvec3(-1.5, crateHalf.y, sides[index])
+    );
+  }
+
   const std::array<uint32_t, 2> pair{
     addBox(world, pairField, pairHalf, 10.0, glm::dvec3(1.0, pairHalf.y, 0.0)),
     addBox(world, pairField, pairHalf, 10.0, glm::dvec3(2.0, pairHalf.y, 0.0))
   };
   const uint32_t joint =
     addJoint(world, ballBetween(pair[0], pair[1], glm::dvec3(0.5, 0.0, 0.0)));
-  fixture::Character character = fixture::addCharacter(
-    world,
-    glm::dvec3(-1.5, centreAbove(2.0 * crateHalf.y, 0.0), 0.0)
-  );
 
   REQUIRE(joint != 0u);
-  character.onGround = true;
+
+  for (size_t index = 0u; index != sides.size(); ++index) {
+    characters[index] = fixture::addCharacter(
+      world,
+      glm::dvec3(-1.5, centreAbove(2.0 * crateHalf.y, 0.0), sides[index])
+    );
+    characters[index].onGround = true;
+  }
 
   const uint32_t removedAt = 10u;
+  const uint32_t sleepFrames = static_cast<uint32_t>(
+    std::lround(world.parameters.timeToSleep / world.parameters.dt)
+  );
   const uint32_t deadline =
     removedAt
     + static_cast<uint32_t>(std::lround(
@@ -2032,15 +2045,19 @@ TEST_CASE(
   for (uint32_t frame = 0u; frame != deadline; ++frame) {
     INFO("frame " << frame);
 
+    (void)fixture::moveCharacter(world, characters[0], fixture::MoverStep{});
+
     if (frame == removedAt) {
       REQUIRE(removeJoint(world, joint));
     }
 
-    (void)fixture::moveCharacter(world, character, fixture::MoverStep{});
+    (void)fixture::moveCharacter(world, characters[1], fixture::MoverStep{});
     REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
 
-    if (frame >= removedAt && character.ground == crate) {
-      ++onCrate;
+    for (size_t index = 0u; index != characters.size(); ++index) {
+      if (frame >= removedAt && characters[index].ground == crates[index]) {
+        ++onCrate;
+      }
     }
 
     if (asleepAt == deadline && bothAsleep(world, pair)) {
@@ -2048,8 +2065,9 @@ TEST_CASE(
     }
   }
 
-  CAPTURE(asleepAt, onCrate);
-  CHECK(onCrate == deadline - removedAt);
+  CAPTURE(asleepAt, onCrate, sleepFrames);
+  CHECK(onCrate == 2u * (deadline - removedAt));
+  CHECK(asleepAt > removedAt + sleepFrames);
   CHECK(bothAsleep(world, pair));
   CHECK(world.islandStore.islandOf(pair[0]) != world.islandStore.islandOf(pair[1]));
 }
