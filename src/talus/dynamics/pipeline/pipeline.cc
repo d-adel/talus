@@ -300,7 +300,8 @@ void wakeTouchedSleepers(World& world, std::span<const uint32_t> movers) {
     const BodyRef ref = world.islandStore.refOf(id);
 
     if (ref.side != Side::Rigid || ref.index >= bodies.rigids.size()
-        || bodies.rigids[ref.index].id != id || bodies.rigids[ref.index].mass > 0.0) {
+        || bodies.rigids[ref.index].id != id
+        || bodies.rigids[ref.index].mass > 0.0) {
       continue;
     }
 
@@ -313,7 +314,8 @@ void wakeTouchedSleepers(World& world, std::span<const uint32_t> movers) {
 
       for (const BodyRef& other : {pair.first, pair.second}) {
         if (other.side == Side::Rigid && bodies.rigids[other.index].id != id
-            && bodies.rigids[other.index].mass > 0.0 && resting(bodies, other)) {
+            && bodies.rigids[other.index].mass > 0.0
+            && resting(bodies, other)) {
           wakeBody(bodies, other);
         }
       }

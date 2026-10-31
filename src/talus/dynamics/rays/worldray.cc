@@ -192,8 +192,9 @@ std::optional<LocalHit> rayField(
   }
 
   const glm::dvec3 low(field.origin);
-  const glm::dvec3 high =
-    low + glm::dvec3(field.voxelSize) * glm::dvec3(field.resolution - glm::uvec3(1u));
+  const glm::dvec3 high = low
+                          + glm::dvec3(field.voxelSize)
+                              * glm::dvec3(field.resolution - glm::uvec3(1u));
   const std::optional<std::pair<double, double>> window =
     clipToBox(start, span, low, high, reach);
 
@@ -208,11 +209,11 @@ std::optional<LocalHit> rayField(
   const auto normalAt = [&](double at) {
     return field::probe<double>(field, start + at * span).normal;
   };
-  const double floor =
-    fieldStepFloor
-    * static_cast<double>(
-      std::min(field.voxelSize.x, std::min(field.voxelSize.y, field.voxelSize.z))
-    );
+  const double floor = fieldStepFloor
+                       * static_cast<double>(std::min(
+                         field.voxelSize.x,
+                         std::min(field.voxelSize.y, field.voxelSize.z)
+                       ));
 
   double at = window->first;
 
@@ -402,24 +403,20 @@ private:
 
         return;
       case RigidShape::Sphere:
-        if (
-          const std::optional<LocalHit> hit =
-            sphereEntry(body.position, body.radius, m_from, m_to - m_from)
-        ) {
+        if (const std::optional<LocalHit> hit =
+              sphereEntry(body.position, body.radius, m_from, m_to - m_from)) {
           consider(Side::Rigid, body.id, noChild, *hit);
         }
 
         return;
       case RigidShape::Box:
-        if (
-          const std::optional<LocalHit> hit = boxEntry(
-            body.position,
-            body.rotation,
-            body.halfExtents,
-            m_from,
-            m_to
-          )
-        ) {
+        if (const std::optional<LocalHit> hit = boxEntry(
+              body.position,
+              body.rotation,
+              body.halfExtents,
+              m_from,
+              m_to
+            )) {
           consider(Side::Rigid, body.id, noChild, *hit);
         }
 
@@ -444,10 +441,8 @@ private:
     const glm::dvec3 end =
       body.fieldOrigin + body.fieldRotation * (back * (m_to - body.position));
 
-    if (
-      const std::optional<LocalHit> hit =
-        rayField(*body.field, start, end, limit())
-    ) {
+    if (const std::optional<LocalHit> hit =
+          rayField(*body.field, start, end, limit())) {
       consider(
         Side::Rigid,
         body.id,
@@ -465,14 +460,12 @@ private:
       return;
     }
 
-    if (
-      const std::optional<LocalHit> hit = rayField(
-        *body.field,
-        staticLocal(body, m_from),
-        staticLocal(body, m_to),
-        limit()
-      )
-    ) {
+    if (const std::optional<LocalHit> hit = rayField(
+          *body.field,
+          staticLocal(body, m_from),
+          staticLocal(body, m_to),
+          limit()
+        )) {
       consider(
         Side::Static,
         body.id,
@@ -487,10 +480,8 @@ private:
       return;
     }
 
-    if (
-      const std::optional<LocalHit> hit =
-        rayLattice(lattice, m_from, m_to, limit())
-    ) {
+    if (const std::optional<LocalHit> hit =
+          rayLattice(lattice, m_from, m_to, limit())) {
       consider(Side::Lattice, lattice.id, noChild, *hit);
     }
   }
@@ -531,10 +522,8 @@ private:
           continue;
         }
 
-        if (
-          const std::optional<LocalHit> hit =
-            boxEntry(child.centre, child.rotation, child.half, start, end)
-        ) {
+        if (const std::optional<LocalHit> hit =
+              boxEntry(child.centre, child.rotation, child.half, start, end)) {
           consider(
             Side::Rigid,
             body.id,

@@ -63,16 +63,8 @@ uint32_t addBox(
   const glm::dvec3& velocity = glm::dvec3(0.0),
   double friction = 0.5
 ) {
-  const uint32_t index = addRigidBox(
-    world.bodies,
-    field,
-    half,
-    mass,
-    at,
-    velocity,
-    friction,
-    3u
-  );
+  const uint32_t index =
+    addRigidBox(world.bodies, field, half, mass, at, velocity, friction, 3u);
 
   return world.bodies.rigids[index].id;
 }
@@ -93,7 +85,11 @@ void run(World& world, uint32_t frames) {
   }
 }
 
-JointDef planarJoint(uint32_t a, uint32_t b, const PlanarVelocitySettings& planar) {
+JointDef planarJoint(
+  uint32_t a,
+  uint32_t b,
+  const PlanarVelocitySettings& planar
+) {
   JointDef def;
   def.kind = JointKind::PlanarVelocity;
   def.bodyA = a;
@@ -104,7 +100,10 @@ JointDef planarJoint(uint32_t a, uint32_t b, const PlanarVelocitySettings& plana
   return def;
 }
 
-bool samePlanar(const PlanarVelocitySettings& a, const PlanarVelocitySettings& b) {
+bool samePlanar(
+  const PlanarVelocitySettings& a,
+  const PlanarVelocitySettings& b
+) {
   return a.targetVelocity == b.targetVelocity && a.maxForce == b.maxForce;
 }
 
@@ -150,13 +149,13 @@ fixture::Character addFloating(
   double stretch,
   const PogoSettings& pogo
 ) {
-  fixture::Character character =
-    fixture::addCharacter(world, glm::dvec3(0.0, centreAbove(0.0, stretch), 0.0));
-
-  character.pogo = addJoint(
+  fixture::Character character = fixture::addCharacter(
     world,
-    pogoJoint(noBody, character.body, glm::dvec3(0.0), pogo)
+    glm::dvec3(0.0, centreAbove(0.0, stretch), 0.0)
   );
+
+  character.pogo =
+    addJoint(world, pogoJoint(noBody, character.body, glm::dvec3(0.0), pogo));
   REQUIRE(character.pogo != 0u);
 
   return character;
@@ -207,7 +206,8 @@ double tiltOf(const RigidBody& body) {
 }
 
 TEST_CASE(
-  "a planar velocity joint reaches its target in its plane and never turns the body",
+  "a planar velocity joint reaches its target in its plane and never turns the "
+  "body",
   "[dynamics][joints][mover]"
 ) {
   World world;
@@ -308,21 +308,19 @@ TEST_CASE(
   const glm::dvec3 deckHalf(1.0, 0.1, 1.0);
   const glm::dvec3 deckVelocity(1.0, 0.0, 0.5);
   const talus::field::SampledSdf deckField = boxField(deckHalf, 0.05);
-  const uint32_t deck = addBox(
-    world,
-    deckField,
-    deckHalf,
-    0.0,
-    glm::dvec3(0.0),
-    deckVelocity
-  );
+  const uint32_t deck =
+    addBox(world, deckField, deckHalf, 0.0, glm::dvec3(0.0), deckVelocity);
   const fixture::Character character =
     fixture::addCharacter(world, glm::dvec3(0.0, 2.0, 0.0), deck);
 
-  REQUIRE(setPlanarVelocity(world, character.planar, {glm::dvec3(0.0), 2000.0}));
+  REQUIRE(
+    setPlanarVelocity(world, character.planar, {glm::dvec3(0.0), 2000.0})
+  );
   run(world, 60u);
 
-  CHECK(glm::length(rigidOf(world, character.body).velocity - deckVelocity) < 1.0e-4);
+  CHECK(
+    glm::length(rigidOf(world, character.body).velocity - deckVelocity) < 1.0e-4
+  );
   CHECK_FALSE(fixture::touching(world, character.body, deck));
 
   REQUIRE(setPlanarVelocity(
@@ -379,7 +377,9 @@ TEST_CASE(
 
   CHECK(glm::length(body.velocity) < 1.0e-3);
   CHECK(
-    std::abs(normalForceOn(world, *findBody(world.bodies, character.body)) - 300.0)
+    std::abs(
+      normalForceOn(world, *findBody(world.bodies, character.body)) - 300.0
+    )
     < 3.0
   );
   CHECK(glm::length(body.angularVelocity) < 1.0e-3);
@@ -517,15 +517,14 @@ TEST_CASE(
     addBox(world, crateField, crateHalf, 1.5, glm::dvec3(0.0, 0.05, 0.0));
   const uint32_t base =
     addBox(world, crateField, crateHalf, 0.0, glm::dvec3(1.0, 0.5, 0.0));
-  const uint32_t joint = addJoint(
-    world,
-    planarJoint(base, crate, {glm::dvec3(0.0), 50.0})
-  );
+  const uint32_t joint =
+    addJoint(world, planarJoint(base, crate, {glm::dvec3(0.0), 50.0}));
 
   REQUIRE(joint != 0u);
 
   for (uint32_t frame = 0u;
-       frame != 300u && !(rigidOf(world, crate).asleep && rigidOf(world, base).asleep);
+       frame != 300u
+       && !(rigidOf(world, crate).asleep && rigidOf(world, base).asleep);
        ++frame) {
     REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
   }
@@ -611,12 +610,15 @@ TEST_CASE(
 
     worst = std::max(
       worst,
-      std::abs(anchorOf(capped, character.body).y - fixture::pogoRest - expected)
+      std::abs(
+        anchorOf(capped, character.body).y - fixture::pogoRest - expected
+      )
     );
     same = same
            && rigidOf(capped, character.body).position
                 == rigidOf(free, twin.body).position;
-    saturated = saturated || jointReport(capped, character.pogo)->forceSaturated;
+    saturated =
+      saturated || jointReport(capped, character.pogo)->forceSaturated;
   }
 
   CHECK(worst <= 0.02 * 0.2);
@@ -680,8 +682,9 @@ TEST_CASE(
       sideways = std::max(sideways, std::abs(rate.x - 1.0));
     }
 
-    touched = touched
-              || !contactsOf(world, *findBody(world.bodies, character.body)).empty();
+    touched =
+      touched
+      || !contactsOf(world, *findBody(world.bodies, character.body)).empty();
   }
 
   CHECK(std::abs(anchor.y - (fixture::pogoRest + rise)) < 1.0e-3);
@@ -691,7 +694,8 @@ TEST_CASE(
   );
   CHECK(
     highest <= fixture::pogoRest + rise
-                 + fixture::springOvershoot(fixture::pogoDamping) * rise + 1.0e-3
+                 + fixture::springOvershoot(fixture::pogoDamping) * rise
+                 + 1.0e-3
   );
   CHECK(sideways <= 0.1);
   CHECK_FALSE(touched);
@@ -799,7 +803,8 @@ TEST_CASE(
 
     const JointReport report = *jointReport(world, character.pogo);
 
-    rise = std::max(rise, anchorOf(world, character.body).y - fixture::pogoRest);
+    rise =
+      std::max(rise, anchorOf(world, character.body).y - fixture::pogoRest);
     pull = std::min(pull, report.pogoForce);
 
     if (frame == 61u) {
@@ -829,7 +834,12 @@ TEST_CASE(
     ));
     character.pogo = addJoint(
       world,
-      pogoJoint(noBody, character.body, glm::dvec3(0.0), fixture::pogoFor(world, up))
+      pogoJoint(
+        noBody,
+        character.body,
+        glm::dvec3(0.0),
+        fixture::pogoFor(world, up)
+      )
     );
     REQUIRE(character.pogo != 0u);
 
@@ -863,7 +873,9 @@ TEST_CASE(
     REQUIRE(fresh.pogoForce == same.pogoForce);
     REQUIRE(fresh.pogoSpeed == same.pogoSpeed);
     REQUIRE(remade.joints.all().size() == kept.joints.all().size());
-    REQUIRE(remade.islandStore.pendingSplit() == kept.islandStore.pendingSplit());
+    REQUIRE(
+      remade.islandStore.pendingSplit() == kept.islandStore.pendingSplit()
+    );
     REQUIRE(remade.islandStore.splits() == kept.islandStore.splits());
     REQUIRE(remadeIsland == keptIsland);
 
@@ -898,8 +910,20 @@ TEST_CASE(
   addGround(world);
 
   const std::array<uint32_t, 2> crates{
-    addBox(world, crateField, crateHalf, 20.0, glm::dvec3(-crateHalf.x, crateHalf.y, 0.0)),
-    addBox(world, crateField, crateHalf, 20.0, glm::dvec3(crateHalf.x, crateHalf.y, 0.0))
+    addBox(
+      world,
+      crateField,
+      crateHalf,
+      20.0,
+      glm::dvec3(-crateHalf.x, crateHalf.y, 0.0)
+    ),
+    addBox(
+      world,
+      crateField,
+      crateHalf,
+      20.0,
+      glm::dvec3(crateHalf.x, crateHalf.y, 0.0)
+    )
   };
   const std::array<glm::dvec3, 2> seams{
     glm::dvec3(crateHalf.x, crateHalf.y, 0.0),
@@ -959,7 +983,8 @@ TEST_CASE(
     );
 
     for (const uint32_t crate : crates) {
-      crateSpeed = std::max(crateSpeed, glm::length(rigidOf(world, crate).velocity));
+      crateSpeed =
+        std::max(crateSpeed, glm::length(rigidOf(world, crate).velocity));
     }
 
     steadyCount = steadyCount && world.joints.all().size() == count;
@@ -999,7 +1024,8 @@ TEST_CASE(
 }
 
 TEST_CASE(
-  "a pogo on steep ground holds still with the mover on and slides without launching with it off",
+  "a pogo on steep ground holds still with the mover on and slides without "
+  "launching with it off",
   "[dynamics][joints][mover]"
 ) {
   World world;
@@ -1221,7 +1247,8 @@ TEST_CASE(
 }
 
 TEST_CASE(
-  "a pogo refuses ground too steep for its axis and lets go when its body turns past the guard",
+  "a pogo refuses ground too steep for its axis and lets go when its body "
+  "turns past the guard",
   "[dynamics][joints][mover]"
 ) {
   const double guard = std::acos(pogoSteepestCosine);
@@ -1250,14 +1277,24 @@ TEST_CASE(
     CHECK(
       addJoint(
         world,
-        pogoJoint(noBody, body, glm::dvec3(0.0), fixture::pogoFor(world, tilted(guard + 0.01)))
+        pogoJoint(
+          noBody,
+          body,
+          glm::dvec3(0.0),
+          fixture::pogoFor(world, tilted(guard + 0.01))
+        )
       )
       == 0u
     );
     CHECK(
       addJoint(
         world,
-        pogoJoint(noBody, body, glm::dvec3(0.0), fixture::pogoFor(world, tilted(guard - 0.01)))
+        pogoJoint(
+          noBody,
+          body,
+          glm::dvec3(0.0),
+          fixture::pogoFor(world, tilted(guard - 0.01))
+        )
       )
       != 0u
     );
@@ -1295,7 +1332,9 @@ TEST_CASE(
 
     REQUIRE(joint != 0u);
     run(world, 30u);
-    REQUIRE(setRigidPose(world, body, rigidOf(world, body).position, turn(angle)));
+    REQUIRE(
+      setRigidPose(world, body, rigidOf(world, body).position, turn(angle))
+    );
     REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
 
     const JointReport report = *jointReport(world, joint);
@@ -1324,14 +1363,17 @@ TEST_CASE(
 }
 
 TEST_CASE(
-  "a pogo created with a stored speed comes to rest on its crate and does not hop",
+  "a pogo created with a stored speed comes to rest on its crate and does not "
+  "hop",
   "[dynamics][joints][mover]"
 ) {
   const glm::dvec3 crateHalf(0.3, 0.1, 0.3);
   const talus::field::SampledSdf crateField = boxField(crateHalf, 0.05);
 
   for (const auto& [capped, seed] :
-       {std::pair{true, 0.05}, std::pair{true, 0.5}, std::pair{false, 0.05},
+       {std::pair{true, 0.05},
+        std::pair{true, 0.5},
+        std::pair{false, 0.05},
         std::pair{false, 0.5}}) {
     INFO(
       (capped ? "compression cap 0.5 W" : "the host's caps")
@@ -1435,7 +1477,8 @@ TEST_CASE(
     worst = std::max(
       worst,
       std::abs(
-        rigidOf(world, body).position.y - (start - 0.5 * gravity * time * (time + h))
+        rigidOf(world, body).position.y
+        - (start - 0.5 * gravity * time * (time + h))
       )
     );
     forceless = forceless && report.pogoForce == 0.0;
@@ -1459,7 +1502,12 @@ TEST_CASE(
 
   character.pogo = addJoint(
     world,
-    pogoJoint(noBody, character.body, glm::dvec3(0.0), fixture::pogoFor(world, up))
+    pogoJoint(
+      noBody,
+      character.body,
+      glm::dvec3(0.0),
+      fixture::pogoFor(world, up)
+    )
   );
   REQUIRE(character.pogo != 0u);
 
@@ -1483,10 +1531,8 @@ TEST_CASE(
     pogo.force = old.pogoForce;
     pogo.speed = old.pogoSpeed;
     REQUIRE(removeJoint(world, character.pogo));
-    character.pogo = addJoint(
-      world,
-      pogoJoint(noBody, character.body, glm::dvec3(0.0), pogo)
-    );
+    character.pogo =
+      addJoint(world, pogoJoint(noBody, character.body, glm::dvec3(0.0), pogo));
     REQUIRE(character.pogo != 0u);
     REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
 
@@ -1511,8 +1557,10 @@ TEST_CASE(
   const double launch = 3.0;
 
   for (const auto& [tension, release, jump] :
-       {std::tuple{0.0, 0.0, 60u}, std::tuple{0.0, -0.1, 5u},
-        std::tuple{0.5, 0.0, 60u}, std::tuple{0.5, -0.1, 5u}}) {
+       {std::tuple{0.0, 0.0, 60u},
+        std::tuple{0.0, -0.1, 5u},
+        std::tuple{0.5, 0.0, 60u},
+        std::tuple{0.5, -0.1, 5u}}) {
     INFO(
       "tension cap " << tension << " W, released from " << release
                      << ", jump at frame " << jump
@@ -1527,7 +1575,8 @@ TEST_CASE(
 
     const fixture::Character character = addFloating(world, release, pogo);
     const double expected =
-      launch * launch / (2.0 * (gravity + pogo.maxTension / fixture::characterMass));
+      launch * launch
+      / (2.0 * (gravity + pogo.maxTension / fixture::characterMass));
     double from = 0.0;
     double spring = 0.0;
     double rise = 0.0;
@@ -1536,7 +1585,9 @@ TEST_CASE(
       if (frame == jump) {
         from = anchorOf(world, character.body).y;
         spring = jointReport(world, character.pogo)->pogoSpeed;
-        REQUIRE(setVelocity(world, character.body, glm::dvec3(0.0, launch, 0.0)));
+        REQUIRE(
+          setVelocity(world, character.body, glm::dvec3(0.0, launch, 0.0))
+        );
       }
 
       REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
@@ -1567,12 +1618,12 @@ TEST_CASE(
   const glm::dvec3 platformHalf(1.0, 0.1, 1.0);
   const talus::field::SampledSdf platformField = boxField(platformHalf, 0.05);
   const double omega = 2.0 * std::numbers::pi * 2.0;
-  const double host = fixture::capScale
-                      * static_cast<double>(IntegrationParameters{}.jointSubsteps)
-                      / static_cast<double>(fixture::capSubsteps);
+  const double host =
+    fixture::capScale
+    * static_cast<double>(IntegrationParameters{}.jointSubsteps)
+    / static_cast<double>(fixture::capSubsteps);
 
-  for (const Drive drive :
-       {Drive{0.10, host, host}, Drive{0.05, host, host}}) {
+  for (const Drive drive : {Drive{0.10, host, host}, Drive{0.05, host, host}}) {
     INFO(
       "amplitude " << drive.amplitude << " m, compression " << drive.compression
                    << " W, tension " << drive.tension << " W"
@@ -1595,7 +1646,12 @@ TEST_CASE(
     pogo.maxTension = drive.tension * weight;
     character.pogo = addJoint(
       world,
-      pogoJoint(platform, character.body, glm::dvec3(0.0, platformHalf.y, 0.0), pogo)
+      pogoJoint(
+        platform,
+        character.body,
+        glm::dvec3(0.0, platformHalf.y, 0.0),
+        pogo
+      )
     );
     REQUIRE(character.pogo != 0u);
 
@@ -1620,9 +1676,10 @@ TEST_CASE(
       REQUIRE(character.pogo != 0u);
       REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
 
-      const double gap = anchorOf(world, character.body).y
-                         - (rigidOf(world, platform).position.y + platformHalf.y)
-                         - fixture::pogoRest;
+      const double gap =
+        anchorOf(world, character.body).y
+        - (rigidOf(world, platform).position.y + platformHalf.y)
+        - fixture::pogoRest;
 
       means[(frame - 1u) / 30u] += gap / 30.0;
     }
@@ -1692,10 +1749,8 @@ TEST_CASE(
   const auto build = [](World& world) {
     addGround(world);
 
-    fixture::Character character = fixture::addCharacter(
-      world,
-      glm::dvec3(0.0, centreAbove(0.0, 0.0), 0.0)
-    );
+    fixture::Character character =
+      fixture::addCharacter(world, glm::dvec3(0.0, centreAbove(0.0, 0.0), 0.0));
 
     (void)fixture::addUprightSpring(world, character.body);
 
@@ -1792,7 +1847,8 @@ TEST_CASE(
 }
 
 TEST_CASE(
-  "setPogo rejects unknown joints, other kinds and invalid values, and wakes both bodies",
+  "setPogo rejects unknown joints, other kinds and invalid values, and wakes "
+  "both bodies",
   "[dynamics][joints][mover]"
 ) {
   World world;
@@ -1852,7 +1908,9 @@ TEST_CASE(
   }
 
   SECTION("a planar velocity joint") {
-    CHECK_FALSE(setPogo(world, character.planar, before.frameA, before.frameB, good));
+    CHECK_FALSE(
+      setPogo(world, character.planar, before.frameA, before.frameB, good)
+    );
     CHECK(unchanged(character.planar, planarBefore));
   }
 
@@ -1894,7 +1952,9 @@ TEST_CASE(
     CHECK(bothAsleep(world, {crate, character.body}));
   }
 
-  SECTION("a valid edit keeps the id, stores normalised values and wakes both bodies") {
+  SECTION(
+    "a valid edit keeps the id, stores normalised values and wakes both bodies"
+  ) {
     PogoSettings edit = good;
     JointFrame frameA = before.frameA;
     JointFrame frameB = before.frameB;
@@ -1961,7 +2021,8 @@ TEST_CASE(
   world.parameters.gravity = glm::dvec3(0.0);
 
   const uint32_t b = addBox(world, field, half, 10.0, glm::dvec3(0.0));
-  const uint32_t c = addBox(world, field, half, 10.0, glm::dvec3(1.0, 0.0, 0.0));
+  const uint32_t c =
+    addBox(world, field, half, 10.0, glm::dvec3(1.0, 0.0, 0.0));
   const uint32_t hand =
     addBox(world, field, half, 0.0, glm::dvec3(0.0, 1.0, 0.0));
   JointDef spring;
@@ -2044,9 +2105,9 @@ TEST_CASE(
   );
   const uint32_t deadline =
     removedAt
-    + static_cast<uint32_t>(std::lround(
-      (world.parameters.timeToSleep + 1.0) / world.parameters.dt
-    ));
+    + static_cast<uint32_t>(
+      std::lround((world.parameters.timeToSleep + 1.0) / world.parameters.dt)
+    );
   uint32_t onCrate = 0u;
   uint32_t asleepAt = deadline;
 
@@ -2077,7 +2138,9 @@ TEST_CASE(
   CHECK(onCrate == 2u * (deadline - removedAt));
   CHECK(asleepAt > removedAt + sleepFrames);
   CHECK(bothAsleep(world, pair));
-  CHECK(world.islandStore.islandOf(pair[0]) != world.islandStore.islandOf(pair[1]));
+  CHECK(
+    world.islandStore.islandOf(pair[0]) != world.islandStore.islandOf(pair[1])
+  );
 }
 
 TEST_CASE(
@@ -2222,7 +2285,8 @@ TEST_CASE(
 }
 
 TEST_CASE(
-  "a character standing on a sleeping crate wakes it, and the crate sleeps again after the character leaves",
+  "a character standing on a sleeping crate wakes it, and the crate sleeps "
+  "again after the character leaves",
   "[dynamics][joints][mover]"
 ) {
   const glm::dvec3 crateHalf(0.3, 0.1, 0.3);
@@ -2466,12 +2530,10 @@ MoverRun moverScene(uint32_t workers, uint32_t width) {
     still.update = fixture::PogoUpdate::InPlace;
     still.skips = {RaySkip{grip.hand, noChild}, RaySkip{grip.held, noChild}};
 
-    if (
-      !fixture::tryMoveCharacter(world, walker, walk).applied
-      || !fixture::tryMoveCharacter(world, stander, still).applied
-      || !fixture::driveGrip(world, grip, stander.body, gripOffset)
-      || talus::dynamics::step(world).nonFinite
-    ) {
+    if (!fixture::tryMoveCharacter(world, walker, walk).applied
+        || !fixture::tryMoveCharacter(world, stander, still).applied
+        || !fixture::driveGrip(world, grip, stander.body, gripOffset)
+        || talus::dynamics::step(world).nonFinite) {
       return {};
     }
 
@@ -2584,13 +2646,9 @@ CostRun runCost(const CostCase& scenario) {
   World world;
 
   world.workerCount = 1u;
-  (void)addStatic(
-    world.bodies,
-    floorField,
-    0.5,
-    0.0,
-    glm::dvec3(0.0, -1.0, 0.0)
-  );
+  (
+    void
+  )addStatic(world.bodies, floorField, 0.5, 0.0, glm::dvec3(0.0, -1.0, 0.0));
 
   const uint32_t side = static_cast<uint32_t>(
     std::ceil(std::sqrt(static_cast<double>(scenario.background)))
@@ -2672,14 +2730,16 @@ CostRun runCost(const CostCase& scenario) {
   std::vector<std::array<fixture::Grip, 2>> grips;
 
   for (const glm::dvec3& centre : centres) {
-    characters.push_back(fixture::addCharacter(
-      world,
-      glm::dvec3(
-        centre.x + (scenario.pile ? 0.0 : costRadius),
-        centreAbove(top, 0.0),
-        centre.z
+    characters.push_back(
+      fixture::addCharacter(
+        world,
+        glm::dvec3(
+          centre.x + (scenario.pile ? 0.0 : costRadius),
+          centreAbove(top, 0.0),
+          centre.z
+        )
       )
-    ));
+    );
     (void)fixture::addUprightSpring(world, characters.back().body);
     grips.push_back(
       {fixture::addGrip(
@@ -2723,13 +2783,12 @@ CostRun runCost(const CostCase& scenario) {
         if (scenario.pile) {
           move.velocity = glm::dvec3(costSpeed, 0.0, 0.0);
         } else if (!scenario.crateGround) {
-          move.velocity =
-            costSpeed
-            * glm::dvec3(
-              -std::sin(time * costSpeed / costRadius),
-              0.0,
-              std::cos(time * costSpeed / costRadius)
-            );
+          move.velocity = costSpeed
+                          * glm::dvec3(
+                            -std::sin(time * costSpeed / costRadius),
+                            0.0,
+                            std::cos(time * costSpeed / costRadius)
+                          );
         }
 
         applied =
@@ -2766,10 +2825,11 @@ CostRun runCost(const CostCase& scenario) {
     splits += world.islandStore.splits();
     saturated +=
       jointReport(world, characters.front().planar)->forceSaturated ? 1u : 0u;
-    awake += static_cast<double>(std::ranges::count_if(
-      world.bodies.rigids,
-      [](const RigidBody& body) { return !body.asleep; }
-    ));
+    awake += static_cast<double>(
+      std::ranges::count_if(world.bodies.rigids, [](const RigidBody& body) {
+        return !body.asleep;
+      })
+    );
   }
 
   CostRun result;
@@ -2849,14 +2909,14 @@ TEST_CASE(
             run = runCost(scenario);
           }
 
-          const auto pick = [&](double CostRun::*field) {
+          const auto pick = [&](double CostRun::* field) {
             return std::array<double, 3>{
               runs[0].*field,
               runs[1].*field,
               runs[2].*field
             };
           };
-          const auto spread = [&](double CostRun::*field) {
+          const auto spread = [&](double CostRun::* field) {
             const std::array<double, 3> values = pick(field);
 
             return std::make_pair(
@@ -2944,7 +3004,8 @@ TEST_CASE(
             CHECK(perEdit < scan);
           }
 
-          if (!pile && (update == fixture::PogoUpdate::InPlace || !crateGround)) {
+          if (!pile
+              && (update == fixture::PogoUpdate::InPlace || !crateGround)) {
             for (const CostRun& run : runs) {
               CHECK(run.splits == 0.0);
             }

@@ -974,17 +974,13 @@ std::optional<BodyRef> locateBody(const World& world, uint32_t id) {
   if (world.islandStore.islandOf(id) != noIsland) {
     const BodyRef ref = world.islandStore.refOf(id);
 
-    if (
-      ref.side == Side::Rigid && ref.index < bodies.rigids.size()
-      && bodies.rigids[ref.index].id == id
-    ) {
+    if (ref.side == Side::Rigid && ref.index < bodies.rigids.size()
+        && bodies.rigids[ref.index].id == id) {
       return ref;
     }
 
-    if (
-      ref.side == Side::Lattice && ref.index < bodies.lattices.size()
-      && bodies.lattices[ref.index].id == id
-    ) {
+    if (ref.side == Side::Lattice && ref.index < bodies.lattices.size()
+        && bodies.lattices[ref.index].id == id) {
       return ref;
     }
   }

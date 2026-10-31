@@ -879,7 +879,8 @@ TEST_CASE(
       awakeByFrame30 = !rigidOf(world, box).asleep;
     }
 
-    const double gap = rigidOf(world, box).position.x - rigidOf(world, pusher).position.x - 0.1;
+    const double gap =
+      rigidOf(world, box).position.x - rigidOf(world, pusher).position.x - 0.1;
 
     deepestOverlap = std::max(deepestOverlap, -gap);
   }
@@ -890,13 +891,13 @@ TEST_CASE(
 }
 
 TEST_CASE(
-  "a sleeping lattice block touched by a moving mass-0 body wakes and is pushed",
+  "a sleeping lattice block touched by a moving mass-0 body wakes and is "
+  "pushed",
   "[dynamics][world][sleep]"
 ) {
   const std::vector<talus::PhysicalMaterial> lanes{rubber()};
   talus::field::SampledSdf blockField;
-  const auto mesh =
-    latticeBlock(glm::dvec3(0.05), 0.025, lanes, blockField);
+  const auto mesh = latticeBlock(glm::dvec3(0.05), 0.025, lanes, blockField);
   const talus::field::SampledSdf crate = boxField(glm::dvec3(0.05), 0.01);
   const talus::field::SampledSdf floor = floorField();
   talus::dynamics::World world;
@@ -941,8 +942,8 @@ TEST_CASE(
       awakeByFrame30 = !world.bodies.lattices.front().asleep;
     }
 
-    const double gap =
-      latticeCentre(world.bodies.lattices.front()).x - rigidOf(world, pusher).position.x - 0.1;
+    const double gap = latticeCentre(world.bodies.lattices.front()).x
+                       - rigidOf(world, pusher).position.x - 0.1;
 
     deepestOverlap = std::max(deepestOverlap, -gap);
   }

@@ -115,7 +115,10 @@ const talus::field::SampledSdf& stepField() {
 
     return talus::field::bake(
       std::vector<talus::field::Primitive>{
-        fixture::box(glm::vec3(0.25f, -0.1f, 0.0f), glm::vec3(1.75f, 0.1f, 0.6f)),
+        fixture::box(
+          glm::vec3(0.25f, -0.1f, 0.0f),
+          glm::vec3(1.75f, 0.1f, 0.6f)
+        ),
         fixture::box(
           glm::vec3(1.15f, -0.025f, 0.0f),
           glm::vec3(0.85f, 0.175f, 0.6f)
@@ -143,7 +146,11 @@ const talus::field::SampledSdf& groundField() {
   return field;
 }
 
-Character addCharacter(World& world, const glm::dvec3& at, uint32_t planarBase) {
+Character addCharacter(
+  World& world,
+  const glm::dvec3& at,
+  uint32_t planarBase
+) {
   const uint32_t index = addRigidBox(
     world.bodies,
     characterField(),
@@ -193,26 +200,30 @@ Grip addGrip(
 ) {
   const RigidBody& owner = rigidOf(world, body);
   const glm::dvec3 at = owner.position + owner.rotation * offset;
-  const uint32_t hand = world.bodies.rigids[addRigidBox(
-    world.bodies,
-    cachedBox(glm::dvec3(0.05)),
-    glm::dvec3(0.05),
-    0.0,
-    at,
-    glm::dvec3(0.0),
-    0.0,
-    3u
-  )].id;
-  const uint32_t held = world.bodies.rigids[addRigidBox(
-    world.bodies,
-    cachedBox(heldHalf),
-    heldHalf,
-    heldMass,
-    at,
-    glm::dvec3(0.0),
-    0.5,
-    3u
-  )].id;
+  const uint32_t hand = world.bodies
+                          .rigids[addRigidBox(
+                            world.bodies,
+                            cachedBox(glm::dvec3(0.05)),
+                            glm::dvec3(0.05),
+                            0.0,
+                            at,
+                            glm::dvec3(0.0),
+                            0.0,
+                            3u
+                          )]
+                          .id;
+  const uint32_t held = world.bodies
+                          .rigids[addRigidBox(
+                            world.bodies,
+                            cachedBox(heldHalf),
+                            heldHalf,
+                            heldMass,
+                            at,
+                            glm::dvec3(0.0),
+                            0.5,
+                            3u
+                          )]
+                          .id;
   JointDef def;
 
   def.kind = JointKind::Spring;
@@ -372,11 +383,7 @@ double springResponse(
          * (std::cos(damped) + dampingRatio / share * std::sin(damped));
 }
 
-double springPeakSpeed(
-  double hertz,
-  double dampingRatio,
-  double displacement
-) {
+double springPeakSpeed(double hertz, double dampingRatio, double displacement) {
   const double share = dampedShare(dampingRatio);
   const double phase = std::atan2(share, dampingRatio);
 
@@ -385,9 +392,7 @@ double springPeakSpeed(
 }
 
 double springOvershoot(double dampingRatio) {
-  return std::exp(
-    -dampingRatio * std::numbers::pi / dampedShare(dampingRatio)
-  );
+  return std::exp(-dampingRatio * std::numbers::pi / dampedShare(dampingRatio));
 }
 
 bool touching(const World& world, uint32_t a, uint32_t b) {

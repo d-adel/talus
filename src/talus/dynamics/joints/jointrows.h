@@ -1153,21 +1153,20 @@ void solvePlanarRows(
 
   const JointVec<Real> rate = b.v - a.v - planar.target;
   const JointPair<Real> old = planar.impulse;
-  const JointPair<Real> unbounded =
-    old
-    - planar.mass
-        * JointPair<Real>(
-          glm::dot(rate, planar.axisX),
-          glm::dot(rate, planar.axisZ)
-        );
+  const JointPair<Real> unbounded = old
+                                    - planar.mass
+                                        * JointPair<Real>(
+                                          glm::dot(rate, planar.axisX),
+                                          glm::dot(rate, planar.axisZ)
+                                        );
   const Real square = glm::dot(unbounded, unbounded);
 
   planar.saturated = square > planar.cap * planar.cap;
-  planar.impulse = planar.saturated
-                     ? (planar.cap / std::sqrt(square)) * unbounded
-                     : unbounded;
+  planar.impulse =
+    planar.saturated ? (planar.cap / std::sqrt(square)) * unbounded : unbounded;
 
-  const JointVec<Real> impulse = jointPlanarImpulse(planar, planar.impulse - old);
+  const JointVec<Real> impulse =
+    jointPlanarImpulse(planar, planar.impulse - old);
 
   a.v -= row.a.invMass * impulse;
   b.v += row.b.invMass * impulse;
@@ -1194,8 +1193,8 @@ void preparePogoRows(const Joint& joint, Real h, JointRow<Real>& row) {
     row.b.frame * JointVec<Real>(Real(0), Real(1), Real(0));
   const Real alignment = glm::dot(normal, axis);
 
-  pogo.active = settings.hertz > 0.0
-                && alignment >= static_cast<Real>(pogoSteepestCosine);
+  pogo.active =
+    settings.hertz > 0.0 && alignment >= static_cast<Real>(pogoSteepestCosine);
 
   if (!pogo.active) {
     return;
@@ -1253,13 +1252,14 @@ void solvePogoRows(
   if (useBias) {
     const JointVec<Real> rB = b.dq * row.b.anchor;
     const JointVec<Real> gap = (b.dp - a.dp) + (rB - rA) + row.deltaCenter;
-    const Real stretch = glm::dot(pogo.normal, gap) / pogo.alignment - pogo.rest;
+    const Real stretch =
+      glm::dot(pogo.normal, gap) / pogo.alignment - pogo.rest;
     const Real omega = Real(2) * std::numbers::pi_v<Real> * pogo.hertz;
     const Real omegaH = omega * pogo.step;
 
-    pogo.speed = (pogo.carried - omega * omegaH * stretch)
-                 / (Real(1) + Real(2) * pogo.dampingRatio * omegaH
-                    + omegaH * omegaH);
+    pogo.speed =
+      (pogo.carried - omega * omegaH * stretch)
+      / (Real(1) + Real(2) * pogo.dampingRatio * omegaH + omegaH * omegaH);
     bias = -pogo.speed;
   }
 

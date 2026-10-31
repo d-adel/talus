@@ -31,10 +31,10 @@
 namespace {
 
 using talus::dynamics::BodyRef;
-using talus::dynamics::RigidBody;
 using talus::dynamics::CompoundChild;
 using talus::dynamics::noChild;
 using talus::dynamics::RaySkip;
+using talus::dynamics::RigidBody;
 using talus::dynamics::Side;
 using talus::dynamics::World;
 
@@ -600,22 +600,32 @@ TEST_CASE(
   world.parameters.gravity = glm::dvec3(0.0);
 
   addBox(world, glm::dvec3(0.3), glm::dvec3(5.0, 0.0, 0.0));
-  const uint32_t old = addBox(world, glm::dvec3(0.3), glm::dvec3(8.0, 0.0, 0.0));
+  const uint32_t old =
+    addBox(world, glm::dvec3(0.3), glm::dvec3(8.0, 0.0, 0.0));
 
   (void)talus::dynamics::step(world);
 
-  const uint32_t added = addBox(world, glm::dvec3(0.3), glm::dvec3(0.0, 0.0, 0.0));
+  const uint32_t added =
+    addBox(world, glm::dvec3(0.3), glm::dvec3(0.0, 0.0, 0.0));
 
   REQUIRE(added >= world.broadPhase.seenBodies());
   std::swap(world.bodies.rigids[1], world.bodies.rigids[2]);
   REQUIRE(world.bodies.rigids.back().id == old);
 
-  const auto hit = talus::dynamics::castRay(world, glm::dvec3(0.0, 3.0, 0.0), glm::dvec3(0.0, -3.0, 0.0));
+  const auto hit = talus::dynamics::castRay(
+    world,
+    glm::dvec3(0.0, 3.0, 0.0),
+    glm::dvec3(0.0, -3.0, 0.0)
+  );
 
   REQUIRE(hit.has_value());
   CHECK(hit->body == added);
 
-  const auto oldHit = talus::dynamics::castRay(world, glm::dvec3(8.0, 3.0, 0.0), glm::dvec3(8.0, -3.0, 0.0));
+  const auto oldHit = talus::dynamics::castRay(
+    world,
+    glm::dvec3(8.0, 3.0, 0.0),
+    glm::dvec3(8.0, -3.0, 0.0)
+  );
 
   REQUIRE(oldHit.has_value());
   CHECK(oldHit->body == old);
@@ -1100,8 +1110,10 @@ TEST_CASE("world ray cast cost against many bodies", "[.][raycost]") {
 
     for (uint32_t index = 0u; index != 10000u; ++index) {
       const glm::dvec3& over = centres[random() % count];
-      const double x = index % 2u == 0u ? spread(random) : over.x + 0.09 * jitter(random) / 0.3;
-      const double z = index % 2u == 0u ? spread(random) : over.z + 0.09 * jitter(random) / 0.3;
+      const double x = index % 2u == 0u ? spread(random)
+                                        : over.x + 0.09 * jitter(random) / 0.3;
+      const double z = index % 2u == 0u ? spread(random)
+                                        : over.z + 0.09 * jitter(random) / 0.3;
 
       rays.push_back({glm::dvec3(x, 1.0, z), glm::dvec3(x, -0.8, z)});
     }
