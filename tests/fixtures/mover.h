@@ -1,6 +1,8 @@
 #pragma once
 
+#include <talus/dynamics/joints/joints.h>
 #include <talus/dynamics/pipeline/pipeline.h>
+#include <talus/dynamics/rays/worldray.h>
 #include <talus/field/sampledsdf/sampledsdf.h>
 #include <talus/material.h>
 #include <talus/mesh.h>
@@ -9,6 +11,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace fixture {
@@ -16,6 +19,20 @@ namespace fixture {
 inline constexpr glm::dvec3 characterHalf{0.3, 0.8, 0.3};
 inline constexpr double characterMass = 80.0;
 inline constexpr double groundForce = 6000.0;
+inline constexpr glm::dvec3 footAnchor{0.0, -0.5, 0.0};
+inline constexpr double pogoRest = 0.9;
+inline constexpr double pogoHertz = 3.0;
+inline constexpr double pogoDamping = 0.8;
+inline constexpr double capScale = 100.0;
+
+enum class PogoUpdate : uint8_t { Recreate };
+
+struct MoverStep {
+  glm::dvec3 velocity{0.0};
+  double maxForce = groundForce;
+  std::vector<talus::dynamics::RaySkip> skips;
+  PogoUpdate update = PogoUpdate::Recreate;
+};
 
 struct Character {
   uint32_t body = talus::dynamics::noBody;
@@ -35,11 +52,46 @@ struct SoftBlock {
 
 [[nodiscard]] const talus::field::SampledSdf& groundField();
 
+[[nodiscard]] const talus::field::SampledSdf& stepField();
+
 [[nodiscard]] Character addCharacter(
   talus::dynamics::World& world,
   const glm::dvec3& at,
   uint32_t planarBase = talus::dynamics::noBody
 );
+
+[[nodiscard]] uint32_t addUprightSpring(
+  talus::dynamics::World& world,
+  uint32_t body
+);
+
+[[nodiscard]] double weightOf(const talus::dynamics::World& world);
+
+[[nodiscard]] talus::dynamics::PogoSettings pogoFor(
+  const talus::dynamics::World& world,
+  const glm::dvec3& normal
+);
+
+std::optional<talus::dynamics::WorldRayHit> moveCharacter(
+  talus::dynamics::World& world,
+  Character& character,
+  const MoverStep& step
+);
+
+[[nodiscard]] double springResponse(
+  double hertz,
+  double dampingRatio,
+  double displacement,
+  double time
+);
+
+[[nodiscard]] double springPeakSpeed(
+  double hertz,
+  double dampingRatio,
+  double displacement
+);
+
+[[nodiscard]] double springOvershoot(double dampingRatio);
 
 [[nodiscard]] SoftBlock softBlock(const glm::dvec3& half, double voxel);
 

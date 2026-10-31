@@ -101,6 +101,27 @@ struct JointPlanarRow {
 };
 
 template<typename Real>
+struct JointPogoRow {
+  JointVec<Real> normal{Real(0)};
+  JointVec<Real> axis{Real(0)};
+  Real mass = Real(0);
+  Real rest = Real(0);
+  Real hertz = Real(0);
+  Real dampingRatio = Real(0);
+  Real step = Real(0);
+  Real lower = Real(0);
+  Real upper = Real(0);
+  Real impulse = Real(0);
+  Real carried = Real(0);
+  Real speed = Real(0);
+  Real alignment = Real(0);
+  Real pushed = Real(0);
+  bool active = false;
+  bool bound = false;
+  bool saturated = false;
+};
+
+template<typename Real>
 struct JointRow {
   uint32_t joint = 0u;
   JointKind kind = JointKind::Ball;
@@ -133,6 +154,7 @@ struct JointRow {
   JointSpringBlock<Real> springLinear;
   JointSpringBlock<Real> springAngular;
   JointPlanarRow<Real> planar;
+  JointPogoRow<Real> pogo;
 };
 
 template<typename Real>
@@ -1165,6 +1187,126 @@ void storePlanarRows(Joint& joint, const JointRow<Real>& row, Real invH) {
 }
 
 template<typename Real>
+void preparePogoRows(const Joint& joint, Real h, JointRow<Real>& row) {
+  const PogoSettings& settings = joint.def.pogo;
+  const double step = static_cast<double>(h);
+  JointPogoRow<Real>& pogo = row.pogo;
+  const JointVec<Real> normal(settings.normal);
+  const JointVec<Real> axis =
+    row.b.frame * JointVec<Real>(Real(0), Real(1), Real(0));
+  const Real alignment = glm::dot(normal, axis);
+
+  pogo.active = settings.hertz > 0.0
+                && alignment >= static_cast<Real>(pogoSteepestCosine);
+
+  if (!pogo.active) {
+    return;
+  }
+
+  const JointVec<Real> turn = glm::cross(row.a.anchor, normal);
+  const Real k =
+    row.a.invMass + row.b.invMass + glm::dot(turn, row.a.invI * turn);
+
+  pogo.normal = normal;
+  pogo.axis = axis;
+  pogo.alignment = alignment;
+  pogo.mass = k > Real(0) ? Real(1) / k : Real(0);
+  pogo.rest = static_cast<Real>(settings.restLength);
+  pogo.hertz = static_cast<Real>(settings.hertz);
+  pogo.dampingRatio = static_cast<Real>(settings.dampingRatio);
+  pogo.step = h;
+  pogo.lower = static_cast<Real>(-step * settings.maxTension);
+  pogo.upper = static_cast<Real>(step * settings.maxCompression);
+  pogo.impulse = static_cast<Real>(joint.impulses.pogo * step);
+  pogo.carried = static_cast<Real>(joint.impulses.pogoSpeed);
+  pogo.speed = pogo.carried;
+}
+
+template<typename Real>
+void jointPogoPush(
+  const JointRow<Real>& row,
+  JointMotion<Real>& a,
+  JointMotion<Real>& b,
+  Real impulse
+) {
+  const JointVec<Real> push = impulse * row.pogo.normal;
+
+  a.v -= row.a.invMass * push;
+  a.w -= row.a.invI * glm::cross(a.dq * row.a.anchor, push);
+  b.v += row.b.invMass * push;
+}
+
+template<typename Real>
+void solvePogoRows(
+  JointRow<Real>& row,
+  JointMotion<Real>& a,
+  JointMotion<Real>& b,
+  bool useBias
+) {
+  JointPogoRow<Real>& pogo = row.pogo;
+
+  if (!pogo.active) {
+    return;
+  }
+
+  const JointVec<Real> rA = a.dq * row.a.anchor;
+  Real bias = Real(0);
+
+  if (useBias) {
+    const JointVec<Real> rB = b.dq * row.b.anchor;
+    const JointVec<Real> gap = (b.dp - a.dp) + (rB - rA) + row.deltaCenter;
+    const Real stretch = glm::dot(pogo.normal, gap) / pogo.alignment - pogo.rest;
+    const Real omega = Real(2) * std::numbers::pi_v<Real> * pogo.hertz;
+    const Real omegaH = omega * pogo.step;
+
+    pogo.speed = (pogo.carried - omega * omegaH * stretch)
+                 / (Real(1) + Real(2) * pogo.dampingRatio * omegaH
+                    + omegaH * omegaH);
+    bias = -pogo.speed;
+  }
+
+  const Real rate = glm::dot(pogo.normal, b.v - (a.v + glm::cross(a.w, rA)));
+  const Real unbounded = pogo.impulse - pogo.mass * (rate + bias);
+  const Real moving = useBias ? pogo.mass * pogo.carried : Real(0);
+  const Real bounded =
+    std::clamp(unbounded, pogo.lower + moving, pogo.upper + moving);
+  const Real impulse = bounded - pogo.impulse;
+  const bool clamped = bounded != unbounded;
+
+  pogo.bound = pogo.bound || clamped;
+  pogo.saturated = pogo.saturated || clamped;
+  pogo.impulse = bounded;
+  jointPogoPush(row, a, b, impulse);
+
+  if (useBias) {
+    pogo.pushed = bounded;
+    return;
+  }
+
+  if (pogo.bound && pogo.mass > Real(0)) {
+    pogo.speed = (pogo.pushed - pogo.impulse) / pogo.mass;
+    pogo.carried = pogo.speed;
+  }
+
+  pogo.bound = false;
+}
+
+template<typename Real>
+void storePogoRows(Joint& joint, const JointRow<Real>& row, Real invH) {
+  const JointPogoRow<Real>& pogo = row.pogo;
+  const double force =
+    static_cast<double>(pogo.impulse) * static_cast<double>(invH);
+  const double speed = static_cast<double>(pogo.speed);
+
+  joint.impulses.pogo = force;
+  joint.impulses.pogoSpeed = speed;
+  joint.report.pogoForce = force;
+  joint.report.pogoSpeed = speed;
+  joint.report.force = joint.def.pogo.normal * force;
+  joint.report.forceSaturated = pogo.active && pogo.saturated;
+}
+
+template<typename Real>
 JointVec<Real> jointWarmAngular(const JointRow<Real>& row) {
   if (row.kind == JointKind::Hinge) {
     return hingeWarmImpulse(row);
@@ -1244,6 +1386,8 @@ void prepareJointRows(
       prepareSpringRows(joint, h, row);
     } else if (row.kind == JointKind::PlanarVelocity) {
       preparePlanarRows(joint, h, row);
+    } else if (row.kind == JointKind::Pogo) {
+      preparePogoRows(joint, h, row);
     }
 
     rows.push_back(row);
@@ -1267,6 +1411,16 @@ void warmStartJointRows(
       b.v += row.b.invMass * impulse;
       storeJointMotion(states, row.a, a);
       storeJointMotion(states, row.b, b);
+      continue;
+    }
+
+    if (row.kind == JointKind::Pogo) {
+      if (row.pogo.active) {
+        jointPogoPush(row, a, b, row.pogo.impulse);
+        storeJointMotion(states, row.a, a);
+        storeJointMotion(states, row.b, b);
+      }
+
       continue;
     }
 
@@ -1349,6 +1503,13 @@ uint32_t solveJointRows(
       continue;
     }
 
+    if (row.kind == JointKind::Pogo) {
+      solvePogoRows(row, a, b, useBias);
+      storeJointMotion(states, row.a, a);
+      storeJointMotion(states, row.b, b);
+      continue;
+    }
+
     if (row.kind == JointKind::Hinge) {
       solveHingeRows(row, a, b, invH, useBias);
     } else if (row.kind == JointKind::SwingTwist) {
@@ -1414,6 +1575,7 @@ void advanceJointRows(std::span<JointRow<Real>> rows, Real h) {
   for (JointRow<Real>& row : rows) {
     advanceJointEnd(row.a, h);
     advanceJointEnd(row.b, h);
+    row.pogo.carried = row.pogo.speed;
   }
 }
 
@@ -1442,6 +1604,8 @@ void storeJointRows(
       storeSpringRows(joint, row, invH);
     } else if (row.kind == JointKind::PlanarVelocity) {
       storePlanarRows(joint, row, invH);
+    } else if (row.kind == JointKind::Pogo) {
+      storePogoRows(joint, row, invH);
     }
   }
 }
