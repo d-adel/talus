@@ -43,6 +43,12 @@ struct Character {
   bool onGround = false;
 };
 
+struct Grip {
+  uint32_t hand = talus::dynamics::noBody;
+  uint32_t held = talus::dynamics::noBody;
+  uint32_t joint = 0u;
+};
+
 struct SoftBlock {
   talus::field::SampledSdf field;
   std::vector<talus::PhysicalMaterial> lanes;
@@ -64,6 +70,21 @@ struct SoftBlock {
 [[nodiscard]] uint32_t addUprightSpring(
   talus::dynamics::World& world,
   uint32_t body
+);
+
+[[nodiscard]] Grip addGrip(
+  talus::dynamics::World& world,
+  uint32_t body,
+  const glm::dvec3& offset,
+  const glm::dvec3& heldHalf,
+  double heldMass
+);
+
+void driveGrip(
+  talus::dynamics::World& world,
+  const Grip& grip,
+  uint32_t body,
+  const glm::dvec3& offset
 );
 
 [[nodiscard]] double weightOf(const talus::dynamics::World& world);

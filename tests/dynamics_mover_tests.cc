@@ -17,9 +17,11 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <numbers>
 #include <optional>
@@ -1911,5 +1913,323 @@ TEST_CASE(
     CHECK(report.pogoSpeed == -0.5);
     CHECK_FALSE(rigidOf(world, crate).asleep);
     CHECK_FALSE(rigidOf(world, character.body).asleep);
+  }
+}
+
+namespace {
+
+struct CostRun {
+  double hostMs = 0.0;
+  double stepMs = 0.0;
+  double jointsMs = 0.0;
+  double splits = 0.0;
+  double awake = 0.0;
+  size_t jointedBodies = 0u;
+};
+
+struct CostCase {
+  uint32_t background = 0u;
+  fixture::PogoUpdate update = fixture::PogoUpdate::Recreate;
+  bool crateGround = false;
+  bool pile = false;
+};
+
+constexpr uint32_t costSteps = 600u;
+constexpr double costRadius = 2.0;
+constexpr double costSpeed = 2.0;
+
+CostRun runCost(const CostCase& scenario) {
+  using Clock = std::chrono::steady_clock;
+
+  static const talus::field::SampledSdf floorField =
+    boxField(glm::dvec3(60.0, 1.0, 60.0), 0.25);
+  static const talus::field::SampledSdf backgroundField =
+    boxField(glm::dvec3(0.05), 0.05);
+  static const glm::dvec3 standHalf(0.3, 0.1, 0.3);
+  static const talus::field::SampledSdf standField = boxField(standHalf, 0.05);
+  static const glm::dvec3 pileHalf(0.15);
+  static const talus::field::SampledSdf pileField = boxField(pileHalf, 0.05);
+
+  World world;
+
+  (void)addStatic(
+    world.bodies,
+    floorField,
+    0.5,
+    0.0,
+    glm::dvec3(0.0, -1.0, 0.0)
+  );
+
+  const uint32_t side = static_cast<uint32_t>(
+    std::ceil(std::sqrt(static_cast<double>(scenario.background)))
+  );
+
+  for (uint32_t index = 0u; index != scenario.background; ++index) {
+    (void)addBox(
+      world,
+      backgroundField,
+      glm::dvec3(0.05),
+      1.5,
+      glm::dvec3(
+        8.0 + 0.3 * static_cast<double>(index % side),
+        0.05,
+        0.3 * (static_cast<double>(index / side) - 0.5 * side)
+      )
+    );
+  }
+
+  const uint32_t count = scenario.pile ? 1u : 4u;
+  std::vector<glm::dvec3> centres;
+
+  for (uint32_t index = 0u; index != count; ++index) {
+    centres.emplace_back(
+      scenario.pile ? -3.0 : 0.0,
+      0.0,
+      scenario.pile ? 0.0 : -9.0 + 6.0 * static_cast<double>(index)
+    );
+  }
+
+  if (scenario.pile) {
+    for (uint32_t x = 0u; x != 5u; ++x) {
+      for (uint32_t z = 0u; z != 5u; ++z) {
+        for (uint32_t y = 0u; y != 4u; ++y) {
+          (void)addBox(
+            world,
+            pileField,
+            pileHalf,
+            40.0,
+            glm::dvec3(
+              0.3 * static_cast<double>(x),
+              pileHalf.y + 2.0 * pileHalf.y * static_cast<double>(y),
+              0.3 * (static_cast<double>(z) - 2.0)
+            )
+          );
+        }
+      }
+    }
+  } else if (scenario.crateGround) {
+    for (const glm::dvec3& centre : centres) {
+      (void)addBox(
+        world,
+        standField,
+        standHalf,
+        20.0,
+        glm::dvec3(centre.x + costRadius, standHalf.y, centre.z)
+      );
+    }
+  }
+
+  const auto allAsleep = [&] {
+    return std::ranges::all_of(world.bodies.rigids, [](const RigidBody& body) {
+      return body.asleep;
+    });
+  };
+
+  for (uint32_t settle = 0u; settle != 900u && !allAsleep(); ++settle) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+  }
+
+  const double top = scenario.crateGround ? 2.0 * standHalf.y : 0.0;
+  const std::array<glm::dvec3, 2> offsets{
+    glm::dvec3(-0.4, 0.2, 0.3),
+    glm::dvec3(0.4, 0.2, 0.3)
+  };
+  std::vector<fixture::Character> characters;
+  std::vector<std::array<fixture::Grip, 2>> grips;
+
+  for (const glm::dvec3& centre : centres) {
+    characters.push_back(fixture::addCharacter(
+      world,
+      glm::dvec3(
+        centre.x + (scenario.pile ? 0.0 : costRadius),
+        centreAbove(top, 0.0),
+        centre.z
+      )
+    ));
+    (void)fixture::addUprightSpring(world, characters.back().body);
+    grips.push_back(
+      {fixture::addGrip(
+         world,
+         characters.back().body,
+         offsets[0],
+         glm::dvec3(0.1),
+         3.0
+       ),
+       fixture::addGrip(
+         world,
+         characters.back().body,
+         offsets[1],
+         glm::dvec3(0.1),
+         3.0
+       )}
+    );
+  }
+
+  const uint32_t splitsBefore = world.islandStore.splits();
+  double hostMs = 0.0;
+  double stepMs = 0.0;
+  double jointsMs = 0.0;
+  double awake = 0.0;
+
+  for (uint32_t frame = 0u; frame != costSteps; ++frame) {
+    const double time = static_cast<double>(frame) / 60.0;
+    const Clock::time_point start = Clock::now();
+
+    for (size_t index = 0u; index != characters.size(); ++index) {
+      fixture::MoverStep move;
+
+      move.update = scenario.update;
+
+      if (scenario.pile) {
+        move.velocity = glm::dvec3(costSpeed, 0.0, 0.0);
+      } else if (!scenario.crateGround) {
+        move.velocity =
+          costSpeed
+          * glm::dvec3(
+            -std::sin(time * costSpeed / costRadius),
+            0.0,
+            std::cos(time * costSpeed / costRadius)
+          );
+      }
+
+      (void)fixture::moveCharacter(world, characters[index], move);
+
+      for (size_t hand = 0u; hand != 2u; ++hand) {
+        fixture::driveGrip(
+          world,
+          grips[index][hand],
+          characters[index].body,
+          offsets[hand]
+        );
+      }
+    }
+
+    hostMs +=
+      std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+
+    const StepReport report = talus::dynamics::step(world);
+
+    REQUIRE_FALSE(report.nonFinite);
+    stepMs += report.profile.total;
+    jointsMs += report.profile.joints;
+    awake += static_cast<double>(std::ranges::count_if(
+      world.bodies.rigids,
+      [](const RigidBody& body) { return !body.asleep; }
+    ));
+  }
+
+  CostRun result;
+  const double steps = static_cast<double>(costSteps);
+
+  result.hostMs = hostMs / steps;
+  result.stepMs = stepMs / steps;
+  result.jointsMs = jointsMs / steps;
+  result.splits =
+    static_cast<double>(world.islandStore.splits() - splitsBefore) / steps;
+  result.awake = awake / steps;
+
+  for (const Island& island : world.islands) {
+    for (const BodyRef& ref : island.bodies) {
+      if (ref.side == Side::Rigid
+          && world.bodies.rigids[ref.index].id == characters.front().body) {
+        result.jointedBodies = island.bodies.size();
+      }
+    }
+  }
+
+  return result;
+}
+
+double median(std::array<double, 3> values) {
+  std::ranges::sort(values);
+
+  return values[1];
+}
+
+}
+
+TEST_CASE(
+  "mover cost with four characters among many sleeping bodies",
+  "[.][movercost]"
+) {
+  for (const bool pile : {false, true}) {
+    for (const bool crateGround : {false, true}) {
+      if (pile && crateGround) {
+        continue;
+      }
+
+      for (const uint32_t background : {0u, 5000u, 20000u}) {
+        for (const fixture::PogoUpdate update :
+             {fixture::PogoUpdate::Recreate, fixture::PogoUpdate::InPlace}) {
+          CostCase scenario;
+
+          scenario.background = background;
+          scenario.update = update;
+          scenario.crateGround = crateGround;
+          scenario.pile = pile;
+
+          std::array<CostRun, 3> runs;
+
+          for (CostRun& run : runs) {
+            run = runCost(scenario);
+          }
+
+          const auto pick = [&](double CostRun::*field) {
+            return std::array<double, 3>{
+              runs[0].*field,
+              runs[1].*field,
+              runs[2].*field
+            };
+          };
+          const auto spread = [&](double CostRun::*field) {
+            const std::array<double, 3> values = pick(field);
+
+            return std::make_pair(
+              *std::ranges::min_element(values),
+              *std::ranges::max_element(values)
+            );
+          };
+          const auto hostSpread = spread(&CostRun::hostMs);
+          const auto stepSpread = spread(&CostRun::stepMs);
+          const char* updateName =
+            update == fixture::PogoUpdate::Recreate ? "recreate" : "inplace";
+          const char* groundName =
+            pile ? "pile" : (crateGround ? "crate" : "floor");
+
+          std::printf(
+            "movercost bodies %u update %s ground %s host_ms %.4f step_ms "
+            "%.4f joints_ms %.4f splits_per_step %.4f awake %.1f\n",
+            background,
+            updateName,
+            groundName,
+            median(pick(&CostRun::hostMs)),
+            median(pick(&CostRun::stepMs)),
+            median(pick(&CostRun::jointsMs)),
+            median(pick(&CostRun::splits)),
+            median(pick(&CostRun::awake))
+          );
+          std::printf(
+            "movercost spread bodies %u update %s ground %s host_ms %.4f..%.4f "
+            "step_ms %.4f..%.4f\n",
+            background,
+            updateName,
+            groundName,
+            hostSpread.first,
+            hostSpread.second,
+            stepSpread.first,
+            stepSpread.second
+          );
+
+          if (pile) {
+            std::printf(
+              "movercost pile bodies %u update %s jointed_island_bodies %zu\n",
+              background,
+              updateName,
+              runs[0].jointedBodies
+            );
+          }
+        }
+      }
+    }
   }
 }

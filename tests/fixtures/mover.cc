@@ -6,14 +6,17 @@
 
 #include <talus/deformable/solver/solver.h>
 #include <talus/dynamics/bodyset/bodyset.h>
+#include <talus/dynamics/edits/edits.h>
 #include <talus/dynamics/joints/jointedits.h>
 #include <talus/dynamics/tiers/tiers.h>
 
 #include <glm/gtc/quaternion.hpp>
 
 #include <cmath>
+#include <map>
 #include <numbers>
 #include <span>
+#include <tuple>
 
 namespace fixture {
 
@@ -49,6 +52,19 @@ talus::PhysicalMaterial jelly() {
   material.poissonsRatio = 0.4f;
 
   return material;
+}
+
+const talus::field::SampledSdf& cachedBox(const glm::dvec3& half) {
+  static std::map<std::tuple<double, double, double>, talus::field::SampledSdf>
+    fields;
+  const auto key = std::make_tuple(half.x, half.y, half.z);
+  auto found = fields.find(key);
+
+  if (found == fields.end()) {
+    found = fields.emplace(key, boxOf(half, 0.05)).first;
+  }
+
+  return found->second;
 }
 
 const Island* islandWith(const World& world, uint32_t index) {
@@ -166,6 +182,72 @@ uint32_t addUprightSpring(World& world, uint32_t body) {
   REQUIRE(joint != 0u);
 
   return joint;
+}
+
+Grip addGrip(
+  World& world,
+  uint32_t body,
+  const glm::dvec3& offset,
+  const glm::dvec3& heldHalf,
+  double heldMass
+) {
+  const RigidBody& owner = rigidOf(world, body);
+  const glm::dvec3 at = owner.position + owner.rotation * offset;
+  const uint32_t hand = world.bodies.rigids[addRigidBox(
+    world.bodies,
+    cachedBox(glm::dvec3(0.05)),
+    glm::dvec3(0.05),
+    0.0,
+    at,
+    glm::dvec3(0.0),
+    0.0,
+    3u
+  )].id;
+  const uint32_t held = world.bodies.rigids[addRigidBox(
+    world.bodies,
+    cachedBox(heldHalf),
+    heldHalf,
+    heldMass,
+    at,
+    glm::dvec3(0.0),
+    0.5,
+    3u
+  )].id;
+  JointDef def;
+
+  def.kind = JointKind::Spring;
+  def.bodyA = hand;
+  def.bodyB = held;
+  def.spring.linearStiffness = 2000.0;
+  def.spring.linearDamping = 100.0;
+  def.spring.maxForce = 300.0;
+  def.spring.angularStiffness = 50.0;
+  def.spring.angularDamping = 2.0;
+  def.spring.maxTorque = 30.0;
+
+  Grip grip;
+
+  grip.hand = hand;
+  grip.held = held;
+  grip.joint = addJoint(world, def);
+  REQUIRE(grip.joint != 0u);
+
+  return grip;
+}
+
+void driveGrip(
+  World& world,
+  const Grip& grip,
+  uint32_t body,
+  const glm::dvec3& offset
+) {
+  const RigidBody& owner = rigidOf(world, body);
+  const glm::dvec3 at = owner.position + owner.rotation * offset;
+  const glm::dvec3 velocity = owner.velocity;
+  const glm::dquat rotation = owner.rotation;
+
+  REQUIRE(setRigidPose(world, grip.hand, at, rotation));
+  REQUIRE(setVelocity(world, grip.hand, velocity));
 }
 
 double weightOf(const World& world) {
