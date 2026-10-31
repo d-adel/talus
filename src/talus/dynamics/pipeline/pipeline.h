@@ -73,6 +73,14 @@ struct StepReport {
   std::vector<ContactHitEvent> hits;
 };
 
+struct AwakeList {
+  std::vector<uint32_t> indices;
+  size_t rigidCount = 0u;
+  size_t latticeCount = 0u;
+  uint64_t layout = 0u;
+  double band = 0.0;
+};
+
 struct World {
   BodySet bodies;
   std::vector<Contact> contacts;
@@ -94,9 +102,11 @@ struct World {
   std::vector<uint32_t> thawOnContact;
   IntegrationParameters parameters;
   double time = 0.0;
+  AwakeList awake;
 };
 
 [[nodiscard]] StepReport step(World& world);
+[[nodiscard]] std::span<const uint32_t> awakeRigids(const World& world);
 [[nodiscard]] std::unordered_set<uint64_t> recordedPairs(std::span<const Contact> contacts);
 [[nodiscard]] std::vector<Contact> contactRecords(const World& world);
 [[nodiscard]] std::vector<Contact> contactsOf(const World& world, const BodyRef& ref);

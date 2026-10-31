@@ -20,6 +20,8 @@ void resetContacts(World& world);
 
 void forgetBody(World& world, Side side, uint32_t index, uint32_t id);
 
+void eraseRigids(BodySet& bodies, std::span<const uint8_t> gone);
+
 bool removeBody(World& world, uint32_t id);
 
 uint32_t removeBodies(World& world, std::span<const uint32_t> ids);

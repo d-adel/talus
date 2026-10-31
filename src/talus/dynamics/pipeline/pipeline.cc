@@ -343,6 +343,77 @@ void addTouching(SoftstepTouching& total, const SoftstepTouching& part) {
     total.hits.end()
   );
 }
+
+bool listFits(const AwakeList& awake, const BodySet& bodies, double band) {
+  return awake.layout == bodies.layout
+         && awake.latticeCount == bodies.lattices.size()
+         && awake.rigidCount <= bodies.rigids.size() && awake.band == band;
+}
+
+void mergeIndices(
+  std::vector<uint32_t>& sorted,
+  std::span<const uint32_t> more
+) {
+  if (more.empty()) {
+    return;
+  }
+
+  const auto middle = sorted.insert(sorted.end(), more.begin(), more.end());
+
+  std::sort(middle, sorted.end());
+  std::inplace_merge(sorted.begin(), middle, sorted.end());
+  sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+}
+
+std::vector<uint32_t> liveRigids(
+  const AwakeList& awake,
+  const BodySet& bodies
+) {
+  std::vector<uint32_t> live = awake.indices;
+
+  for (size_t index = awake.rigidCount; index != bodies.rigids.size();
+       ++index) {
+    live.push_back(static_cast<uint32_t>(index));
+  }
+
+  mergeIndices(live, bodies.stirred);
+
+  return live;
+}
+
+void rebuildAwake(
+  AwakeList& awake,
+  const BodySet& bodies,
+  const std::vector<uint32_t>* live,
+  double band
+) {
+  const auto keep = [&](uint32_t index) {
+    if (!bodies.rigids[index].asleep) {
+      awake.indices.push_back(index);
+    }
+  };
+
+  awake.indices.clear();
+
+  if (live != nullptr) {
+    for (const uint32_t index : *live) {
+      keep(index);
+    }
+  } else {
+    for (uint32_t index = 0u; index != bodies.rigids.size(); ++index) {
+      keep(index);
+    }
+  }
+
+  awake.rigidCount = bodies.rigids.size();
+  awake.latticeCount = bodies.lattices.size();
+  awake.layout = bodies.layout;
+  awake.band = band;
+}
+}
+
+std::span<const uint32_t> awakeRigids(const World& world) {
+  return world.awake.indices;
 }
 
 std::unordered_set<uint64_t> recordedPairs(std::span<const Contact> contacts) {
@@ -430,6 +501,23 @@ StepReport step(World& world) {
   );
   const uint32_t simdWidth = resolveSimdWidth(world.simdWidth);
   const double band = parameters.speculativeDistance + parameters.margin;
+  const bool full = !parameters.sleep || !listFits(world.awake, bodies, band);
+  std::vector<uint32_t> live =
+    full ? std::vector<uint32_t>{} : liveRigids(world.awake, bodies);
+  size_t absorbed = 0u;
+  const auto absorbStirred = [&] {
+    if (!full) {
+      mergeIndices(
+        live,
+        std::span<const uint32_t>(bodies.stirred).subspan(absorbed)
+      );
+    }
+
+    absorbed = bodies.stirred.size();
+  };
+
+  bodies.stirred.clear();
+
   std::vector<uint32_t> movers;
   const std::vector<double> travel = frameTravel(bodies, parameters.dt, workers, movers);
 
@@ -477,10 +565,12 @@ StepReport step(World& world) {
   shareStoredForces(world);
   contacts.insert(contacts.end(), sleeping.begin(), sleeping.end());
   report.thawed = thawStruck(world, parameters.thawSpeed);
+  absorbStirred();
   report.profile.lattice = clock.lap();
 
   world.islandStore.sync(bodies, workers);
   wakeTouchedSleepers(world, world.movers);
+  absorbStirred();
 
   for (const uint32_t id : events.lost) {
     world.islandStore.markRemoved(id);
@@ -496,6 +586,7 @@ StepReport step(World& world) {
     world.islands,
     world.joints
   );
+  absorbStirred();
   world.manifolds.recolour(bodies, world.manifolds.syncBodies(bodies, workers));
 
   std::vector<Island>& islands = world.islands;
@@ -741,6 +832,8 @@ StepReport step(World& world) {
   }
 
   world.carried.clear();
+  absorbStirred();
+  rebuildAwake(world.awake, bodies, full ? nullptr : &live, band);
   report.profile.sleep = clock.lap();
   report.profile.total = clock.total();
 

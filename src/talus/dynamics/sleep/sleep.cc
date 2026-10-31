@@ -34,6 +34,10 @@ void putToSleep(BodySet& bodies, const BodyRef& ref) {
   if (ref.side == Side::Rigid) {
     RigidBody& body = bodies.rigids[ref.index];
 
+    if (!body.asleep) {
+      bodies.stirred.push_back(ref.index);
+    }
+
     body.asleep = true;
     body.velocity = glm::dvec3(0.0);
     body.angularVelocity = glm::dvec3(0.0);
@@ -75,8 +79,14 @@ bool islandAsleep(const BodySet& bodies, const Island& island) {
 
 void wakeBody(BodySet& bodies, const BodyRef& ref) {
   if (ref.side == Side::Rigid) {
-    bodies.rigids[ref.index].asleep = false;
-    bodies.rigids[ref.index].sleepTime = 0.0;
+    RigidBody& body = bodies.rigids[ref.index];
+
+    if (body.asleep) {
+      bodies.stirred.push_back(ref.index);
+    }
+
+    body.asleep = false;
+    body.sleepTime = 0.0;
   } else if (ref.side == Side::Lattice) {
     bodies.lattices[ref.index].asleep = false;
     bodies.lattices[ref.index].sleepTime = 0.0;
@@ -84,9 +94,8 @@ void wakeBody(BodySet& bodies, const BodyRef& ref) {
 }
 
 void wakeAll(BodySet& bodies) {
-  for (RigidBody& body : bodies.rigids) {
-    body.asleep = false;
-    body.sleepTime = 0.0;
+  for (uint32_t index = 0u; index != bodies.rigids.size(); ++index) {
+    wakeBody(bodies, BodyRef{Side::Rigid, index});
   }
 
   for (LatticeBody& body : bodies.lattices) {

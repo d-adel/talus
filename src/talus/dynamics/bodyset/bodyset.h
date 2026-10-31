@@ -114,6 +114,8 @@ struct BodySet {
   uint32_t nextId = 0u;
   std::vector<SwitchableBody> switchables;
   uint32_t nextStaticId = 0u;
+  std::vector<uint32_t> stirred;
+  uint64_t layout = 0u;
 };
 
 LatticeBody makeLattice(

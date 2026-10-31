@@ -52,8 +52,7 @@ bool thawFrom(World& world, std::vector<Frozen> pending) {
     body.velocity = glm::dvec3(0.0);
     body.angularVelocity = glm::dvec3(0.0);
     body.previousVelocity = glm::dvec3(0.0);
-    body.sleepTime = 0.0;
-    body.asleep = false;
+    wakeBody(world.bodies, ref);
     thawed = true;
 
     for (const uint32_t slot : world.manifolds.pairsOf(id)) {
@@ -323,6 +322,15 @@ void forgetBody(World& world, Side side, uint32_t index, uint32_t id) {
   world.manifolds.renumber(side, index);
 }
 
+void eraseRigids(BodySet& bodies, std::span<const uint8_t> gone) {
+  size_t at = 0u;
+
+  std::erase_if(bodies.rigids, [&](const RigidBody&) {
+    return gone[at++] != 0u;
+  });
+  bodies.layout += 1u;
+}
+
 bool removeBody(World& world, uint32_t id) {
   const std::optional<BodyRef> ref = findBody(world.bodies, id);
 
@@ -334,7 +342,10 @@ bool removeBody(World& world, uint32_t id) {
   removeBodyJoints(world, std::span<const uint32_t>(&id, 1u));
 
   if (ref->side == Side::Rigid) {
-    world.bodies.rigids.erase(world.bodies.rigids.begin() + ref->index);
+    std::vector<uint8_t> gone(world.bodies.rigids.size(), 0u);
+
+    gone[ref->index] = 1u;
+    eraseRigids(world.bodies, gone);
   } else {
     world.bodies.lattices.erase(world.bodies.lattices.begin() + ref->index);
   }
@@ -446,12 +457,7 @@ uint32_t removeBodies(World& world, std::span<const uint32_t> ids) {
 
   world.contacts = std::move(contacts);
   static_cast<void>(thawFrom(world, std::move(thawing)));
-
-  uint32_t at = 0u;
-
-  std::erase_if(world.bodies.rigids, [&](const RigidBody&) {
-    return gone[at++] != 0u;
-  });
+  eraseRigids(world.bodies, gone);
   world.manifolds.renumber(Side::Rigid, moved);
   std::erase_if(world.bodies.switchables, [&](const SwitchableBody& body) {
     return body.id < indexOf.size() && indexOf[body.id] != noBody && gone[indexOf[body.id]] != 0u;
@@ -666,8 +672,7 @@ bool freezeBody(World& world, const BodyRef& ref) {
   body.velocity = glm::dvec3(0.0);
   body.angularVelocity = glm::dvec3(0.0);
   body.previousVelocity = glm::dvec3(0.0);
-  body.sleepTime = 0.0;
-  body.asleep = false;
+  wakeBody(world.bodies, ref);
 
   return true;
 }
