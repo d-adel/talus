@@ -173,7 +173,9 @@ double weightOf(const World& world) {
 }
 
 PogoSettings pogoFor(const World& world, const glm::dvec3& normal) {
-  const double cap = capScale * weightOf(world);
+  const double cap = capScale * weightOf(world)
+                     * static_cast<double>(world.parameters.jointSubsteps)
+                     / static_cast<double>(capSubsteps);
   PogoSettings pogo;
   pogo.normal = normal;
   pogo.restLength = pogoRest;
@@ -202,14 +204,12 @@ std::optional<WorldRayHit> moveCharacter(
     castRay(world, from, from - glm::dvec3(0.0, reach, 0.0), skips);
   double force = 0.0;
   double speed = 0.0;
-  double released = 0.0;
 
   if (character.pogo != 0u) {
     const JointReport report = *jointReport(world, character.pogo);
 
     force = report.pogoForce;
     speed = report.pogoSpeed;
-    released = report.pogoReleased;
     REQUIRE(removeJoint(world, character.pogo));
     character.pogo = 0u;
   }
@@ -231,7 +231,6 @@ std::optional<WorldRayHit> moveCharacter(
     def.pogo = pogoFor(world, hit->normal);
     def.pogo.force = force;
     def.pogo.speed = speed;
-    def.pogo.released = released;
 
     character.pogo = addJoint(world, def);
     REQUIRE(character.pogo != 0u);

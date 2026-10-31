@@ -24,6 +24,7 @@ inline constexpr double pogoRest = 0.9;
 inline constexpr double pogoHertz = 3.0;
 inline constexpr double pogoDamping = 0.8;
 inline constexpr double capScale = 100.0;
+inline constexpr uint32_t capSubsteps = 4u;
 
 enum class PogoUpdate : uint8_t { Recreate };
 

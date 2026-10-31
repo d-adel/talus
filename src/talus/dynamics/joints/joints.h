@@ -85,7 +85,6 @@ struct PogoSettings {
   double maxCompression = 0.0;
   double force = 0.0;
   double speed = 0.0;
-  double released = 0.0;
 };
 
 struct JointDef {
@@ -111,7 +110,6 @@ struct JointReport {
   glm::dvec3 driveTorque{0.0};
   double pogoForce = 0.0;
   double pogoSpeed = 0.0;
-  double pogoReleased = 0.0;
   bool limitActive = false;
   bool driveSaturated = false;
   bool forceSaturated = false;
@@ -132,7 +130,6 @@ struct JointImpulses {
   glm::dvec2 planar{0.0};
   double pogo = 0.0;
   double pogoSpeed = 0.0;
-  double pogoReleased = 0.0;
 };
 
 struct Joint {

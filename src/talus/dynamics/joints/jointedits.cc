@@ -98,7 +98,7 @@ bool validPogo(const PogoSettings& pogo) {
          && validGain(pogo.restLength) && validGain(pogo.hertz)
          && validGain(pogo.dampingRatio) && validCap(pogo.maxTension)
          && validCap(pogo.maxCompression) && finite(pogo.force)
-         && finite(pogo.speed) && finite(pogo.released);
+         && finite(pogo.speed);
 }
 
 bool validCollision(const JointDef& def) {
@@ -321,17 +321,6 @@ bool setPlanarVelocity(
   wakeJointBodies(world, found->def);
 
   return true;
-}
-
-void clearPogoMotion(World& world, uint32_t body) {
-  for (Joint& joint : JointRecords::all(world.joints)) {
-    if (joint.def.kind == JointKind::Pogo && joint.def.bodyB == body) {
-      joint.impulses.pogoSpeed = 0.0;
-      joint.impulses.pogoReleased = 0.0;
-      joint.report.pogoSpeed = 0.0;
-      joint.report.pogoReleased = 0.0;
-    }
-  }
 }
 
 void wakeJointPartners(World& world, uint32_t id) {

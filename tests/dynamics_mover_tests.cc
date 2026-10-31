@@ -23,6 +23,7 @@
 #include <limits>
 #include <numbers>
 #include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -690,70 +691,75 @@ TEST_CASE(
   "a pogo's compression cap lets a heavy body down onto its ground body",
   "[dynamics][joints][mover]"
 ) {
-  World world;
   const glm::dvec3 crateHalf(0.3, 0.1, 0.3);
   const talus::field::SampledSdf crateField = boxField(crateHalf, 0.05);
 
-  addGround(world);
+  for (const bool capped : {true, false}) {
+    INFO((capped ? "compression cap 0.5 W" : "the host's caps"));
 
-  const uint32_t crate = addBox(
-    world,
-    crateField,
-    crateHalf,
-    20.0,
-    glm::dvec3(0.0, crateHalf.y, 0.0)
-  );
-  const double weight = fixture::weightOf(world);
-  fixture::Character character = fixture::addCharacter(
-    world,
-    glm::dvec3(0.0, centreAbove(2.0 * crateHalf.y, 0.0), 0.0)
-  );
-  PogoSettings pogo = fixture::pogoFor(world, up);
+    World world;
+    addGround(world);
 
-  pogo.maxCompression = 0.5 * weight;
-  character.pogo = addJoint(
-    world,
-    pogoJoint(crate, character.body, glm::dvec3(0.0, crateHalf.y, 0.0), pogo)
-  );
-  REQUIRE(character.pogo != 0u);
+    const uint32_t crate = addBox(
+      world,
+      crateField,
+      crateHalf,
+      20.0,
+      glm::dvec3(0.0, crateHalf.y, 0.0)
+    );
+    const double weight = fixture::weightOf(world);
+    fixture::Character character = fixture::addCharacter(
+      world,
+      glm::dvec3(0.0, centreAbove(2.0 * crateHalf.y, 0.0), 0.0)
+    );
+    PogoSettings pogo = fixture::pogoFor(world, up);
 
-  std::optional<uint32_t> slept;
-  double drift = 0.0;
-  double carried = 0.0;
-
-  for (uint32_t frame = 1u; frame <= 180u; ++frame) {
-    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
-
-    const RigidBody& body = rigidOf(world, character.body);
-
-    if (!slept && body.asleep && rigidOf(world, crate).asleep) {
-      slept = frame;
+    if (capped) {
+      pogo.maxCompression = 0.5 * weight;
     }
 
-    if (frame >= 60u) {
-      drift = std::max(drift, std::abs(body.velocity.y));
-      carried = std::max(
-        carried,
-        std::abs(jointReport(world, character.pogo)->pogoSpeed)
+    character.pogo = addJoint(
+      world,
+      pogoJoint(crate, character.body, glm::dvec3(0.0, crateHalf.y, 0.0), pogo)
+    );
+    REQUIRE(character.pogo != 0u);
+
+    std::optional<uint32_t> slept;
+    double drift = 0.0;
+
+    for (uint32_t frame = 1u; frame <= 180u; ++frame) {
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+      const RigidBody& body = rigidOf(world, character.body);
+
+      if (!slept && body.asleep && rigidOf(world, crate).asleep) {
+        slept = frame;
+      }
+
+      if (frame >= 60u) {
+        drift = std::max(drift, std::abs(body.velocity.y));
+      }
+    }
+
+    if (capped) {
+      const JointReport report = *jointReport(world, character.pogo);
+
+      CHECK(fixture::touching(world, character.body, crate));
+      CHECK(report.forceSaturated);
+      CHECK(std::abs(report.pogoForce - 0.5 * weight) < 1.0e-3 * weight);
+      CHECK(
+        std::abs(
+          normalForceOn(world, *findBody(world.bodies, character.body))
+          - 0.5 * weight
+        )
+        < 0.01 * weight
       );
     }
+
+    CHECK(drift < 1.0e-3);
+    REQUIRE(slept.has_value());
+    CHECK(*slept <= 90u);
   }
-
-  const JointReport report = *jointReport(world, character.pogo);
-
-  CHECK(fixture::touching(world, character.body, crate));
-  CHECK(report.forceSaturated);
-  CHECK(std::abs(report.pogoForce - 0.5 * weight) < 1.0e-3 * weight);
-  CHECK(
-    std::abs(
-      normalForceOn(world, *findBody(world.bodies, character.body)) - 0.5 * weight
-    )
-    < 0.01 * weight
-  );
-  CHECK(drift < 1.0e-3);
-  CHECK(carried < 1.0e-3);
-  REQUIRE(slept.has_value());
-  CHECK(*slept <= 90u);
 }
 
 TEST_CASE(
@@ -832,7 +838,6 @@ TEST_CASE(
 
     def.pogo.force = old.pogoForce;
     def.pogo.speed = old.pogoSpeed;
-    def.pogo.released = old.pogoReleased;
     REQUIRE(removeJoint(remade, remadeCharacter.pogo));
     remadeCharacter.pogo = addJoint(remade, def);
     REQUIRE(remadeCharacter.pogo != 0u);
@@ -910,7 +915,6 @@ TEST_CASE(
 
       pogo.force = report.pogoForce;
       pogo.speed = report.pogoSpeed;
-      pogo.released = report.pogoReleased;
       REQUIRE(removeJoint(world, character.pogo));
     }
 
@@ -1182,10 +1186,6 @@ TEST_CASE(
     def = valid;
     def.pogo.speed = bad;
     rejects(def);
-
-    def = valid;
-    def.pogo.released = bad;
-    rejects(def);
   }
 
   def = valid;
@@ -1208,56 +1208,6 @@ TEST_CASE(
 
   CHECK(report.pogoForce == def.pogo.force);
   CHECK(report.pogoSpeed == def.pogo.speed);
-}
-
-TEST_CASE(
-  "a pogo with a low cap still follows its spring, accelerating at the cap",
-  "[dynamics][joints][mover]"
-) {
-  World world;
-  world.parameters.sleep = false;
-  const double weight = fixture::weightOf(world);
-  const double gravity = glm::length(world.parameters.gravity);
-  const double h =
-    world.parameters.dt / static_cast<double>(world.parameters.jointSubsteps);
-  PogoSettings pogo = fixture::pogoFor(world, up);
-
-  pogo.maxTension = 1.5 * weight;
-  pogo.maxCompression = 1.5 * weight;
-
-  const fixture::Character character = addFloating(world, -0.2, pogo);
-  const double lift = pogo.maxCompression / fixture::characterMass - gravity;
-  const double start = anchorOf(world, character.body).y;
-  double drift = 0.0;
-  bool saturated = true;
-  bool carried = true;
-
-  for (uint32_t frame = 1u; frame <= 9u; ++frame) {
-    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
-
-    const double time = static_cast<double>(frame) * world.parameters.dt;
-    const double risen = anchorOf(world, character.body).y - start;
-    const JointReport report = *jointReport(world, character.pogo);
-
-    drift = std::max(
-      drift,
-      std::abs(risen - 0.5 * lift * time * time) / (lift * h * time)
-    );
-    saturated = saturated && report.forceSaturated;
-    carried = carried && std::abs(report.pogoForce - weight) < 1.0e-3 * weight;
-  }
-
-  CHECK(drift <= 1.0);
-  CHECK(saturated);
-  CHECK(carried);
-
-  run(world, 171u);
-
-  const JointReport report = *jointReport(world, character.pogo);
-
-  CHECK(std::abs(anchorOf(world, character.body).y - fixture::pogoRest) < 1.0e-4);
-  CHECK(std::abs(report.pogoForce - weight) < 1.0e-3 * weight);
-  CHECK_FALSE(report.forceSaturated);
 }
 
 TEST_CASE(
@@ -1364,14 +1314,19 @@ TEST_CASE(
 }
 
 TEST_CASE(
-  "a pogo created with a stored speed on a load it cannot carry does not hop",
+  "a pogo created with a stored speed comes to rest on its crate and does not hop",
   "[dynamics][joints][mover]"
 ) {
   const glm::dvec3 crateHalf(0.3, 0.1, 0.3);
   const talus::field::SampledSdf crateField = boxField(crateHalf, 0.05);
 
-  for (const double seed : {0.05, 0.5}) {
-    INFO("created with speed " << seed);
+  for (const auto& [capped, seed] :
+       {std::pair{true, 0.05}, std::pair{true, 0.5}, std::pair{false, 0.05},
+        std::pair{false, 0.5}}) {
+    INFO(
+      (capped ? "compression cap 0.5 W" : "the host's caps")
+      << ", created with speed " << seed
+    );
 
     World world;
     world.parameters.sleep = false;
@@ -1390,7 +1345,10 @@ TEST_CASE(
     );
     PogoSettings pogo = fixture::pogoFor(world, up);
 
-    pogo.maxCompression = 0.5 * fixture::weightOf(world);
+    if (capped) {
+      pogo.maxCompression = 0.5 * fixture::weightOf(world);
+    }
+
     pogo.speed = seed;
     character.pogo = addJoint(
       world,
@@ -1402,7 +1360,6 @@ TEST_CASE(
     double lowest = rigidOf(world, character.body).position.y;
     double highest = lowest;
     double drift = 0.0;
-    double carried = 0.0;
 
     for (uint32_t frame = 0u; frame != 300u; ++frame) {
       REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
@@ -1412,15 +1369,10 @@ TEST_CASE(
       lowest = std::min(lowest, body.position.y);
       highest = std::max(highest, body.position.y);
       drift = std::max(drift, std::abs(body.velocity.y));
-      carried = std::max(
-        carried,
-        std::abs(jointReport(world, character.pogo)->pogoSpeed)
-      );
     }
 
     CHECK(highest - lowest < 1.0e-4);
     CHECK(drift < 1.0e-3);
-    CHECK(carried < 1.0e-3);
   }
 }
 
@@ -1452,7 +1404,7 @@ TEST_CASE(
     addJoint(world, pogoJoint(noBody, body, glm::dvec3(0.0), pogo));
   const double start = rigidOf(world, body).position.y;
   double worst = 0.0;
-  bool idle = true;
+  bool forceless = true;
 
   REQUIRE(joint != 0u);
 
@@ -1462,7 +1414,6 @@ TEST_CASE(
 
     def.pogo.force = old.pogoForce;
     def.pogo.speed = old.pogoSpeed;
-    def.pogo.released = old.pogoReleased;
     REQUIRE(removeJoint(world, joint));
     joint = addJoint(world, def);
     REQUIRE(joint != 0u);
@@ -1477,11 +1428,11 @@ TEST_CASE(
         rigidOf(world, body).position.y - (start - 0.5 * gravity * time * (time + h))
       )
     );
-    idle = idle && report.pogoForce == 0.0 && report.pogoSpeed == 0.0;
+    forceless = forceless && report.pogoForce == 0.0;
   }
 
   CHECK(worst < 1.0e-4);
-  CHECK(idle);
+  CHECK(forceless);
 }
 
 TEST_CASE(
@@ -1506,7 +1457,6 @@ TEST_CASE(
   double lowest = jointInfinity;
   double highest = -jointInfinity;
   double drift = 0.0;
-  double carried = 0.0;
 
   for (uint32_t frame = 1u; frame <= 240u; ++frame) {
     const JointReport old = *jointReport(world, character.pogo);
@@ -1522,7 +1472,6 @@ TEST_CASE(
 
     pogo.force = old.pogoForce;
     pogo.speed = old.pogoSpeed;
-    pogo.released = old.pogoReleased;
     REQUIRE(removeJoint(world, character.pogo));
     character.pogo = addJoint(
       world,
@@ -1537,38 +1486,38 @@ TEST_CASE(
       lowest = std::min(lowest, body.position.y);
       highest = std::max(highest, body.position.y);
       drift = std::max(drift, std::abs(body.velocity.y));
-      carried = std::max(
-        carried,
-        std::abs(jointReport(world, character.pogo)->pogoSpeed)
-      );
     }
   }
 
   REQUIRE(moving > 0.5);
   CHECK(highest - lowest < 1.0e-4);
   CHECK(drift < 1.0e-3);
-  CHECK(carried < 1.0e-3);
 }
 
 TEST_CASE(
-  "a jump rises v^2 / 2g whether or not the pogo's spring is moving",
+  "a jump's height does not depend on whether the pogo's spring is moving",
   "[dynamics][joints][mover]"
 ) {
   const double launch = 3.0;
 
-  for (const auto& [release, jump] :
-       {std::pair{0.0, 60u}, std::pair{-0.1, 5u}}) {
-    INFO("released from " << release << ", jump at frame " << jump);
+  for (const auto& [tension, release, jump] :
+       {std::tuple{0.0, 0.0, 60u}, std::tuple{0.0, -0.1, 5u},
+        std::tuple{0.5, 0.0, 60u}, std::tuple{0.5, -0.1, 5u}}) {
+    INFO(
+      "tension cap " << tension << " W, released from " << release
+                     << ", jump at frame " << jump
+    );
 
     World world;
     world.parameters.sleep = false;
     PogoSettings pogo = fixture::pogoFor(world, up);
+    const double gravity = glm::length(world.parameters.gravity);
 
-    pogo.maxTension = 0.0;
+    pogo.maxTension = tension * fixture::weightOf(world);
 
     const fixture::Character character = addFloating(world, release, pogo);
     const double expected =
-      launch * launch / (2.0 * glm::length(world.parameters.gravity));
+      launch * launch / (2.0 * (gravity + pogo.maxTension / fixture::characterMass));
     double from = 0.0;
     double spring = 0.0;
     double rise = 0.0;
@@ -1608,8 +1557,12 @@ TEST_CASE(
   const glm::dvec3 platformHalf(1.0, 0.1, 1.0);
   const talus::field::SampledSdf platformField = boxField(platformHalf, 0.05);
   const double omega = 2.0 * std::numbers::pi * 2.0;
+  const double host = fixture::capScale
+                      * static_cast<double>(IntegrationParameters{}.jointSubsteps)
+                      / static_cast<double>(fixture::capSubsteps);
 
-  for (const Drive drive : {Drive{0.10, 3.0, 0.0}, Drive{0.05, 1.5, 1.5}}) {
+  for (const Drive drive :
+       {Drive{0.10, host, host}, Drive{0.05, host, host}}) {
     INFO(
       "amplitude " << drive.amplitude << " m, compression " << drive.compression
                    << " W, tension " << drive.tension << " W"
@@ -1652,7 +1605,6 @@ TEST_CASE(
 
       def.pogo.force = old.pogoForce;
       def.pogo.speed = old.pogoSpeed;
-      def.pogo.released = old.pogoReleased;
       REQUIRE(removeJoint(world, character.pogo));
       character.pogo = addJoint(world, def);
       REQUIRE(character.pogo != 0u);
@@ -1708,7 +1660,6 @@ TEST_CASE(
 
         def.pogo.force = old.pogoForce;
         def.pogo.speed = old.pogoSpeed;
-        def.pogo.released = old.pogoReleased;
         REQUIRE(removeJoint(world, joint));
         joint = addJoint(world, def);
         REQUIRE(joint != 0u);
@@ -1721,6 +1672,5 @@ TEST_CASE(
 
     CHECK(rigidOf(world, body).position == start);
     CHECK(report.pogoForce == 0.0);
-    CHECK(report.pogoSpeed == 0.0);
   }
 }
