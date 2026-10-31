@@ -2058,11 +2058,13 @@ namespace {
 
 struct CostRun {
   double hostMs = 0.0;
+  double warmMs = 0.0;
   double stepMs = 0.0;
   double jointsMs = 0.0;
   double splits = 0.0;
   double awake = 0.0;
   double planarSaturated = 0.0;
+  double scanMs = 0.0;
   size_t jointedBodies = 0u;
 };
 
@@ -2076,6 +2078,25 @@ struct CostCase {
 constexpr uint32_t costSteps = 600u;
 constexpr double costRadius = 2.0;
 constexpr double costSpeed = 2.0;
+constexpr uint32_t costSmall = 5000u;
+constexpr uint32_t costLarge = 20000u;
+constexpr uint32_t costScanBodies = costLarge - costSmall;
+constexpr size_t costScans = 9u;
+constexpr double recreateEdits = 3.0;
+constexpr double inPlaceEdits = 2.0;
+constexpr double gripEdits = 4.0;
+
+uint32_t costCharacters(const CostCase& scenario) {
+  return scenario.pile ? 1u : 4u;
+}
+
+double costEditsPerStep(const CostCase& scenario) {
+  const double mover = scenario.update == fixture::PogoUpdate::Recreate
+                         ? recreateEdits
+                         : inPlaceEdits;
+
+  return (mover + gripEdits) * static_cast<double>(costCharacters(scenario));
+}
 
 CostRun runCost(const CostCase& scenario) {
   using Clock = std::chrono::steady_clock;
@@ -2118,7 +2139,7 @@ CostRun runCost(const CostCase& scenario) {
     );
   }
 
-  const uint32_t count = scenario.pile ? 1u : 4u;
+  const uint32_t count = costCharacters(scenario);
   std::vector<glm::dvec3> centres;
 
   for (uint32_t index = 0u; index != count; ++index) {
@@ -2207,7 +2228,12 @@ CostRun runCost(const CostCase& scenario) {
     );
   }
 
+  const auto millisecondsSince = [](const Clock::time_point& from) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - from)
+      .count();
+  };
   double hostMs = 0.0;
+  double warmMs = 0.0;
   double stepMs = 0.0;
   double jointsMs = 0.0;
   double awake = 0.0;
@@ -2217,42 +2243,48 @@ CostRun runCost(const CostCase& scenario) {
   for (uint32_t frame = 0u; frame != costSteps; ++frame) {
     const double time = static_cast<double>(frame) / 60.0;
     bool applied = true;
-    const Clock::time_point start = Clock::now();
+    const auto edit = [&] {
+      for (size_t index = 0u; index != characters.size(); ++index) {
+        fixture::MoverStep move;
 
-    for (size_t index = 0u; index != characters.size(); ++index) {
-      fixture::MoverStep move;
+        move.update = scenario.update;
 
-      move.update = scenario.update;
+        if (scenario.pile) {
+          move.velocity = glm::dvec3(costSpeed, 0.0, 0.0);
+        } else if (!scenario.crateGround) {
+          move.velocity =
+            costSpeed
+            * glm::dvec3(
+              -std::sin(time * costSpeed / costRadius),
+              0.0,
+              std::cos(time * costSpeed / costRadius)
+            );
+        }
 
-      if (scenario.pile) {
-        move.velocity = glm::dvec3(costSpeed, 0.0, 0.0);
-      } else if (!scenario.crateGround) {
-        move.velocity =
-          costSpeed
-          * glm::dvec3(
-            -std::sin(time * costSpeed / costRadius),
-            0.0,
-            std::cos(time * costSpeed / costRadius)
-          );
+        applied =
+          fixture::tryMoveCharacter(world, characters[index], move).applied
+          && applied;
+
+        for (size_t hand = 0u; hand != 2u; ++hand) {
+          applied = fixture::driveGrip(
+                      world,
+                      grips[index][hand],
+                      characters[index].body,
+                      offsets[hand]
+                    )
+                    && applied;
+        }
       }
+    };
+    const Clock::time_point cold = Clock::now();
 
-      applied = fixture::tryMoveCharacter(world, characters[index], move).applied
-                && applied;
+    edit();
+    hostMs += millisecondsSince(cold);
 
-      for (size_t hand = 0u; hand != 2u; ++hand) {
-        applied = fixture::driveGrip(
-                    world,
-                    grips[index][hand],
-                    characters[index].body,
-                    offsets[hand]
-                  )
-                  && applied;
-      }
-    }
+    const Clock::time_point warm = Clock::now();
 
-    hostMs +=
-      std::chrono::duration<double, std::milli>(Clock::now() - start).count();
-
+    edit();
+    warmMs += millisecondsSince(warm);
     REQUIRE(applied);
 
     const StepReport report = talus::dynamics::step(world);
@@ -2272,7 +2304,25 @@ CostRun runCost(const CostCase& scenario) {
   CostRun result;
   const double steps = static_cast<double>(costSteps);
 
+  if (scenario.background == costLarge) {
+    const uint32_t far = world.bodies.rigids[costScanBodies - 1u].id;
+    std::array<double, costScans> scans{};
+
+    for (double& scan : scans) {
+      const Clock::time_point start = Clock::now();
+      const std::optional<BodyRef> found = findBody(world.bodies, far);
+
+      scan = millisecondsSince(start);
+      REQUIRE(found);
+      REQUIRE(found->index == costScanBodies - 1u);
+    }
+
+    std::ranges::sort(scans);
+    result.scanMs = scans[costScans / 2u];
+  }
+
   result.hostMs = hostMs / steps;
+  result.warmMs = warmMs / steps;
   result.stepMs = stepMs / steps;
   result.jointsMs = jointsMs / steps;
   result.splits = static_cast<double>(splits) / steps;
@@ -2309,9 +2359,10 @@ TEST_CASE(
         continue;
       }
 
-      std::array<double, 2> hostAt5000{};
+      std::array<double, 2> smallHost{};
+      std::array<double, 2> smallWarm{};
 
-      for (const uint32_t background : {0u, 5000u, 20000u}) {
+      for (const uint32_t background : {0u, costSmall, costLarge}) {
         for (const fixture::PogoUpdate update :
              {fixture::PogoUpdate::Recreate, fixture::PogoUpdate::InPlace}) {
           CostCase scenario;
@@ -2350,12 +2401,14 @@ TEST_CASE(
             pile ? "pile" : (crateGround ? "crate" : "floor");
 
           std::printf(
-            "movercost bodies %u update %s ground %s host_ms %.4f step_ms "
-            "%.4f joints_ms %.4f splits_per_step %.4f awake %.1f\n",
+            "movercost bodies %u update %s ground %s host_ms %.4f warm_ms "
+            "%.4f step_ms %.4f joints_ms %.4f splits_per_step %.4f awake "
+            "%.1f\n",
             background,
             updateName,
             groundName,
             median(pick(&CostRun::hostMs)),
+            median(pick(&CostRun::warmMs)),
             median(pick(&CostRun::stepMs)),
             median(pick(&CostRun::jointsMs)),
             median(pick(&CostRun::splits)),
@@ -2390,12 +2443,34 @@ TEST_CASE(
           );
 
           const double host = median(pick(&CostRun::hostMs));
+          const double warm = median(pick(&CostRun::warmMs));
           const size_t slot = update == fixture::PogoUpdate::Recreate ? 0u : 1u;
 
-          if (background == 5000u) {
-            hostAt5000[slot] = host;
-          } else if (background == 20000u) {
-            CHECK(host <= 1.5 * hostAt5000[slot]);
+          if (background == costSmall) {
+            smallHost[slot] = host;
+            smallWarm[slot] = warm;
+          } else if (background == costLarge) {
+            const double growth = host - smallHost[slot];
+            const double edits = costEditsPerStep(scenario);
+            const double perEdit = growth / edits;
+            const double scan = median(pick(&CostRun::scanMs));
+
+            std::printf(
+              "movercost growth update %s ground %s cold_ratio %.2f warm_ratio "
+              "%.2f growth_ms %.4f edits_per_step %.0f growth_per_edit_us "
+              "%.4f scan_%u_bodies_us %.3f margin %.1f\n",
+              updateName,
+              groundName,
+              host / smallHost[slot],
+              warm / smallWarm[slot],
+              growth,
+              edits,
+              1000.0 * perEdit,
+              costScanBodies,
+              1000.0 * scan,
+              scan / perEdit
+            );
+            CHECK(perEdit < scan);
           }
 
           if (!pile && (update == fixture::PogoUpdate::InPlace || !crateGround)) {
