@@ -421,7 +421,7 @@ TEST_CASE("invalid joint definitions are rejected", "[dynamics][joints]") {
   rejects(def);
 
   def = between(a, b);
-  def.kind = static_cast<JointKind>(4);
+  def.kind = static_cast<JointKind>(6);
   rejects(def);
 
   CHECK(addJoint(world, between(a, b)) == 1u);

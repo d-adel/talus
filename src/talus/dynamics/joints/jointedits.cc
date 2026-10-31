@@ -87,13 +87,22 @@ bool validSpring(const SpringSettings& spring) {
          && validGain(spring.angularDamping) && validCap(spring.maxTorque);
 }
 
+bool validPlanar(const PlanarVelocitySettings& planar) {
+  return finite(planar.targetVelocity) && validCap(planar.maxForce);
+}
+
+bool validCollision(const JointDef& def) {
+  return def.kind != JointKind::PlanarVelocity || def.collideConnected;
+}
+
 bool validDef(const JointDef& def) {
-  return def.kind <= JointKind::Spring && validFrame(def.frameA) && validFrame(def.frameB)
+  return def.kind <= JointKind::PlanarVelocity && validFrame(def.frameA) && validFrame(def.frameB)
     && finite(def.hertz) && def.hertz > 0.0 && finite(def.dampingRatio)
     && def.dampingRatio >= 0.0 && finite(def.hinge.lower) && finite(def.hinge.upper)
     && (!def.hinge.enabled
         || (def.hinge.lower <= def.hinge.upper && withinTurn(def.hinge.lower, 0.99) && withinTurn(def.hinge.upper, 0.99)))
-    && validCone(def.cone) && validDrive(def.drive) && validSpring(def.spring);
+    && validCone(def.cone) && validDrive(def.drive) && validSpring(def.spring)
+    && validPlanar(def.planar) && validCollision(def);
 }
 
 JointFrame normalised(const JointFrame& frame) {
@@ -261,6 +270,24 @@ bool setSpringSettings(
 
   found->def.spring = spring;
   found->def.spring.target = normalised(spring.target);
+  wakeJointBodies(world, found->def);
+
+  return true;
+}
+
+bool setPlanarVelocity(
+  World& world,
+  uint32_t joint,
+  const PlanarVelocitySettings& planar
+) {
+  Joint* found = JointRecords::find(world.joints, joint);
+
+  if (found == nullptr || found->def.kind != JointKind::PlanarVelocity
+      || !validPlanar(planar)) {
+    return false;
+  }
+
+  found->def.planar = planar;
   wakeJointBodies(world, found->def);
 
   return true;

@@ -22,6 +22,12 @@ bool setSpringSettings(
   const SpringSettings& spring
 );
 
+bool setPlanarVelocity(
+  World& world,
+  uint32_t joint,
+  const PlanarVelocitySettings& planar
+);
+
 [[nodiscard]] std::optional<JointDef> jointDef(
   const World& world,
   uint32_t joint

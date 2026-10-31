@@ -20,7 +20,9 @@ enum class JointKind : uint8_t {
   Ball,
   Hinge,
   SwingTwist,
-  Spring
+  Spring,
+  PlanarVelocity,
+  Pogo
 };
 
 struct JointFrame {
@@ -67,6 +69,11 @@ struct SpringSettings {
   double maxTorque = jointInfinity;
 };
 
+struct PlanarVelocitySettings {
+  glm::dvec3 targetVelocity{0.0};
+  double maxForce = 0.0;
+};
+
 struct JointDef {
   JointKind kind = JointKind::Ball;
   uint32_t bodyA = noBody;
@@ -80,6 +87,7 @@ struct JointDef {
   ConeLimit cone{};
   JointDrive drive{};
   SpringSettings spring{};
+  PlanarVelocitySettings planar{};
 };
 
 struct JointReport {
@@ -103,6 +111,7 @@ struct JointImpulses {
   glm::dvec3 drive{0.0};
   glm::dvec3 springLinear{0.0};
   glm::dvec3 springAngular{0.0};
+  glm::dvec2 planar{0.0};
 };
 
 struct Joint {

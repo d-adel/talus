@@ -89,6 +89,18 @@ struct JointSpringBlock {
 };
 
 template<typename Real>
+struct JointPlanarRow {
+  JointVec<Real> axisX{Real(0)};
+  JointVec<Real> axisZ{Real(0)};
+  JointVec<Real> target{Real(0)};
+  Real mass = Real(0);
+  Real cap = Real(0);
+  JointPair<Real> impulse{Real(0)};
+  bool active = false;
+  bool saturated = false;
+};
+
+template<typename Real>
 struct JointRow {
   uint32_t joint = 0u;
   JointKind kind = JointKind::Ball;
@@ -120,6 +132,7 @@ struct JointRow {
   JointVec<Real> feedForward{Real(0)};
   JointSpringBlock<Real> springLinear;
   JointSpringBlock<Real> springAngular;
+  JointPlanarRow<Real> planar;
 };
 
 template<typename Real>
@@ -1079,6 +1092,79 @@ void storeSpringRows(Joint& joint, const JointRow<Real>& row, Real invH) {
 }
 
 template<typename Real>
+void preparePlanarRows(const Joint& joint, Real h, JointRow<Real>& row) {
+  const PlanarVelocitySettings& settings = joint.def.planar;
+  const double step = static_cast<double>(h);
+  JointPlanarRow<Real>& planar = row.planar;
+
+  planar.axisX = row.b.frame * JointVec<Real>(Real(1), Real(0), Real(0));
+  planar.axisZ = row.b.frame * JointVec<Real>(Real(0), Real(0), Real(1));
+  planar.active = settings.maxForce > 0.0;
+
+  if (planar.active) {
+    const Real k = row.a.invMass + row.b.invMass;
+
+    planar.target = JointVec<Real>(settings.targetVelocity);
+    planar.mass = k > Real(0) ? Real(1) / k : Real(0);
+    planar.cap = static_cast<Real>(settings.maxForce * step);
+    planar.impulse = JointPair<Real>(joint.impulses.planar * step);
+  }
+}
+
+template<typename Real>
+JointVec<Real> jointPlanarImpulse(
+  const JointPlanarRow<Real>& planar,
+  const JointPair<Real>& impulse
+) {
+  return impulse.x * planar.axisX + impulse.y * planar.axisZ;
+}
+
+template<typename Real>
+void solvePlanarRows(
+  JointRow<Real>& row,
+  JointMotion<Real>& a,
+  JointMotion<Real>& b
+) {
+  JointPlanarRow<Real>& planar = row.planar;
+
+  if (!planar.active) {
+    return;
+  }
+
+  const JointVec<Real> rate = b.v - a.v - planar.target;
+  const JointPair<Real> old = planar.impulse;
+  const JointPair<Real> unbounded =
+    old
+    - planar.mass
+        * JointPair<Real>(
+          glm::dot(rate, planar.axisX),
+          glm::dot(rate, planar.axisZ)
+        );
+  const Real square = glm::dot(unbounded, unbounded);
+
+  planar.saturated = square > planar.cap * planar.cap;
+  planar.impulse = planar.saturated
+                     ? (planar.cap / std::sqrt(square)) * unbounded
+                     : unbounded;
+
+  const JointVec<Real> impulse = jointPlanarImpulse(planar, planar.impulse - old);
+
+  a.v -= row.a.invMass * impulse;
+  b.v += row.b.invMass * impulse;
+}
+
+template<typename Real>
+void storePlanarRows(Joint& joint, const JointRow<Real>& row, Real invH) {
+  const double rate = static_cast<double>(invH);
+  const JointPlanarRow<Real>& planar = row.planar;
+
+  joint.impulses.planar = glm::dvec2(planar.impulse) * rate;
+  joint.report.force =
+    glm::dvec3(jointPlanarImpulse(planar, planar.impulse)) * rate;
+  joint.report.forceSaturated = planar.active && planar.saturated;
+}
+
+template<typename Real>
 JointVec<Real> jointWarmAngular(const JointRow<Real>& row) {
   if (row.kind == JointKind::Hinge) {
     return hingeWarmImpulse(row);
@@ -1156,6 +1242,8 @@ void prepareJointRows(
       prepareSwingTwistRows(joint, h, row);
     } else if (row.kind == JointKind::Spring) {
       prepareSpringRows(joint, h, row);
+    } else if (row.kind == JointKind::PlanarVelocity) {
+      preparePlanarRows(joint, h, row);
     }
 
     rows.push_back(row);
@@ -1170,6 +1258,18 @@ void warmStartJointRows(
   for (const JointRow<Real>& row : rows) {
     JointMotion<Real> a = jointMotion(states, row.a);
     JointMotion<Real> b = jointMotion(states, row.b);
+
+    if (row.kind == JointKind::PlanarVelocity) {
+      const JointVec<Real> impulse =
+        jointPlanarImpulse(row.planar, row.planar.impulse);
+
+      a.v -= row.a.invMass * impulse;
+      b.v += row.b.invMass * impulse;
+      storeJointMotion(states, row.a, a);
+      storeJointMotion(states, row.b, b);
+      continue;
+    }
+
     const JointVec<Real> rA = a.dq * row.a.anchor;
     const JointVec<Real> rB = b.dq * row.b.anchor;
     const JointVec<Real>& impulse = row.kind == JointKind::Spring
@@ -1237,6 +1337,13 @@ uint32_t solveJointRows(
 
     if (row.kind == JointKind::Spring) {
       solveSpringRows(row, a, b);
+      storeJointMotion(states, row.a, a);
+      storeJointMotion(states, row.b, b);
+      continue;
+    }
+
+    if (row.kind == JointKind::PlanarVelocity) {
+      solvePlanarRows(row, a, b);
       storeJointMotion(states, row.a, a);
       storeJointMotion(states, row.b, b);
       continue;
@@ -1333,6 +1440,8 @@ void storeJointRows(
       storeSwingTwistRows(joint, row, invH);
     } else if (row.kind == JointKind::Spring) {
       storeSpringRows(joint, row, invH);
+    } else if (row.kind == JointKind::PlanarVelocity) {
+      storePlanarRows(joint, row, invH);
     }
   }
 }
