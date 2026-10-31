@@ -1,7 +1,9 @@
 #include "worldray.h"
 
+#include <talus/deformable/contact/contact.h>
 #include <talus/dynamics/compound/compound.h>
 #include <talus/dynamics/tiers/tiers.h>
+#include <talus/field/sampledsdf/sampledsdf.h>
 
 #include <glm/gtc/quaternion.hpp>
 
@@ -9,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace talus::dynamics {
 
@@ -117,6 +120,194 @@ std::optional<LocalHit> boxEntry(
   return LocalHit{enter, rotation * normal};
 }
 
+constexpr double surfaceTolerance = 1.0e-9;
+constexpr uint32_t bisectionLimit = 60u;
+constexpr double fieldStepFloor = 0.05;
+constexpr double latticeStepCells = 0.25;
+
+std::optional<std::pair<double, double>> clipToBox(
+  const glm::dvec3& start,
+  const glm::dvec3& span,
+  const glm::dvec3& low,
+  const glm::dvec3& high,
+  double reach
+) {
+  double enter = 0.0;
+  double leave = reach;
+
+  for (int axis = 0; axis != 3; ++axis) {
+    if (span[axis] == 0.0) {
+      if (start[axis] < low[axis] || start[axis] > high[axis]) {
+        return std::nullopt;
+      }
+
+      continue;
+    }
+
+    const double first = (low[axis] - start[axis]) / span[axis];
+    const double second = (high[axis] - start[axis]) / span[axis];
+
+    enter = std::max(enter, std::min(first, second));
+    leave = std::min(leave, std::max(first, second));
+  }
+
+  if (enter > leave) {
+    return std::nullopt;
+  }
+
+  return std::make_pair(enter, leave);
+}
+
+template<typename Distance>
+double bisect(Distance&& distance, double outside, double inside) {
+  for (uint32_t pass = 0u; pass != bisectionLimit; ++pass) {
+    const double middle = 0.5 * (outside + inside);
+    const double gap = distance(middle);
+
+    if (std::abs(gap) <= surfaceTolerance) {
+      return middle;
+    }
+
+    if (gap <= 0.0) {
+      inside = middle;
+    } else {
+      outside = middle;
+    }
+  }
+
+  return inside;
+}
+
+std::optional<LocalHit> rayField(
+  const field::SampledSdf& field,
+  const glm::dvec3& start,
+  const glm::dvec3& end,
+  double reach
+) {
+  const glm::dvec3 span = end - start;
+  const double length = glm::length(span);
+
+  if (!(length > 0.0) || field.distances.empty()) {
+    return std::nullopt;
+  }
+
+  const glm::dvec3 low(field.origin);
+  const glm::dvec3 high =
+    low + glm::dvec3(field.voxelSize) * glm::dvec3(field.resolution - glm::uvec3(1u));
+  const std::optional<std::pair<double, double>> window =
+    clipToBox(start, span, low, high, reach);
+
+  if (!window) {
+    return std::nullopt;
+  }
+
+  const glm::dvec3 direction = span / length;
+  const auto distance = [&](double at) {
+    return field::probe<double>(field, start + at * span).distance;
+  };
+  const auto normalAt = [&](double at) {
+    return field::probe<double>(field, start + at * span).normal;
+  };
+  const double floor =
+    fieldStepFloor
+    * static_cast<double>(
+      std::min(field.voxelSize.x, std::min(field.voxelSize.y, field.voxelSize.z))
+    );
+
+  double at = window->first;
+
+  if (distance(at) <= 0.0) {
+    if (at > 0.0) {
+      return LocalHit{at, normalAt(at)};
+    }
+
+    return std::nullopt;
+  }
+
+  while (at < window->second) {
+    const double step = std::max(
+      static_cast<double>(field::stepBound(
+        field,
+        glm::vec3(start + at * span),
+        glm::vec3(direction)
+      )),
+      floor
+    );
+    const double next = std::min(at + step / length, window->second);
+
+    if (distance(next) <= 0.0) {
+      const double crossing = bisect(distance, at, next);
+
+      return LocalHit{crossing, normalAt(crossing)};
+    }
+
+    at = next;
+  }
+
+  return std::nullopt;
+}
+
+std::optional<LocalHit> rayLattice(
+  const LatticeBody& lattice,
+  const glm::dvec3& from,
+  const glm::dvec3& to,
+  double reach
+) {
+  if (lattice.mesh == nullptr || lattice.field == nullptr) {
+    return std::nullopt;
+  }
+
+  deformable::DeformedProbe probe =
+    deformable::deformedProbe(*lattice.mesh, *lattice.field);
+
+  deformable::placeDeformedProbe(probe, lattice.position);
+
+  const glm::dvec3 span = to - from;
+  const std::optional<std::pair<double, double>> window =
+    clipToBox(from, span, probe.minimum, probe.maximum, reach);
+  const double length = glm::length(span);
+
+  if (!window || !(length > 0.0) || !(probe.cell > 0.0)) {
+    return std::nullopt;
+  }
+
+  const auto distance = [&](double at) {
+    const deformable::DeformedDistance found =
+      deformable::probeDeformed(probe, from + at * span);
+
+    return found.found && std::isfinite(found.distance)
+             ? found.distance
+             : std::numeric_limits<double>::infinity();
+  };
+  const auto normalAt = [&](double at) {
+    return deformable::probeDeformed(probe, from + at * span).normal;
+  };
+  const double step = latticeStepCells * probe.cell / length;
+  double at = window->first;
+
+  if (distance(at) <= 0.0) {
+    if (at > 0.0) {
+      return LocalHit{at, normalAt(at)};
+    }
+
+    return std::nullopt;
+  }
+
+  while (at < window->second) {
+    const double next = std::min(at + step, window->second);
+
+    if (distance(next) <= 0.0) {
+      const double crossing = bisect(distance, at, next);
+
+      return LocalHit{crossing, normalAt(crossing)};
+    }
+
+    at = next;
+  }
+
+  return std::nullopt;
+}
+
 class Caster {
 public:
   Caster(
@@ -132,6 +323,24 @@ public:
 
     if (ref && ref->side == Side::Rigid) {
       test(m_world.bodies.rigids[ref->index]);
+    } else if (ref && ref->side == Side::Lattice) {
+      testLattice(m_world.bodies.lattices[ref->index]);
+    }
+
+    return limit();
+  }
+
+  double visitStatic(uint32_t id) {
+    const std::vector<StaticField>& statics = m_world.bodies.statics;
+    const auto at = std::lower_bound(
+      statics.begin(),
+      statics.end(),
+      id,
+      [](const StaticField& body, uint32_t wanted) { return body.id < wanted; }
+    );
+
+    if (at != statics.end() && at->id == id) {
+      testStatic(*at);
     }
 
     return limit();
@@ -139,6 +348,14 @@ public:
 
   void visitNew(const RigidBody& body) {
     test(body);
+  }
+
+  void visitNew(const LatticeBody& lattice) {
+    testLattice(lattice);
+  }
+
+  void visitNew(const StaticField& body) {
+    testStatic(body);
   }
 
   [[nodiscard]] std::optional<WorldRayHit> best() const {
@@ -181,6 +398,8 @@ private:
 
     switch (body.shape) {
       case RigidShape::Sampled:
+        testSampled(body);
+
         return;
       case RigidShape::Sphere:
         if (
@@ -211,6 +430,68 @@ private:
         }
 
         return;
+    }
+  }
+
+  void testSampled(const RigidBody& body) {
+    if (body.field == nullptr) {
+      return;
+    }
+
+    const glm::dquat back = glm::conjugate(body.rotation);
+    const glm::dvec3 start =
+      body.fieldOrigin + body.fieldRotation * (back * (m_from - body.position));
+    const glm::dvec3 end =
+      body.fieldOrigin + body.fieldRotation * (back * (m_to - body.position));
+
+    if (
+      const std::optional<LocalHit> hit =
+        rayField(*body.field, start, end, limit())
+    ) {
+      consider(
+        Side::Rigid,
+        body.id,
+        noChild,
+        LocalHit{
+          hit->fraction,
+          body.rotation * (glm::conjugate(body.fieldRotation) * hit->normal)
+        }
+      );
+    }
+  }
+
+  void testStatic(const StaticField& body) {
+    if (body.field == nullptr) {
+      return;
+    }
+
+    if (
+      const std::optional<LocalHit> hit = rayField(
+        *body.field,
+        staticLocal(body, m_from),
+        staticLocal(body, m_to),
+        limit()
+      )
+    ) {
+      consider(
+        Side::Static,
+        body.id,
+        noChild,
+        LocalHit{hit->fraction, staticDirection(body, hit->normal)}
+      );
+    }
+  }
+
+  void testLattice(const LatticeBody& lattice) {
+    if (skipped(m_skips, lattice.id, noChild)) {
+      return;
+    }
+
+    if (
+      const std::optional<LocalHit> hit =
+        rayLattice(lattice, m_from, m_to, limit())
+    ) {
+      consider(Side::Lattice, lattice.id, noChild, *hit);
     }
   }
 
@@ -283,8 +564,8 @@ std::optional<WorldRayHit> castRay(
   Caster caster(world, from, to, skips);
   const BroadPhase& broadPhase = world.broadPhase;
 
-  broadPhase.rayQuery(from, to, [&](bool fixed, uint32_t id, double clip) {
-    return fixed ? clip : caster.visitMoving(id);
+  broadPhase.rayQuery(from, to, [&](bool fixed, uint32_t id, double) {
+    return fixed ? caster.visitStatic(id) : caster.visitMoving(id);
   });
 
   const uint32_t seen = broadPhase.seenBodies();
@@ -292,6 +573,22 @@ std::optional<WorldRayHit> castRay(
   if (world.bodies.nextId > seen) {
     for (const RigidBody& body : world.bodies.rigids) {
       if (body.id >= seen) {
+        caster.visitNew(body);
+      }
+    }
+
+    for (const LatticeBody& lattice : world.bodies.lattices) {
+      if (lattice.id >= seen) {
+        caster.visitNew(lattice);
+      }
+    }
+  }
+
+  const uint32_t seenStatics = broadPhase.seenStatics();
+
+  if (world.bodies.nextStaticId > seenStatics) {
+    for (const StaticField& body : world.bodies.statics) {
+      if (body.id >= seenStatics) {
         caster.visitNew(body);
       }
     }

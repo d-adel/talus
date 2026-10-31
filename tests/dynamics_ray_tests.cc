@@ -1,5 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "fieldprimitives.h"
+
+#include <talus/deformable/solver/solver.h>
 #include <talus/dynamics/bodyset/bodyset.h>
 #include <talus/dynamics/compound/compound.h>
 #include <talus/dynamics/edits/edits.h>
@@ -7,6 +10,8 @@
 #include <talus/dynamics/rays/worldray.h>
 #include <talus/dynamics/tiers/tiers.h>
 #include <talus/field/sampledsdf/sampledsdf.h>
+#include <talus/material.h>
+#include <talus/mesh.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -14,14 +19,19 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <memory>
 #include <optional>
 #include <random>
+#include <span>
 #include <vector>
 
 namespace {
 
 using talus::dynamics::BodyRef;
+using talus::dynamics::RigidBody;
 using talus::dynamics::CompoundChild;
 using talus::dynamics::noChild;
 using talus::dynamics::RaySkip;
@@ -107,6 +117,124 @@ uint32_t addCompound(
 }
 
 const glm::dquat noTurn(1.0, 0.0, 0.0, 0.0);
+
+talus::field::SampledSdf boxField(
+  const glm::dvec3& half,
+  double voxel,
+  double outset = 0.0
+) {
+  const glm::vec3 reach =
+    glm::vec3(half) + glm::vec3(static_cast<float>(2.0 * voxel));
+
+  return talus::field::bake(
+    std::vector<talus::field::Primitive>{fixture::box(
+      glm::vec3(0.0f),
+      glm::vec3(half) + glm::vec3(static_cast<float>(outset))
+    )},
+    -reach,
+    reach,
+    glm::uvec3(glm::round(2.0f * reach / static_cast<float>(voxel)))
+      + glm::uvec3(1u)
+  );
+}
+
+double angleBetween(const glm::dvec3& a, const glm::dvec3& b) {
+  return std::acos(
+    std::clamp(glm::dot(glm::normalize(a), glm::normalize(b)), -1.0, 1.0)
+  );
+}
+
+std::vector<glm::dvec3> boxSamples(const glm::dvec3& half) {
+  std::vector<glm::dvec3> samples;
+
+  for (int x = -1; x != 2; ++x) {
+    for (int y = -1; y != 2; ++y) {
+      for (int z = -1; z != 2; ++z) {
+        if (x != 0 || y != 0 || z != 0) {
+          samples.push_back(glm::dvec3(x, y, z) * half);
+        }
+      }
+    }
+  }
+
+  return samples;
+}
+
+uint32_t addSampledBox(
+  World& world,
+  const talus::field::SampledSdf& field,
+  const glm::dvec3& half,
+  const glm::dvec3& position,
+  const glm::dquat& rotation
+) {
+  const std::vector<glm::dvec3> samples = boxSamples(half);
+
+  talus::dynamics::addRigidBody(
+    world.bodies,
+    field,
+    samples,
+    1.0,
+    glm::dvec3(1.0e-2),
+    position,
+    glm::dvec3(0.0),
+    0.5,
+    0.0
+  );
+  world.bodies.rigids.back().rotation = rotation;
+
+  return world.bodies.rigids.back().id;
+}
+
+talus::PhysicalMaterial jelly() {
+  talus::PhysicalMaterial material;
+
+  material.density = 500.0f;
+  material.friction = 0.7f;
+  material.youngsModulus = 5.0e4f;
+  material.poissonsRatio = 0.4f;
+
+  return material;
+}
+
+struct SoftBlock {
+  talus::field::SampledSdf field;
+  std::vector<talus::PhysicalMaterial> lanes;
+  std::shared_ptr<const talus::PreparedMesh> mesh;
+};
+
+SoftBlock softBlock(const glm::dvec3& half, double voxel) {
+  SoftBlock block;
+
+  block.field = boxField(half, voxel, 1.0e-4);
+  block.lanes.assign(2u, jelly());
+  block.mesh = talus::deformable::buildMesh(
+    block.field,
+    block.lanes,
+    glm::mat4(1.0f),
+    std::span<const talus::deformable::SupportVolume>{},
+    talus::deformable::VolumeElementType::Hex
+  );
+
+  return block;
+}
+
+uint32_t addSoftBlock(
+  World& world,
+  const SoftBlock& block,
+  const glm::dvec3& at
+) {
+  (void)talus::dynamics::addLattice(
+    world.bodies,
+    block.mesh,
+    block.lanes,
+    at,
+    glm::dvec3(0.0),
+    block.lanes.front().friction,
+    &block.field
+  );
+
+  return world.bodies.lattices.back().id;
+}
 
 void expectSameBody(const World& world, uint32_t id) {
   const std::optional<BodyRef> located = talus::dynamics::locateBody(world, id);
@@ -658,4 +786,401 @@ TEST_CASE(
   for (uint32_t id = 0u; id != world.bodies.nextId; ++id) {
     expectSameBody(world, id);
   }
+}
+
+TEST_CASE(
+  "the world ray cast hits static fields at the field's surface",
+  "[dynamics][rays]"
+) {
+  World world;
+
+  world.parameters.gravity = glm::dvec3(0.0);
+
+  const talus::field::SampledSdf floor =
+    boxField(glm::dvec3(2.0, 0.1, 2.0), 0.02);
+  const uint32_t flat = talus::dynamics::addStatic(world.bodies, floor, 0.5);
+
+  const std::optional<talus::dynamics::WorldRayHit> level =
+    talus::dynamics::castRay(
+      world,
+      glm::dvec3(0.31, 1.0, 0.17),
+      glm::dvec3(0.31, -1.0, 0.17)
+    );
+
+  REQUIRE(level.has_value());
+  CHECK(level->side == Side::Static);
+  CHECK(level->body == flat);
+  CHECK(std::abs(level->point.y - 0.1) < 1.0e-5);
+  CHECK(angleBetween(level->normal, glm::dvec3(0.0, 1.0, 0.0)) < 1.0e-4);
+
+  const glm::dquat tilt =
+    glm::angleAxis(glm::radians(30.0), glm::dvec3(0.0, 0.0, 1.0));
+  const glm::dvec3 place(5.0, 0.0, 0.0);
+  const uint32_t tilted =
+    talus::dynamics::addStatic(world.bodies, floor, 0.5, 0.0, place, tilt);
+  const glm::dvec3 up = tilt * glm::dvec3(0.0, 1.0, 0.0);
+
+  const std::optional<talus::dynamics::WorldRayHit> slanted =
+    talus::dynamics::castRay(
+      world,
+      place + glm::dvec3(0.3, 1.0, 0.2),
+      place + glm::dvec3(0.3, -1.0, 0.2)
+    );
+
+  REQUIRE(slanted.has_value());
+  CHECK(slanted->side == Side::Static);
+  CHECK(slanted->body == tilted);
+  CHECK(
+    std::abs(std::abs(glm::dot(slanted->point - place, up)) - 0.1) < 1.0e-5
+  );
+  CHECK(angleBetween(slanted->normal, up) < 1.0e-4);
+
+  (void)talus::dynamics::step(world);
+
+  const std::optional<talus::dynamics::WorldRayHit> stepped =
+    talus::dynamics::castRay(
+      world,
+      glm::dvec3(0.31, 1.0, 0.17),
+      glm::dvec3(0.31, -1.0, 0.17)
+    );
+
+  REQUIRE(stepped.has_value());
+  CHECK(stepped->body == flat);
+  CHECK(std::abs(stepped->point.y - 0.1) < 1.0e-5);
+}
+
+TEST_CASE(
+  "the world ray cast hits sampled rigid bodies at the field's surface",
+  "[dynamics][rays]"
+) {
+  World world;
+
+  world.parameters.gravity = glm::dvec3(0.0);
+
+  const glm::dvec3 half(0.2);
+  const talus::field::SampledSdf field = boxField(half, 0.01);
+  const glm::dquat turn =
+    glm::angleAxis(glm::radians(30.0), glm::dvec3(0.0, 1.0, 0.0));
+  const uint32_t id =
+    addSampledBox(world, field, half, glm::dvec3(0.0, 1.0, 0.0), turn);
+
+  const auto cast = [&](const glm::dvec3& from, const glm::dvec3& to) {
+    return talus::dynamics::castRay(world, from, to);
+  };
+
+  for (uint32_t pass = 0u; pass != 2u; ++pass) {
+    const glm::dvec3 centre = world.bodies.rigids.back().position;
+    const std::optional<talus::dynamics::WorldRayHit> top =
+      cast(centre + glm::dvec3(0.05, 2.0, 0.03), centre - glm::dvec3(0, 2, 0));
+
+    REQUIRE(top.has_value());
+    CHECK(top->side == Side::Rigid);
+    CHECK(top->body == id);
+    CHECK(std::abs(top->point.y - (centre.y + 0.2)) < 1.0e-5);
+    CHECK(angleBetween(top->normal, glm::dvec3(0.0, 1.0, 0.0)) < 1.0e-4);
+
+    const glm::dvec3 face = turn * glm::dvec3(1.0, 0.0, 0.0);
+    const std::optional<talus::dynamics::WorldRayHit> side =
+      cast(centre + 2.0 * face + glm::dvec3(0.0, 0.04, 0.0), centre);
+
+    REQUIRE(side.has_value());
+    CHECK(side->body == id);
+    CHECK(angleBetween(side->normal, face) < 1.0e-4);
+    CHECK(std::abs(glm::dot(side->point - centre, face) - 0.2) < 1.0e-5);
+
+    (void)talus::dynamics::step(world);
+  }
+
+  RigidBody& body = world.bodies.rigids.back();
+
+  body.fieldOrigin = glm::dvec3(0.0, 0.05, 0.0);
+
+  const std::optional<talus::dynamics::WorldRayHit> shifted = cast(
+    body.position + glm::dvec3(0.05, 2.0, 0.03),
+    body.position - glm::dvec3(0.0, 2.0, 0.0)
+  );
+
+  REQUIRE(shifted.has_value());
+  CHECK(std::abs(shifted->point.y - (body.position.y + 0.15)) < 1.0e-5);
+}
+
+TEST_CASE(
+  "the world ray cast hits lattice bodies at their current surface",
+  "[dynamics][rays]"
+) {
+  World world;
+
+  world.parameters.gravity = glm::dvec3(0.0);
+
+  const SoftBlock block = softBlock(glm::dvec3(0.2, 0.05, 0.2), 0.05);
+  const uint32_t id = addSoftBlock(world, block, glm::dvec3(0.0, 0.5, 0.0));
+  const glm::dvec3 from(0.03, 2.0, -0.02);
+  const glm::dvec3 to(0.03, -1.0, -0.02);
+
+  const std::optional<talus::dynamics::WorldRayHit> rest =
+    talus::dynamics::castRay(world, from, to);
+
+  REQUIRE(rest.has_value());
+  CHECK(rest->side == Side::Lattice);
+  CHECK(rest->body == id);
+  CHECK(std::abs(rest->point.y - (0.5 + 0.05 + 1.0e-4)) < 1.0e-5);
+  CHECK(angleBetween(rest->normal, glm::dvec3(0.0, 1.0, 0.0)) < 1.0e-4);
+
+  for (glm::dvec3& node : world.bodies.lattices.back().position) {
+    node += glm::dvec3(0.0, 0.1, 0.0);
+  }
+
+  const std::optional<talus::dynamics::WorldRayHit> lifted =
+    talus::dynamics::castRay(world, from, to);
+
+  REQUIRE(lifted.has_value());
+  CHECK(std::abs(lifted->point.y - rest->point.y - 0.1) < 1.0e-5);
+}
+
+TEST_CASE(
+  "the world ray cast never hits a lattice body without a field",
+  "[dynamics][rays]"
+) {
+  World world;
+
+  world.parameters.gravity = glm::dvec3(0.0);
+
+  const SoftBlock block = softBlock(glm::dvec3(0.2, 0.05, 0.2), 0.05);
+
+  (void)talus::dynamics::addLattice(
+    world.bodies,
+    block.mesh,
+    block.lanes,
+    glm::dvec3(0.0, 0.5, 0.0),
+    glm::dvec3(0.0),
+    0.5,
+    nullptr
+  );
+
+  CHECK(!talus::dynamics::castRay(
+    world,
+    glm::dvec3(0.03, 2.0, -0.02),
+    glm::dvec3(0.03, -1.0, -0.02)
+  ));
+}
+
+TEST_CASE(
+  "the world ray cast ignores a field that contains its start",
+  "[dynamics][rays]"
+) {
+  World world;
+
+  world.parameters.gravity = glm::dvec3(0.0);
+
+  const talus::field::SampledSdf floor =
+    boxField(glm::dvec3(2.0, 0.1, 2.0), 0.02);
+
+  (void)talus::dynamics::addStatic(world.bodies, floor, 0.5);
+
+  const uint32_t above =
+    addBox(world, glm::dvec3(0.2), glm::dvec3(0.0, 1.0, 0.0));
+
+  const std::optional<talus::dynamics::WorldRayHit> hit =
+    talus::dynamics::castRay(
+      world,
+      glm::dvec3(0.0, 0.05, 0.0),
+      glm::dvec3(0.0, 3.0, 0.0)
+    );
+
+  REQUIRE(hit.has_value());
+  CHECK(hit->side == Side::Rigid);
+  CHECK(hit->body == above);
+  CHECK(std::abs(hit->point.y - 0.8) < 1.0e-9);
+}
+
+TEST_CASE(
+  "the world ray cast finds statics and lattices added after a step, in any "
+  "list order",
+  "[dynamics][rays]"
+) {
+  World world;
+
+  world.parameters.gravity = glm::dvec3(0.0);
+
+  const talus::field::SampledSdf floor =
+    boxField(glm::dvec3(2.0, 0.1, 2.0), 0.02);
+  const SoftBlock block = softBlock(glm::dvec3(0.2, 0.05, 0.2), 0.05);
+
+  (void)talus::dynamics::addStatic(world.bodies, floor, 0.5);
+  (void)addSoftBlock(world, block, glm::dvec3(9.0, 0.5, 0.0));
+  (void)addBox(world, glm::dvec3(0.2), glm::dvec3(5.0, 1.0, 0.0));
+  (void)talus::dynamics::step(world);
+
+  const uint32_t later = talus::dynamics::addStatic(
+    world.bodies,
+    floor,
+    0.5,
+    0.0,
+    glm::dvec3(20.0, 0.0, 0.0)
+  );
+  const uint32_t soft = addSoftBlock(world, block, glm::dvec3(30.0, 0.5, 0.0));
+
+  std::reverse(world.bodies.lattices.begin(), world.bodies.lattices.end());
+
+  const std::optional<talus::dynamics::WorldRayHit> onStatic =
+    talus::dynamics::castRay(
+      world,
+      glm::dvec3(20.2, 1.0, 0.1),
+      glm::dvec3(20.2, -1.0, 0.1)
+    );
+  const std::optional<talus::dynamics::WorldRayHit> onLattice =
+    talus::dynamics::castRay(
+      world,
+      glm::dvec3(30.03, 2.0, -0.02),
+      glm::dvec3(30.03, -1.0, -0.02)
+    );
+
+  REQUIRE(onStatic.has_value());
+  CHECK(onStatic->body == later);
+  CHECK(std::abs(onStatic->point.y - 0.1) < 1.0e-5);
+  REQUIRE(onLattice.has_value());
+  CHECK(onLattice->side == Side::Lattice);
+  CHECK(onLattice->body == soft);
+}
+
+TEST_CASE("world ray cast cost against many bodies", "[.][raycost]") {
+  using Clock = std::chrono::steady_clock;
+
+  const talus::field::SampledSdf floor =
+    boxField(glm::dvec3(75.0, 1.0, 75.0), 0.5);
+  const std::array<uint32_t, 2> counts{1000u, 20000u};
+  std::array<double, 2> treeUs{0.0, 0.0};
+
+  for (uint32_t run = 0u; run != 2u; ++run) {
+    const uint32_t count = counts[run];
+    World world;
+    World scan;
+
+    world.parameters.gravity = glm::dvec3(0.0);
+    scan.parameters.gravity = glm::dvec3(0.0);
+    (void)talus::dynamics::addStatic(
+      world.bodies,
+      floor,
+      0.5,
+      0.0,
+      glm::dvec3(0.0, -1.0, 0.0)
+    );
+    (void)talus::dynamics::addStatic(
+      scan.bodies,
+      floor,
+      0.5,
+      0.0,
+      glm::dvec3(0.0, -1.0, 0.0)
+    );
+
+    std::mt19937 random(1234u);
+    std::uniform_real_distribution<double> jitter(-0.3, 0.3);
+    const uint32_t side = static_cast<uint32_t>(std::ceil(std::sqrt(count)));
+    const double span = static_cast<double>(side);
+
+    std::vector<glm::dvec3> centres;
+
+    for (uint32_t index = 0u; index != count; ++index) {
+      const glm::dvec3 at(
+        static_cast<double>(index % side) - 0.5 * span + jitter(random),
+        0.1,
+        static_cast<double>(index / side) - 0.5 * span + jitter(random)
+      );
+
+      centres.push_back(at);
+
+      (void)addBox(world, glm::dvec3(0.1), at, 0.0);
+      (void)addBox(scan, glm::dvec3(0.1), at, 0.0);
+    }
+
+    (void)talus::dynamics::step(world);
+
+    std::uniform_real_distribution<double> spread(-0.5 * span, 0.5 * span);
+    std::vector<std::array<glm::dvec3, 2>> rays;
+
+    for (uint32_t index = 0u; index != 10000u; ++index) {
+      const glm::dvec3& over = centres[random() % count];
+      const double x = index % 2u == 0u ? spread(random) : over.x + 0.09 * jitter(random) / 0.3;
+      const double z = index % 2u == 0u ? spread(random) : over.z + 0.09 * jitter(random) / 0.3;
+
+      rays.push_back({glm::dvec3(x, 1.0, z), glm::dvec3(x, -0.8, z)});
+    }
+
+    std::vector<std::optional<talus::dynamics::WorldRayHit>> hits;
+
+    hits.reserve(rays.size());
+
+    const Clock::time_point start = Clock::now();
+
+    for (const auto& ray : rays) {
+      hits.push_back(talus::dynamics::castRay(world, ray[0], ray[1]));
+    }
+
+    const double tree =
+      std::chrono::duration<double, std::micro>(Clock::now() - start).count()
+      / static_cast<double>(rays.size());
+    const Clock::time_point scanStart = Clock::now();
+    uint32_t bodyHits = 0u;
+
+    for (uint32_t index = 0u; index != 200u; ++index) {
+      const std::optional<talus::dynamics::WorldRayHit> flat =
+        talus::dynamics::castRay(scan, rays[index][0], rays[index][1]);
+
+      REQUIRE(flat.has_value() == hits[index].has_value());
+
+      if (flat) {
+        CHECK(flat->side == hits[index]->side);
+        CHECK(flat->body == hits[index]->body);
+        CHECK(flat->fraction == hits[index]->fraction);
+        bodyHits += flat->side == Side::Rigid ? 1u : 0u;
+      }
+    }
+
+    const double scanned =
+      std::chrono::duration<double, std::micro>(Clock::now() - scanStart)
+        .count()
+      / 200.0;
+
+    CHECK(bodyHits > 50u);
+    std::printf(
+      "raycost bodies %u tree_us %.3f scan_us %.3f\n",
+      count,
+      tree,
+      scanned
+    );
+    treeUs[run] = tree;
+  }
+
+  const SoftBlock block = softBlock(glm::dvec3(0.2, 0.05, 0.2), 0.05);
+  World world;
+
+  world.parameters.gravity = glm::dvec3(0.0);
+  (void)addSoftBlock(world, block, glm::dvec3(0.0, 0.5, 0.0));
+
+  const Clock::time_point start = Clock::now();
+  uint32_t found = 0u;
+
+  for (uint32_t index = 0u; index != 1000u; ++index) {
+    const double x = 0.001 * static_cast<double>(index % 100u);
+
+    if (talus::dynamics::castRay(
+          world,
+          glm::dvec3(x, 2.0, 0.0),
+          glm::dvec3(x, -1.0, 0.0)
+        )) {
+      found += 1u;
+    }
+  }
+
+  const double lattice =
+    std::chrono::duration<double, std::micro>(Clock::now() - start).count()
+    / 1000.0;
+
+  CHECK(found == 1000u);
+  std::printf(
+    "raycost lattice cells %zu us %.3f\n",
+    block.mesh->hexes.size(),
+    lattice
+  );
+  CHECK(treeUs[1] < 5.0 * treeUs[0]);
 }
