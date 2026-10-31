@@ -323,6 +323,40 @@ bool setPlanarVelocity(
   return true;
 }
 
+bool setPogo(
+  World& world,
+  uint32_t joint,
+  const JointFrame& frameA,
+  const JointFrame& frameB,
+  const PogoSettings& pogo
+) {
+  Joint* found = JointRecords::find(world.joints, joint);
+
+  if (found == nullptr || found->def.kind != JointKind::Pogo
+      || !validFrame(frameA) || !validFrame(frameB) || !validPogo(pogo)) {
+    return false;
+  }
+
+  JointDef edited = found->def;
+  edited.frameA = normalised(frameA);
+  edited.frameB = normalised(frameB);
+  edited.pogo = pogo;
+  edited.pogo.normal = glm::normalize(pogo.normal);
+
+  if (!standsOn(world, edited)) {
+    return false;
+  }
+
+  found->def = edited;
+  found->impulses.pogo = pogo.force;
+  found->impulses.pogoSpeed = pogo.speed;
+  found->report.pogoForce = pogo.force;
+  found->report.pogoSpeed = pogo.speed;
+  wakeJointBodies(world, found->def);
+
+  return true;
+}
+
 void wakeJointPartners(World& world, uint32_t id) {
   for (const Joint& joint : world.joints.all()) {
     if (joint.def.bodyA == id || joint.def.bodyB == id) {

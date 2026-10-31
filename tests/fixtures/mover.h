@@ -26,7 +26,7 @@ inline constexpr double pogoDamping = 0.8;
 inline constexpr double capScale = 100.0;
 inline constexpr uint32_t capSubsteps = 4u;
 
-enum class PogoUpdate : uint8_t { Recreate };
+enum class PogoUpdate : uint8_t { Recreate, InPlace };
 
 struct MoverStep {
   glm::dvec3 velocity{0.0};

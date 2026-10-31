@@ -202,6 +202,13 @@ std::optional<WorldRayHit> moveCharacter(
 
   const std::optional<WorldRayHit> hit =
     castRay(world, from, from - glm::dvec3(0.0, reach, 0.0), skips);
+  const uint32_t previousGround = character.ground;
+  const bool onGround =
+    hit && glm::dot(glm::normalize(hit->normal), axis) >= pogoSteepestCosine;
+  const uint32_t ground =
+    onGround && hit->side == Side::Rigid ? hit->body : noBody;
+  const bool keep = step.update == PogoUpdate::InPlace && character.pogo != 0u
+                    && onGround && ground == previousGround;
   double force = 0.0;
   double speed = 0.0;
 
@@ -210,30 +217,42 @@ std::optional<WorldRayHit> moveCharacter(
 
     force = report.pogoForce;
     speed = report.pogoSpeed;
-    REQUIRE(removeJoint(world, character.pogo));
-    character.pogo = 0u;
   }
 
-  character.onGround =
-    hit && glm::dot(glm::normalize(hit->normal), axis) >= pogoSteepestCosine;
-  character.ground = noBody;
+  character.onGround = onGround;
+  character.ground = ground;
 
-  if (character.onGround) {
-    character.ground = hit->side == Side::Rigid ? hit->body : noBody;
+  if (keep) {
+    JointFrame frameA;
+    JointFrame frameB;
+    PogoSettings pogo = pogoFor(world, hit->normal);
 
-    JointDef def;
-    def.kind = JointKind::Pogo;
-    def.bodyA = character.ground;
-    def.bodyB = character.body;
-    def.frameA.position = groundPoint(world, character.ground, hit->point);
-    def.frameB.position = footAnchor;
-    def.collideConnected = true;
-    def.pogo = pogoFor(world, hit->normal);
-    def.pogo.force = force;
-    def.pogo.speed = speed;
+    frameA.position = groundPoint(world, ground, hit->point);
+    frameB.position = footAnchor;
+    pogo.force = force;
+    pogo.speed = speed;
+    REQUIRE(setPogo(world, character.pogo, frameA, frameB, pogo));
+  } else {
+    if (character.pogo != 0u) {
+      REQUIRE(removeJoint(world, character.pogo));
+      character.pogo = 0u;
+    }
 
-    character.pogo = addJoint(world, def);
-    REQUIRE(character.pogo != 0u);
+    if (onGround) {
+      JointDef def;
+      def.kind = JointKind::Pogo;
+      def.bodyA = ground;
+      def.bodyB = character.body;
+      def.frameA.position = groundPoint(world, ground, hit->point);
+      def.frameB.position = footAnchor;
+      def.collideConnected = true;
+      def.pogo = pogoFor(world, hit->normal);
+      def.pogo.force = force;
+      def.pogo.speed = speed;
+
+      character.pogo = addJoint(world, def);
+      REQUIRE(character.pogo != 0u);
+    }
   }
 
   REQUIRE(setPlanarVelocity(

@@ -1674,3 +1674,242 @@ TEST_CASE(
     CHECK(report.pogoForce == 0.0);
   }
 }
+
+TEST_CASE(
+  "editing a pogo in place moves exactly like re-creating it",
+  "[dynamics][joints][mover]"
+) {
+  const auto build = [](World& world) {
+    addGround(world);
+
+    fixture::Character character = fixture::addCharacter(
+      world,
+      glm::dvec3(0.0, centreAbove(0.0, 0.0), 0.0)
+    );
+
+    (void)fixture::addUprightSpring(world, character.body);
+
+    return character;
+  };
+  World remade;
+  World edited;
+  fixture::Character remadeCharacter = build(remade);
+  fixture::Character editedCharacter = build(edited);
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    INFO("frame " << frame);
+
+    fixture::MoverStep move;
+
+    move.velocity = glm::dvec3(1.0, 0.0, 0.0);
+
+    const auto remadeHit =
+      fixture::moveCharacter(remade, remadeCharacter, move);
+
+    move.update = fixture::PogoUpdate::InPlace;
+
+    const auto editedHit =
+      fixture::moveCharacter(edited, editedCharacter, move);
+
+    REQUIRE(remadeHit.has_value() == editedHit.has_value());
+    REQUIRE(remadeCharacter.onGround == editedCharacter.onGround);
+    REQUIRE(remade.joints.all().size() == edited.joints.all().size());
+    REQUIRE_FALSE(talus::dynamics::step(remade).nonFinite);
+    REQUIRE_FALSE(talus::dynamics::step(edited).nonFinite);
+
+    const RigidBody& a = rigidOf(remade, remadeCharacter.body);
+    const RigidBody& b = rigidOf(edited, editedCharacter.body);
+
+    REQUIRE(b.position == a.position);
+    REQUIRE(b.velocity == a.velocity);
+    REQUIRE(b.rotation == a.rotation);
+    REQUIRE(b.angularVelocity == a.angularVelocity);
+  }
+
+  CHECK(rigidOf(edited, editedCharacter.body).position.x > 1.5);
+  CHECK(editedCharacter.pogo != 0u);
+}
+
+TEST_CASE(
+  "a pogo edited in place on a crate never splits the character's island",
+  "[dynamics][joints][mover]"
+) {
+  World world;
+  const glm::dvec3 crateHalf(0.3, 0.1, 0.3);
+  const talus::field::SampledSdf crateField = boxField(crateHalf, 0.05);
+
+  addGround(world);
+
+  const uint32_t crate = addBox(
+    world,
+    crateField,
+    crateHalf,
+    20.0,
+    glm::dvec3(0.0, crateHalf.y, 0.0)
+  );
+  fixture::Character character = fixture::addCharacter(
+    world,
+    glm::dvec3(0.0, centreAbove(2.0 * crateHalf.y, 0.0), 0.0)
+  );
+  uint32_t splits = 0u;
+  uint32_t onCrate = 0u;
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    INFO("frame " << frame);
+
+    fixture::MoverStep move;
+
+    move.update = fixture::PogoUpdate::InPlace;
+
+    (void)fixture::moveCharacter(world, character, move);
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+    if (character.ground == crate) {
+      ++onCrate;
+    }
+
+    if (frame == 2u) {
+      splits = world.islandStore.splits();
+    }
+
+    if (frame > 2u) {
+      REQUIRE(world.islandStore.splits() == splits);
+    }
+  }
+
+  CHECK(onCrate >= 100u);
+  CHECK(character.ground == crate);
+}
+
+TEST_CASE(
+  "setPogo rejects unknown joints, other kinds and invalid values, and wakes both bodies",
+  "[dynamics][joints][mover]"
+) {
+  World world;
+  const glm::dvec3 crateHalf(0.3, 0.1, 0.3);
+  const talus::field::SampledSdf crateField = boxField(crateHalf, 0.05);
+
+  addGround(world);
+
+  const uint32_t crate = addBox(
+    world,
+    crateField,
+    crateHalf,
+    20.0,
+    glm::dvec3(0.0, crateHalf.y, 0.0)
+  );
+  fixture::Character character = fixture::addCharacter(
+    world,
+    glm::dvec3(0.0, centreAbove(2.0 * crateHalf.y, 0.0), 0.0)
+  );
+  const uint32_t pogo = addJoint(
+    world,
+    pogoJoint(
+      crate,
+      character.body,
+      glm::dvec3(0.0, crateHalf.y, 0.0),
+      fixture::pogoFor(world, up)
+    )
+  );
+
+  REQUIRE(pogo != 0u);
+
+  for (uint32_t frame = 0u;
+       frame != 600u && !bothAsleep(world, {crate, character.body});
+       ++frame) {
+    REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+  }
+
+  REQUIRE(bothAsleep(world, {crate, character.body}));
+
+  const JointDef before = *jointDef(world, pogo);
+  const JointDef planarBefore = *jointDef(world, character.planar);
+  const PogoSettings good = fixture::pogoFor(world, up);
+  const auto unchanged = [&](uint32_t joint, const JointDef& expected) {
+    const JointDef now = *jointDef(world, joint);
+
+    return now.frameA.position == expected.frameA.position
+           && now.frameB.position == expected.frameB.position
+           && now.frameB.rotation == expected.frameB.rotation
+           && now.pogo.normal == expected.pogo.normal
+           && now.pogo.restLength == expected.pogo.restLength
+           && now.pogo.force == expected.pogo.force
+           && now.pogo.speed == expected.pogo.speed;
+  };
+
+  SECTION("unknown joint") {
+    CHECK_FALSE(setPogo(world, 9999u, before.frameA, before.frameB, good));
+  }
+
+  SECTION("a planar velocity joint") {
+    CHECK_FALSE(setPogo(world, character.planar, before.frameA, before.frameB, good));
+    CHECK(unchanged(character.planar, planarBefore));
+  }
+
+  SECTION("a zero-length frame quaternion") {
+    JointFrame frame = before.frameB;
+
+    frame.rotation = glm::dquat(0.0, 0.0, 0.0, 0.0);
+
+    CHECK_FALSE(setPogo(world, pogo, before.frameA, frame, good));
+    CHECK_FALSE(setPogo(world, pogo, frame, before.frameB, good));
+    CHECK(unchanged(pogo, before));
+  }
+
+  SECTION("a zero normal") {
+    PogoSettings bad = good;
+
+    bad.normal = glm::dvec3(0.0);
+
+    CHECK_FALSE(setPogo(world, pogo, before.frameA, before.frameB, bad));
+    CHECK(unchanged(pogo, before));
+  }
+
+  SECTION("a negative rest length") {
+    PogoSettings bad = good;
+
+    bad.restLength = -1.0;
+
+    CHECK_FALSE(setPogo(world, pogo, before.frameA, before.frameB, bad));
+    CHECK(unchanged(pogo, before));
+  }
+
+  SECTION("a normal too steep for the foot axis") {
+    PogoSettings bad = good;
+
+    bad.normal = glm::dvec3(1.0, 0.0, 0.0);
+
+    CHECK_FALSE(setPogo(world, pogo, before.frameA, before.frameB, bad));
+    CHECK(unchanged(pogo, before));
+    CHECK(bothAsleep(world, {crate, character.body}));
+  }
+
+  SECTION("a valid edit keeps the id, stores normalised values and wakes both bodies") {
+    PogoSettings edit = good;
+    JointFrame frameA = before.frameA;
+    JointFrame frameB = before.frameB;
+
+    edit.normal = glm::dvec3(0.0, 2.0, 0.0);
+    edit.force = 12.0;
+    edit.speed = -0.5;
+    frameA.position = glm::dvec3(0.1, crateHalf.y, 0.0);
+    frameB.rotation = glm::dquat(2.0, 0.0, 0.0, 0.0);
+
+    REQUIRE(setPogo(world, pogo, frameA, frameB, edit));
+
+    const JointDef after = *jointDef(world, pogo);
+    const JointReport report = *jointReport(world, pogo);
+
+    CHECK(after.bodyA == crate);
+    CHECK(after.bodyB == character.body);
+    CHECK(after.frameA.position == frameA.position);
+    CHECK(after.frameB.rotation == glm::dquat(1.0, 0.0, 0.0, 0.0));
+    CHECK(after.pogo.normal == up);
+    CHECK(after.pogo.force == 12.0);
+    CHECK(after.pogo.speed == -0.5);
+    CHECK(report.pogoForce == 12.0);
+    CHECK(report.pogoSpeed == -0.5);
+    CHECK_FALSE(rigidOf(world, crate).asleep);
+    CHECK_FALSE(rigidOf(world, character.body).asleep);
+  }
+}

@@ -28,6 +28,14 @@ bool setPlanarVelocity(
   const PlanarVelocitySettings& planar
 );
 
+bool setPogo(
+  World& world,
+  uint32_t joint,
+  const JointFrame& frameA,
+  const JointFrame& frameB,
+  const PogoSettings& pogo
+);
+
 [[nodiscard]] std::optional<JointDef> jointDef(
   const World& world,
   uint32_t joint
