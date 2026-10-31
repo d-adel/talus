@@ -832,6 +832,7 @@ TEST_CASE(
 
     def.pogo.force = old.pogoForce;
     def.pogo.speed = old.pogoSpeed;
+    def.pogo.released = old.pogoReleased;
     REQUIRE(removeJoint(remade, remadeCharacter.pogo));
     remadeCharacter.pogo = addJoint(remade, def);
     REQUIRE(remadeCharacter.pogo != 0u);
@@ -909,6 +910,7 @@ TEST_CASE(
 
       pogo.force = report.pogoForce;
       pogo.speed = report.pogoSpeed;
+      pogo.released = report.pogoReleased;
       REQUIRE(removeJoint(world, character.pogo));
     }
 
@@ -1179,6 +1181,10 @@ TEST_CASE(
 
     def = valid;
     def.pogo.speed = bad;
+    rejects(def);
+
+    def = valid;
+    def.pogo.released = bad;
     rejects(def);
   }
 
@@ -1456,6 +1462,7 @@ TEST_CASE(
 
     def.pogo.force = old.pogoForce;
     def.pogo.speed = old.pogoSpeed;
+    def.pogo.released = old.pogoReleased;
     REQUIRE(removeJoint(world, joint));
     joint = addJoint(world, def);
     REQUIRE(joint != 0u);
@@ -1515,6 +1522,7 @@ TEST_CASE(
 
     pogo.force = old.pogoForce;
     pogo.speed = old.pogoSpeed;
+    pogo.released = old.pogoReleased;
     REQUIRE(removeJoint(world, character.pogo));
     character.pogo = addJoint(
       world,
@@ -1584,5 +1592,135 @@ TEST_CASE(
     }
 
     CHECK(std::abs(rise - expected) <= 0.01 * expected);
+  }
+}
+
+TEST_CASE(
+  "a pogo on ground that shakes in impulses neither climbs nor sinks",
+  "[dynamics][joints][mover]"
+) {
+  struct Drive {
+    double amplitude;
+    double compression;
+    double tension;
+  };
+
+  const glm::dvec3 platformHalf(1.0, 0.1, 1.0);
+  const talus::field::SampledSdf platformField = boxField(platformHalf, 0.05);
+  const double omega = 2.0 * std::numbers::pi * 2.0;
+
+  for (const Drive drive : {Drive{0.10, 3.0, 0.0}, Drive{0.05, 1.5, 1.5}}) {
+    INFO(
+      "amplitude " << drive.amplitude << " m, compression " << drive.compression
+                   << " W, tension " << drive.tension << " W"
+    );
+
+    World world;
+    world.parameters.sleep = false;
+
+    const uint32_t platform =
+      addBox(world, platformField, platformHalf, 0.0, glm::dvec3(0.0));
+    const double weight = fixture::weightOf(world);
+    fixture::Character character = fixture::addCharacter(
+      world,
+      glm::dvec3(0.0, centreAbove(platformHalf.y, 0.0), 0.0)
+    );
+    PogoSettings pogo = fixture::pogoFor(world, up);
+
+    (void)fixture::addUprightSpring(world, character.body);
+    pogo.maxCompression = drive.compression * weight;
+    pogo.maxTension = drive.tension * weight;
+    character.pogo = addJoint(
+      world,
+      pogoJoint(platform, character.body, glm::dvec3(0.0, platformHalf.y, 0.0), pogo)
+    );
+    REQUIRE(character.pogo != 0u);
+
+    std::array<double, 8> means{};
+
+    for (uint32_t frame = 1u; frame <= 240u; ++frame) {
+      const double time = static_cast<double>(frame) * world.parameters.dt;
+
+      REQUIRE(setVelocity(
+        world,
+        platform,
+        glm::dvec3(0.0, drive.amplitude * omega * std::sin(omega * time), 0.0)
+      ));
+
+      const JointReport old = *jointReport(world, character.pogo);
+      JointDef def = *jointDef(world, character.pogo);
+
+      def.pogo.force = old.pogoForce;
+      def.pogo.speed = old.pogoSpeed;
+      def.pogo.released = old.pogoReleased;
+      REQUIRE(removeJoint(world, character.pogo));
+      character.pogo = addJoint(world, def);
+      REQUIRE(character.pogo != 0u);
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+
+      const double gap = anchorOf(world, character.body).y
+                         - (rigidOf(world, platform).position.y + platformHalf.y)
+                         - fixture::pogoRest;
+
+      means[(frame - 1u) / 30u] += gap / 30.0;
+    }
+
+    CHECK(std::abs(means[7] - means[3]) < 5.0e-3);
+  }
+}
+
+TEST_CASE(
+  "a pogo with both caps 0 moves nothing in zero gravity",
+  "[dynamics][joints][mover]"
+) {
+  for (const bool remade : {false, true}) {
+    INFO("re-created every frame: " << remade);
+
+    World world;
+    world.parameters.sleep = false;
+    world.parameters.gravity = glm::dvec3(0.0);
+
+    const uint32_t body = addBox(
+      world,
+      fixture::characterField(),
+      fixture::characterHalf,
+      fixture::characterMass,
+      glm::dvec3(0.0, centreAbove(0.0, 0.0), 0.0),
+      glm::dvec3(0.0),
+      0.0
+    );
+    PogoSettings pogo = fixture::pogoFor(world, up);
+
+    pogo.maxTension = 0.0;
+    pogo.maxCompression = 0.0;
+    pogo.speed = 0.5;
+
+    uint32_t joint =
+      addJoint(world, pogoJoint(noBody, body, glm::dvec3(0.0), pogo));
+    const glm::dvec3 start = rigidOf(world, body).position;
+
+    REQUIRE(joint != 0u);
+
+    for (uint32_t frame = 0u; frame != 60u; ++frame) {
+      if (remade) {
+        const JointReport old = *jointReport(world, joint);
+        JointDef def = *jointDef(world, joint);
+
+        def.pogo.force = old.pogoForce;
+        def.pogo.speed = old.pogoSpeed;
+        def.pogo.released = old.pogoReleased;
+        REQUIRE(removeJoint(world, joint));
+        joint = addJoint(world, def);
+        REQUIRE(joint != 0u);
+      }
+
+      REQUIRE_FALSE(talus::dynamics::step(world).nonFinite);
+    }
+
+    const JointReport report = *jointReport(world, joint);
+
+    CHECK(rigidOf(world, body).position == start);
+    CHECK(report.pogoForce == 0.0);
+    CHECK(report.pogoSpeed == 0.0);
   }
 }

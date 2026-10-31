@@ -115,6 +115,7 @@ struct JointPogoRow {
   Real carried = Real(0);
   Real speed = Real(0);
   Real alignment = Real(0);
+  Real hidden = Real(0);
   Real reached = Real(0);
   bool active = false;
   bool bound = false;
@@ -1198,6 +1199,7 @@ void preparePogoRows(const Joint& joint, Real h, JointRow<Real>& row) {
   const Real alignment = glm::dot(normal, axis);
 
   pogo.active = settings.hertz > 0.0
+                && (settings.maxTension > 0.0 || settings.maxCompression > 0.0)
                 && alignment >= static_cast<Real>(pogoSteepestCosine);
 
   if (!pogo.active) {
@@ -1219,7 +1221,9 @@ void preparePogoRows(const Joint& joint, Real h, JointRow<Real>& row) {
   pogo.lower = static_cast<Real>(-step * settings.maxTension);
   pogo.upper = static_cast<Real>(step * settings.maxCompression);
   pogo.impulse = static_cast<Real>(joint.impulses.pogo * step);
-  pogo.carried = static_cast<Real>(joint.impulses.pogoSpeed);
+  pogo.hidden = static_cast<Real>(joint.impulses.pogoSpeed);
+  pogo.carried =
+    pogo.hidden + static_cast<Real>(joint.impulses.pogoReleased);
   pogo.speed = pogo.carried;
 }
 
@@ -1238,73 +1242,105 @@ void jointPogoPush(
 }
 
 template<typename Real>
+Real jointPogoRate(
+  const JointRow<Real>& row,
+  const JointMotion<Real>& a,
+  const JointMotion<Real>& b
+) {
+  const JointVec<Real> rA = a.dq * row.a.anchor;
+
+  return glm::dot(row.pogo.normal, b.v - (a.v + glm::cross(a.w, rA)));
+}
+
+template<typename Real>
+void pushPogoRow(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>& b) {
+  JointPogoRow<Real>& pogo = row.pogo;
+  const JointVec<Real> rA = a.dq * row.a.anchor;
+  const JointVec<Real> rB = b.dq * row.b.anchor;
+  const JointVec<Real> gap = (b.dp - a.dp) + (rB - rA) + row.deltaCenter;
+  const Real stretch = glm::dot(pogo.normal, gap) / pogo.alignment - pogo.rest;
+  const Real omega = Real(2) * std::numbers::pi_v<Real> * pogo.hertz;
+  const Real omegaH = omega * pogo.step;
+
+  pogo.speed = (pogo.carried - omega * omegaH * stretch)
+               / (Real(1) + Real(2) * pogo.dampingRatio * omegaH
+                  + omegaH * omegaH);
+
+  Real rate = jointPogoRate(row, a, b);
+
+  if (!pogo.overloaded) {
+    const Real support = pogo.impulse - pogo.mass * rate;
+
+    if (support < pogo.lower || support > pogo.upper) {
+      pogo.overloaded = true;
+      pogo.saturated = true;
+
+      if (pogo.hidden != Real(0)) {
+        jointPogoPush(row, a, b, pogo.mass * pogo.hidden);
+        pogo.hidden = Real(0);
+        rate = jointPogoRate(row, a, b);
+      }
+    }
+  }
+
+  const Real moving = pogo.overloaded ? Real(0) : pogo.mass * pogo.hidden;
+  const Real unbounded = pogo.impulse - pogo.mass * (rate - pogo.speed);
+  const Real bounded =
+    std::clamp(unbounded, pogo.lower + moving, pogo.upper + moving);
+  const bool clamped = bounded != unbounded;
+
+  pogo.saturated = pogo.saturated || clamped;
+  pogo.bound = pogo.bound || clamped;
+  pogo.reached = clamped && pogo.mass > Real(0)
+                   ? pogo.speed - (unbounded - bounded) / pogo.mass
+                   : pogo.speed;
+  jointPogoPush(row, a, b, bounded - pogo.impulse);
+  pogo.impulse = bounded;
+}
+
+template<typename Real>
+void relaxPogoRow(JointRow<Real>& row, JointMotion<Real>& a, JointMotion<Real>& b) {
+  JointPogoRow<Real>& pogo = row.pogo;
+
+  if (!pogo.overloaded) {
+    const Real unbounded = pogo.impulse - pogo.mass * jointPogoRate(row, a, b);
+    const Real bounded = std::clamp(unbounded, pogo.lower, pogo.upper);
+
+    if (bounded == unbounded) {
+      jointPogoPush(row, a, b, bounded - pogo.impulse);
+      pogo.impulse = bounded;
+      pogo.hidden = pogo.reached;
+      pogo.carried = pogo.reached;
+      pogo.bound = false;
+      return;
+    }
+
+    pogo.saturated = true;
+  }
+
+  pogo.impulse -= pogo.mass * pogo.hidden;
+  pogo.hidden = Real(0);
+  pogo.carried = pogo.reached;
+  pogo.bound = false;
+  pogo.overloaded = false;
+}
+
+template<typename Real>
 void solvePogoRows(
   JointRow<Real>& row,
   JointMotion<Real>& a,
   JointMotion<Real>& b,
   bool useBias
 ) {
-  JointPogoRow<Real>& pogo = row.pogo;
-
-  if (!pogo.active) {
+  if (!row.pogo.active) {
     return;
   }
 
-  const JointVec<Real> rA = a.dq * row.a.anchor;
-  Real bias = Real(0);
-
   if (useBias) {
-    const JointVec<Real> rB = b.dq * row.b.anchor;
-    const JointVec<Real> gap = (b.dp - a.dp) + (rB - rA) + row.deltaCenter;
-    const Real stretch = glm::dot(pogo.normal, gap) / pogo.alignment - pogo.rest;
-    const Real omega = Real(2) * std::numbers::pi_v<Real> * pogo.hertz;
-    const Real omegaH = omega * pogo.step;
-
-    pogo.speed = (pogo.carried - omega * omegaH * stretch)
-                 / (Real(1) + Real(2) * pogo.dampingRatio * omegaH
-                    + omegaH * omegaH);
-    bias = -pogo.speed;
+    pushPogoRow(row, a, b);
+  } else {
+    relaxPogoRow(row, a, b);
   }
-
-  const Real rate = glm::dot(pogo.normal, b.v - (a.v + glm::cross(a.w, rA)));
-  const Real unbounded = pogo.impulse - pogo.mass * (rate + bias);
-
-  if (useBias) {
-    const Real support = pogo.impulse - pogo.mass * rate;
-
-    pogo.overloaded =
-      pogo.overloaded || support < pogo.lower || support > pogo.upper;
-  }
-
-  const Real moving =
-    useBias && !pogo.overloaded ? pogo.mass * pogo.carried : Real(0);
-  const Real bounded =
-    std::clamp(unbounded, pogo.lower + moving, pogo.upper + moving);
-  const Real impulse = bounded - pogo.impulse;
-  const bool clamped = bounded != unbounded;
-
-  pogo.saturated = pogo.saturated || clamped;
-  pogo.impulse = bounded;
-  jointPogoPush(row, a, b, impulse);
-
-  if (useBias) {
-    pogo.bound = pogo.bound || clamped;
-    pogo.reached = clamped && pogo.mass > Real(0)
-                     ? pogo.speed - (unbounded - bounded) / pogo.mass
-                     : pogo.speed;
-    return;
-  }
-
-  if (pogo.overloaded || clamped) {
-    pogo.speed = Real(0);
-    pogo.carried = Real(0);
-  } else if (pogo.bound) {
-    pogo.speed = pogo.reached;
-    pogo.carried = pogo.reached;
-  }
-
-  pogo.bound = false;
-  pogo.overloaded = false;
 }
 
 template<typename Real>
@@ -1312,12 +1348,15 @@ void storePogoRows(Joint& joint, const JointRow<Real>& row, Real invH) {
   const JointPogoRow<Real>& pogo = row.pogo;
   const double force =
     static_cast<double>(pogo.impulse) * static_cast<double>(invH);
-  const double speed = static_cast<double>(pogo.speed);
+  const double speed = static_cast<double>(pogo.hidden);
+  const double released = static_cast<double>(pogo.carried - pogo.hidden);
 
   joint.impulses.pogo = force;
   joint.impulses.pogoSpeed = speed;
+  joint.impulses.pogoReleased = released;
   joint.report.pogoForce = force;
   joint.report.pogoSpeed = speed;
+  joint.report.pogoReleased = released;
   joint.report.force = joint.def.pogo.normal * force;
   joint.report.forceSaturated = pogo.active && pogo.saturated;
 }
@@ -1591,7 +1630,6 @@ void advanceJointRows(std::span<JointRow<Real>> rows, Real h) {
   for (JointRow<Real>& row : rows) {
     advanceJointEnd(row.a, h);
     advanceJointEnd(row.b, h);
-    row.pogo.carried = row.pogo.speed;
   }
 }
 

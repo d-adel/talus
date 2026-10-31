@@ -516,6 +516,7 @@ bool setVelocity(World& world, uint32_t id, const glm::dvec3& velocity) {
 
   wakeBody(world.bodies, *ref);
   wakeJointPartners(world, id);
+  clearPogoMotion(world, id);
 
   if (ref->side == Side::Rigid) {
     if (frozenAt(world.bodies, *ref)) {

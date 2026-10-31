@@ -31,6 +31,8 @@ struct BodyRebase {
 
 void wakeJointPartners(World& world, uint32_t id);
 
+void clearPogoMotion(World& world, uint32_t body);
+
 void rebaseJoints(
   World& world,
   uint32_t oldBody,
