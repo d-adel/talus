@@ -115,9 +115,10 @@ struct JointPogoRow {
   Real carried = Real(0);
   Real speed = Real(0);
   Real alignment = Real(0);
-  Real pushed = Real(0);
+  Real reached = Real(0);
   bool active = false;
   bool bound = false;
+  bool overloaded = false;
   bool saturated = false;
 };
 
@@ -1267,28 +1268,43 @@ void solvePogoRows(
 
   const Real rate = glm::dot(pogo.normal, b.v - (a.v + glm::cross(a.w, rA)));
   const Real unbounded = pogo.impulse - pogo.mass * (rate + bias);
-  const Real moving = useBias ? pogo.mass * pogo.carried : Real(0);
+
+  if (useBias) {
+    const Real support = pogo.impulse - pogo.mass * rate;
+
+    pogo.overloaded =
+      pogo.overloaded || support < pogo.lower || support > pogo.upper;
+  }
+
+  const Real moving =
+    useBias && !pogo.overloaded ? pogo.mass * pogo.carried : Real(0);
   const Real bounded =
     std::clamp(unbounded, pogo.lower + moving, pogo.upper + moving);
   const Real impulse = bounded - pogo.impulse;
   const bool clamped = bounded != unbounded;
 
-  pogo.bound = pogo.bound || clamped;
   pogo.saturated = pogo.saturated || clamped;
   pogo.impulse = bounded;
   jointPogoPush(row, a, b, impulse);
 
   if (useBias) {
-    pogo.pushed = bounded;
+    pogo.bound = pogo.bound || clamped;
+    pogo.reached = clamped && pogo.mass > Real(0)
+                     ? pogo.speed - (unbounded - bounded) / pogo.mass
+                     : pogo.speed;
     return;
   }
 
-  if (pogo.bound && pogo.mass > Real(0)) {
-    pogo.speed = (pogo.pushed - pogo.impulse) / pogo.mass;
-    pogo.carried = pogo.speed;
+  if (pogo.overloaded || clamped) {
+    pogo.speed = Real(0);
+    pogo.carried = Real(0);
+  } else if (pogo.bound) {
+    pogo.speed = pogo.reached;
+    pogo.carried = pogo.reached;
   }
 
   pogo.bound = false;
+  pogo.overloaded = false;
 }
 
 template<typename Real>
