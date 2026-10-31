@@ -6,7 +6,7 @@ FetchContent_MakeAvailable(Catch2)
 
 add_executable(talus_tests
     dynamics_tests.cc dynamics_rows_tests.cc dynamics_softstep_rows_tests.cc
-    dynamics_strainstep_tests.cc dynamics_world_tests.cc dynamics_compound_tests.cc dynamics_joint_tests.cc dynamics_ray_tests.cc dynamics_mover_tests.cc
+    dynamics_strainstep_tests.cc dynamics_world_tests.cc dynamics_compound_tests.cc dynamics_joint_tests.cc dynamics_ray_tests.cc dynamics_mover_tests.cc dynamics_sleepcost_tests.cc
     fieldbody_tests.cc deformedfield_tests.cc destruction_tests.cc
     destruction_factor_tests.cc destructionworld_tests.cc budget_tests.cc
     neohookean_tests.cc destructionfixtures.cc pinning.cc quietfailures.cc
