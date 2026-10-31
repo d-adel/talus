@@ -33,6 +33,8 @@ Three-storey concrete-frame collapse, rendered with the original Talus testbed.
   the joined bodies are.
 - Strength-limited spring joints that slip at their force or torque cap, for
   grips and tethers.
+- A force-limited planar velocity joint and a pogo spring joint, which drive
+  and float a dynamic character body in the style of Box3D's dynamic mover.
 - Joined pairs that do not collide, and per-joint force, torque and saturation
   read-back.
 - Islands that contain a joint, with every body they touch, step with their
@@ -181,8 +183,9 @@ A joint connects two rigid bodies, or a rigid body and the world. Joint types
 are in `<talus/dynamics/joints/joints.h>`. Create and change joints only with
 the functions in `jointedits.h`, passing `world.dynamics`. `world.joints` is
 read-only. Kinds: `Ball`, `Hinge` (limit and one drive axis), `SwingTwist`
-(twist range, elliptical swing cone, three drive axes) and `Spring` (pulls
-frame B to a target pose, with force and torque caps).
+(twist range, elliptical swing cone, three drive axes), `Spring` (pulls
+frame B to a target pose, with force and torque caps), and `PlanarVelocity`
+and `Pogo` for character movers (see [Character movers](#character-movers)).
 
 ```cpp
 using namespace talus::dynamics;
@@ -222,7 +225,8 @@ const uint32_t joint = addJoint(world.dynamics, elbow);
   grip. Its damping acts on the bodies' relative velocity. To carry an object
   smoothly, make body A a mass-0 hand and move it with `setRigidPose` and
   `setVelocity`.
-- Joined bodies do not collide unless `collideConnected` is true.
+- Joined bodies do not collide unless `collideConnected` is true. Planar
+  velocity and pogo joints must set it to true.
 - `jointReport` returns force, torque, drive torque and saturation flags from
   the last step. A joint in a sleeping island keeps its old report.
 - Islands with a joint step `jointSubsteps` times per frame (16 by default).
@@ -233,6 +237,38 @@ const uint32_t joint = addJoint(world.dynamics, elbow);
   ends. A joint end cannot `promote` to a lattice until the joint is removed.
 - When destruction splits a body, each joint end moves to the piece that holds
   its anchor. Joint forces do not load destruction bonds.
+
+### Character movers
+
+`castRay(world.dynamics, from, to, skips)` in `<talus/dynamics/rays/worldray.h>`
+returns the nearest hit's side, body id, child, point, normal and fraction,
+using the broadphase from the last step plus bodies added since. Skip every
+body moved with the character: its own body, kinematic hands and held objects.
+Skips do not apply to statics.
+
+| Kind | Effect | Settings |
+| --- | --- | --- |
+| `PlanarVelocity` | Drives B's velocity relative to A in frame B's xz plane; no torque | `planar.targetVelocity` (world axes), `planar.maxForce` (N; 0 is off) |
+| `Pogo` | Spring along the ground normal from a ground point on A (frame A) to a foot anchor on B (frame B); no torque on B | `pogo.normal`, `restLength`, `hertz`, `dampingRatio`, `maxTension`, `maxCompression`; warm start `force`, `speed` |
+
+- Both kinds need `collideConnected = true`. A pogo refuses ground with
+  dot(normal, frame B's y) < 0.25. Keep the body upright with an angular-only
+  `Spring` to the world.
+- Scale pogo caps with the substeps: 100 × weight × `jointSubsteps` / 4. The
+  caps also limit the spring's speed, so soften it with `hertz`, not a low cap.
+- A contact that holds the body below its rest length (a ceiling, a ledge
+  corner) makes the pogo press at its full cap: shorten the rest length when
+  the head is blocked, use a capsule, add upright control or lower the tension
+  cap.
+
+A host step for each character, before `world.step()`, as in Box3D's sample:
+
+1. Cast down from the foot anchor, reaching `restLength` (twice on the ground).
+2. With no walkable hit, remove the pogo.
+3. On the same ground body, call `setPogo` with the new point and normal, and
+   `jointReport`'s `pogoForce` and `pogoSpeed` as `force` and `speed`.
+4. On a new ground body, remove the pogo and add one (`noBody` for statics).
+5. Call `setPlanarVelocity` with the input velocity and a force cap.
 
 ### Failure handling
 
@@ -249,8 +285,8 @@ const uint32_t joint = addJoint(world.dynamics, elbow);
   in reference checks, and the large district test missed the 4 ms physics
   goal. Rubble can stay awake, and thin-sheet glass does not shatter
   convincingly.
-- One ball/soft-face test and two joint tests are expected failures: 629 cases,
-  3 expected failures, Windows/MSVC Release, at `86edc20`.
+- One ball/soft-face test and two joint tests are expected failures: 680 cases,
+  3 expected failures, Windows/MSVC Release, at `4a5ecf6`.
 - One 20-body humanoid costs 0.225 ms per step (0.148 ms in joints) on a Ryzen 7
   7840HS laptop, MSVC 19.44, `55d5282`. Four cost 0.765 ms.
 - A jointed body touching a lattice steps both at 16 substeps. A five-box hinge
@@ -259,6 +295,19 @@ const uint32_t joint = addJoint(world.dynamics, elbow);
   can push a joint past its limit.
 - Not measured: the cost of compound splits that move joints, and of waking
   every joint on an anchored building when a chunk breaks off.
+- The world ray cast can miss a body for one step after it moved farther than
+  predicted or was teleported.
+- A ray onto a lattice costs about 130 µs.
+- A character on a lattice uses the world as ground and puts no load on it.
+- A character's island, and every pile or lattice it touches, steps at 16
+  substeps. A soft body that a character touches costs about 4 times as much.
+- A character edited every step, and what it stands on, never sleeps.
+- When a hold at the pogo's cap ends abruptly, the body pops up at up to 4 m/s.
+- Stepping 0.4 m up onto 10 kg crates shoves them down with about 5 kN.
+- A character spawned exactly at its rest height misses the ground with its
+  first in-air ray.
+- A sleeping body costs about 0.1 µs per step: about 2 ms of step time among
+  20,000 sleeping bodies on the Ryzen 7 7840HS laptop.
 
 ## Repository layout
 
