@@ -287,13 +287,14 @@ std::optional<WorldRayHit> castRay(
     return fixed ? clip : caster.visitMoving(id);
   });
 
-  const std::vector<RigidBody>& rigids = world.bodies.rigids;
   const uint32_t seen = broadPhase.seenBodies();
 
-  for (size_t index = rigids.size();
-       index != 0u && rigids[index - 1u].id >= seen;
-       --index) {
-    caster.visitNew(rigids[index - 1u]);
+  if (world.bodies.nextId > seen) {
+    for (const RigidBody& body : world.bodies.rigids) {
+      if (body.id >= seen) {
+        caster.visitNew(body);
+      }
+    }
   }
 
   return caster.best();

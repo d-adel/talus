@@ -464,6 +464,36 @@ TEST_CASE(
 }
 
 TEST_CASE(
+  "the world ray cast finds a new body when the body list is not in id order",
+  "[dynamics][rays]"
+) {
+  World world;
+
+  world.parameters.gravity = glm::dvec3(0.0);
+
+  addBox(world, glm::dvec3(0.3), glm::dvec3(5.0, 0.0, 0.0));
+  const uint32_t old = addBox(world, glm::dvec3(0.3), glm::dvec3(8.0, 0.0, 0.0));
+
+  (void)talus::dynamics::step(world);
+
+  const uint32_t added = addBox(world, glm::dvec3(0.3), glm::dvec3(0.0, 0.0, 0.0));
+
+  REQUIRE(added >= world.broadPhase.seenBodies());
+  std::swap(world.bodies.rigids[1], world.bodies.rigids[2]);
+  REQUIRE(world.bodies.rigids.back().id == old);
+
+  const auto hit = talus::dynamics::castRay(world, glm::dvec3(0.0, 3.0, 0.0), glm::dvec3(0.0, -3.0, 0.0));
+
+  REQUIRE(hit.has_value());
+  CHECK(hit->body == added);
+
+  const auto oldHit = talus::dynamics::castRay(world, glm::dvec3(8.0, 3.0, 0.0), glm::dvec3(8.0, -3.0, 0.0));
+
+  REQUIRE(oldHit.has_value());
+  CHECK(oldHit->body == old);
+}
+
+TEST_CASE(
   "the world ray cast agrees with a full scan on random rays",
   "[dynamics][rays]"
 ) {
