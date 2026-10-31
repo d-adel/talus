@@ -292,6 +292,35 @@ void wakeMovedPartners(World& world) {
   }
 }
 
+void wakeTouchedSleepers(World& world, std::span<const uint32_t> movers) {
+  BodySet& bodies = world.bodies;
+  const ManifoldCache& cache = world.manifolds;
+
+  for (const uint32_t id : movers) {
+    const BodyRef ref = world.islandStore.refOf(id);
+
+    if (ref.side != Side::Rigid || ref.index >= bodies.rigids.size()
+        || bodies.rigids[ref.index].id != id || bodies.rigids[ref.index].mass > 0.0) {
+      continue;
+    }
+
+    for (const uint32_t slot : cache.pairsOf(id)) {
+      if (!cache.live(slot) || cache.at(slot).points.empty()) {
+        continue;
+      }
+
+      const CachedBodyPair& pair = cache.at(slot);
+
+      for (const BodyRef& other : {pair.first, pair.second}) {
+        if (other.side == Side::Rigid && bodies.rigids[other.index].id != id
+            && bodies.rigids[other.index].mass > 0.0 && resting(bodies, other)) {
+          wakeBody(bodies, other);
+        }
+      }
+    }
+  }
+}
+
 void addSoftstepWork(StepProfile& total, const StepProfile& part) {
   total.gather += part.gather;
   total.prepare += part.prepare;
@@ -449,6 +478,7 @@ StepReport step(World& world) {
   report.profile.lattice = clock.lap();
 
   world.islandStore.sync(bodies, workers);
+  wakeTouchedSleepers(world, world.movers);
 
   for (const uint32_t id : events.lost) {
     world.islandStore.markRemoved(id);
