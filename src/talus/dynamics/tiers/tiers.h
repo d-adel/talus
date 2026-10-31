@@ -37,6 +37,11 @@ namespace talus::dynamics {
 
 [[nodiscard]] std::optional<BodyRef> findBody(const BodySet& bodies, uint32_t id);
 
+[[nodiscard]] std::optional<BodyRef> locateBody(
+  const World& world,
+  uint32_t id
+);
+
 void switchTiers(World& world, StepReport& report);
 
 bool promote(World& world, uint32_t id);

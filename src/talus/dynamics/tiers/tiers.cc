@@ -968,6 +968,30 @@ std::optional<BodyRef> findBody(const BodySet& bodies, uint32_t id) {
   return std::nullopt;
 }
 
+std::optional<BodyRef> locateBody(const World& world, uint32_t id) {
+  const BodySet& bodies = world.bodies;
+
+  if (world.islandStore.islandOf(id) != noIsland) {
+    const BodyRef ref = world.islandStore.refOf(id);
+
+    if (
+      ref.side == Side::Rigid && ref.index < bodies.rigids.size()
+      && bodies.rigids[ref.index].id == id
+    ) {
+      return ref;
+    }
+
+    if (
+      ref.side == Side::Lattice && ref.index < bodies.lattices.size()
+      && bodies.lattices[ref.index].id == id
+    ) {
+      return ref;
+    }
+  }
+
+  return findBody(bodies, id);
+}
+
 void switchTiers(World& world, StepReport& report) {
   std::vector<uint32_t> promoting;
   std::vector<uint32_t> demoting;

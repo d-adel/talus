@@ -2,6 +2,8 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
+
 namespace talus::dynamics {
 
 struct Bounds {
@@ -34,4 +36,31 @@ struct Bounds {
   return 2.0 * (size.x * size.y + size.y * size.z + size.z * size.x);
 }
 
+[[nodiscard]] inline bool segmentMeets(
+  const Bounds& box,
+  const glm::dvec3& from,
+  const glm::dvec3& span,
+  double clip
+) {
+  double enter = 0.0;
+  double leave = clip;
+
+  for (int axis = 0; axis != 3; ++axis) {
+    if (span[axis] == 0.0) {
+      if (from[axis] < box.low[axis] || from[axis] > box.high[axis]) {
+        return false;
+      }
+
+      continue;
+    }
+
+    const double first = (box.low[axis] - from[axis]) / span[axis];
+    const double second = (box.high[axis] - from[axis]) / span[axis];
+
+    enter = std::max(enter, std::min(first, second));
+    leave = std::min(leave, std::max(first, second));
+  }
+
+  return enter <= leave;
+}
 }

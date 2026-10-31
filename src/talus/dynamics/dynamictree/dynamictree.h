@@ -2,6 +2,8 @@
 
 #include <talus/dynamics/bounds/bounds.h>
 
+#include <glm/glm.hpp>
+
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -50,6 +52,41 @@ public:
         stack[top++] = node.child2;
       }
     }
+  }
+
+  template<typename Visit>
+  double rayQuery(
+    const glm::dvec3& from,
+    const glm::dvec3& to,
+    double clip,
+    Visit&& visit
+  ) const {
+    if (m_root == noNode) {
+      return clip;
+    }
+
+    const glm::dvec3 span = to - from;
+    std::array<uint32_t, 1024> stack;
+    uint32_t top = 0u;
+
+    stack[top++] = m_root;
+
+    while (top != 0u) {
+      const Node& node = m_nodes[stack[--top]];
+
+      if (!segmentMeets(node.box, from, span, clip)) {
+        continue;
+      }
+
+      if (node.child1 == noNode) {
+        clip = visit(node.user, clip);
+      } else {
+        stack[top++] = node.child1;
+        stack[top++] = node.child2;
+      }
+    }
+
+    return clip;
   }
 
 private:
