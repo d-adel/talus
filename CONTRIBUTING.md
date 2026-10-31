@@ -15,6 +15,6 @@ interactions, not just agreement between two implementations.
 Run the physics suite, the headless example and a separate consumer build for
 integration or packaging changes. Report existing failures honestly. Do not fit
 tolerances merely to obtain a pass. Record platform, compiler and workload when
-making performance claims. See [physics status](docs/physics-status.md).
+making performance claims. See the Known limits section of the [README](README.md#known-limits).
 
 Contributions are accepted under the MIT license.
