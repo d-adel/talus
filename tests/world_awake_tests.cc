@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -48,7 +49,8 @@ constexpr double crateHalf = 0.1;
 constexpr double crateDensity = 1250.0;
 constexpr double blockDensity = 125000.0;
 constexpr uint32_t crateKey = 1000000u;
-constexpr uint32_t crateRows = 10u;
+constexpr uint32_t crateRows = 25u;
+constexpr size_t serialLimit = 512u;
 constexpr uint64_t twinSteps = 450u;
 const glm::dquat level(1.0, 0.0, 0.0, 0.0);
 
@@ -157,6 +159,21 @@ Building portal() {
   return building;
 }
 
+Building plinth() {
+  Building building;
+
+  building.members.push_back(
+    Member{
+      glm::dvec3(-4.0, 0.25, 3.0),
+      glm::dvec3(1.0, 0.25, 0.25),
+      0u,
+      Role::Foundation
+    }
+  );
+
+  return building;
+}
+
 Building looseBar() {
   Building building;
 
@@ -211,13 +228,21 @@ const RigidBody* rigidOf(const talus::dynamics::World& world, uint32_t id) {
   return &world.bodies.rigids[ref->index];
 }
 
+struct Perch {
+  uint32_t crate = 0u;
+  uint32_t chunk = 0u;
+};
+
 struct Yard {
   talus::World world;
   std::vector<uint32_t> buildings;
   std::vector<uint32_t> crates;
+  uint32_t plinth = 0u;
+  std::vector<Perch> perches;
   uint32_t block = 0u;
   uint32_t joint = 0u;
   uint32_t sleepingCuts = 0u;
+  uint32_t poseWakes = 0u;
 };
 
 std::unique_ptr<Yard> makeYard(uint32_t workers, uint32_t width) {
@@ -245,6 +270,34 @@ std::unique_ptr<Yard> makeYard(uint32_t workers, uint32_t width) {
     yard->buildings.push_back(
       world.destruction.addBuilding(world.dynamics, building, concrete, exact)
         .building
+    );
+  }
+
+  yard->plinth =
+    world.destruction.addBuilding(world.dynamics, plinth(), concrete, exact)
+      .building;
+
+  const talus::destruction::ChunkedBuilding& stones =
+    world.destruction.chunked(yard->plinth);
+
+  for (const double x : {-4.75, -3.25}) {
+    const auto chunk = static_cast<uint32_t>(
+      std::find_if(
+        stones.chunks.begin(),
+        stones.chunks.end(),
+        [x](const talus::destruction::Chunk& stone) {
+          return std::abs(stone.centre.x - x) < 0.01;
+        }
+      )
+      - stones.chunks.begin()
+    );
+
+    REQUIRE(chunk != stones.chunks.size());
+    yard->perches.push_back(
+      Perch{
+        addCrate(world.dynamics, glm::dvec3(x, 0.5 + crateHalf + 0.001, 3.0)),
+        chunk
+      }
     );
   }
 
@@ -340,6 +393,10 @@ std::optional<ChunkAt> frozenChunk(const Yard& yard) {
   });
 }
 
+uint64_t perchStep(size_t perch) {
+  return 280u + 50u * perch;
+}
+
 void edit(Yard& yard, uint64_t step) {
   talus::World& world = yard.world;
   talus::dynamics::World& dynamics = world.dynamics;
@@ -371,6 +428,10 @@ void edit(Yard& yard, uint64_t step) {
 
   if (step == 170u) {
     REQUIRE(talus::dynamics::promote(dynamics, yard.block));
+    REQUIRE(
+      talus::dynamics::findBody(dynamics.bodies, yard.block)->side
+      == talus::dynamics::Side::Lattice
+    );
   }
 
   if (step == 200u) {
@@ -385,6 +446,37 @@ void edit(Yard& yard, uint64_t step) {
 
   if (step == 230u) {
     talus::dynamics::demote(dynamics, yard.block);
+    REQUIRE(
+      talus::dynamics::findBody(dynamics.bodies, yard.block)->side
+      == talus::dynamics::Side::Rigid
+    );
+  }
+
+  if (step == 240u) {
+    for (const uint32_t id : yard.crates) {
+      const RigidBody* crate = rigidOf(dynamics, id);
+
+      if (crate != nullptr) {
+        REQUIRE(
+          talus::dynamics::applyImpulse(
+            dynamics,
+            id,
+            glm::dvec3(0.0, 2.0, 0.0),
+            crate->position
+          )
+        );
+      }
+    }
+  }
+
+  for (size_t perch = 0u; perch != yard.perches.size(); ++perch) {
+    if (step == perchStep(perch)) {
+      world.destruction.removeAt(
+        world.destruction.steps() + 1u,
+        yard.plinth,
+        std::vector<uint32_t>{yard.perches[perch].chunk}
+      );
+    }
   }
 
   if (step == 260u || step == 300u || step == 340u || step == 380u) {
@@ -425,6 +517,8 @@ void edit(Yard& yard, uint64_t step) {
 
     if (sleeping) {
       const RigidBody& body = *pieceOf(yard, *sleeping);
+
+      ++yard.poseWakes;
 
       REQUIRE(
         talus::dynamics::setRigidPose(
@@ -480,6 +574,11 @@ bool sameRest(const talus::World& a, const talus::World& b) {
 struct TwinRun {
   uint64_t digest = 0u;
   uint32_t sparseReady = 0u;
+  uint32_t wideAwake = 0u;
+  uint32_t jointWakes = 0u;
+  uint32_t contactWakes = 0u;
+  uint32_t updateWakes = 0u;
+  uint32_t poseWakes = 0u;
   uint32_t frozen = 0u;
   uint32_t thawed = 0u;
   uint32_t removedFrozen = 0u;
@@ -491,8 +590,28 @@ TwinRun runTwins(uint32_t workers, uint32_t width) {
   const std::unique_ptr<Yard> full = makeYard(workers, width);
   const std::unique_ptr<Yard> stepped = makeYard(workers, width);
   TwinRun run;
+  const auto asleep = [&stepped](uint32_t id) {
+    const RigidBody* body = rigidOf(stepped->world.dynamics, id);
+
+    return body != nullptr && body->asleep;
+  };
+  const uint32_t jointed = stepped->crates[2];
+  const uint32_t struck = stepped->crates[44];
+  bool waitingForContact = false;
+
+  REQUIRE(stepped->world.dynamics.bodies.rigids.size() > serialLimit);
 
   for (uint64_t step = 1u; step <= twinSteps; ++step) {
+    const bool jointedAsleep = step == 120u && asleep(jointed);
+    std::vector<uint32_t> perchedAsleep;
+
+    for (size_t perch = 0u; perch != stepped->perches.size(); ++perch) {
+      if (step == perchStep(perch) && asleep(stepped->perches[perch].crate)) {
+        perchedAsleep.push_back(stepped->perches[perch].crate);
+      }
+    }
+
+    waitingForContact = waitingForContact || (step == 150u && asleep(struck));
     edit(*full, step);
     edit(*stepped, step);
 
@@ -521,6 +640,18 @@ TwinRun runTwins(uint32_t workers, uint32_t width) {
     run.digest =
       (run.digest * 1099511628211ull)
       ^ destructionfixture::stateHash(stepped->world.destruction, dynamics);
+    run.jointWakes += jointedAsleep && !asleep(jointed) ? 1u : 0u;
+
+    if (waitingForContact && step < 230u && !asleep(struck)) {
+      ++run.contactWakes;
+      waitingForContact = false;
+    }
+
+    for (const uint32_t crate : perchedAsleep) {
+      run.updateWakes += asleep(crate) ? 0u : 1u;
+    }
+
+    run.wideAwake += dynamics.awake.indices.size() > serialLimit ? 1u : 0u;
     run.sparseReady +=
       dynamics.awake.layout == dynamics.bodies.layout
           && 2u * dynamics.awake.indices.size() < dynamics.bodies.rigids.size()
@@ -533,6 +664,8 @@ TwinRun runTwins(uint32_t workers, uint32_t width) {
   }
 
   run.sleepingCuts = stepped->sleepingCuts;
+  run.poseWakes = stepped->poseWakes;
+  REQUIRE(stepped->world.dynamics.manifolds.size() > serialLimit);
 
   return run;
 }
@@ -560,6 +693,11 @@ TEST_CASE(
     CHECK(run.removedFrozen > 0u);
     CHECK(run.created > 0u);
     CHECK(run.sleepingCuts > 0u);
+    CHECK(run.wideAwake > 10u);
+    CHECK(run.jointWakes == 1u);
+    CHECK(run.contactWakes == 1u);
+    CHECK(run.updateWakes == 2u);
+    CHECK(run.poseWakes == 1u);
 
     if (digest) {
       CHECK(run.digest == *digest);
