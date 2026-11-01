@@ -123,6 +123,21 @@ void requireClosed(std::span<const uint32_t> indices) {
   }
 }
 
+void requireArea(
+  std::span<const glm::vec3> vertices,
+  std::span<const uint32_t> indices
+) {
+  for (size_t face = 0u; face < indices.size(); face += 3u) {
+    const glm::dvec3 a(vertices[indices[face]]);
+    const glm::dvec3 b(vertices[indices[face + 1u]]);
+    const glm::dvec3 c(vertices[indices[face + 2u]]);
+
+    if (glm::all(glm::equal(glm::cross(b - a, c - a), glm::dvec3(0.0)))) {
+      throw std::invalid_argument("A mesh triangle must have a nonzero area");
+    }
+  }
+}
+
 void validate(
   std::span<const glm::vec3> vertices,
   std::span<const uint32_t> indices,
@@ -156,6 +171,7 @@ void validate(
   }
 
   requireClosed(indices);
+  requireArea(vertices, indices);
 }
 
 uint32_t buildNode(TreeBuild& build, uint32_t begin, uint32_t end) {

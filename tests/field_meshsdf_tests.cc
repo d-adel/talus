@@ -658,6 +658,37 @@ TEST_CASE("bakeMesh refuses meshes that are not closed", "[field][meshsdf]") {
   }
 }
 
+TEST_CASE("bakeMesh refuses faces with zero area", "[field][meshsdf]") {
+  const glm::vec3 low(-0.2f);
+  const glm::vec3 high(0.2f);
+  const glm::uvec3 resolution(8u);
+
+  const Mesh tetrahedron{
+    {glm::vec3(0.0f),
+     glm::vec3(0.1f, 0.0f, 0.0f),
+     glm::vec3(0.0f, 0.1f, 0.0f),
+     glm::vec3(0.0f, 0.0f, 0.1f)},
+    {0u, 2u, 1u, 0u, 1u, 3u, 0u, 3u, 2u, 1u, 2u, 3u}
+  };
+
+  CHECK_NOTHROW(baked(tetrahedron, low, high, resolution));
+
+  Mesh collapsed = tetrahedron;
+  collapsed.vertices[3] = collapsed.vertices[0];
+  CHECK_THROWS_AS(
+    baked(collapsed, low, high, resolution),
+    std::invalid_argument
+  );
+
+  const glm::vec3 start(-0.05f, 0.01f, 0.02f);
+  const glm::vec3 finish(0.05f, 0.01f, 0.02f);
+  const Mesh sliver{
+    {start, start, finish, finish},
+    {0u, 1u, 2u, 2u, 3u, 0u, 1u, 0u, 3u, 3u, 2u, 1u}
+  };
+  CHECK_THROWS_AS(baked(sliver, low, high, resolution), std::invalid_argument);
+}
+
 TEST_CASE("mesh bake cost", "[.][meshsdfcost]") {
   const Mesh& mesh = sphereMesh();
   std::shared_ptr<talus::dynamics::Scheduler> scheduler;
