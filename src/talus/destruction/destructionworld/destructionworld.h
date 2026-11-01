@@ -326,9 +326,7 @@ private:
     std::span<const PieceContribution> blasting
   );
   [[nodiscard]] uint32_t pieceOf(uint32_t body) const;
-  [[nodiscard]] const std::vector<uint32_t>& refreshIndex(
-    const dynamics::World& world
-  );
+  void refreshIndex(const dynamics::World& world);
   [[nodiscard]] bool listAwake(const dynamics::World& world);
   void countBodies(const dynamics::World& world, const dynamics::Workers& workers, DestructionReport& report, bool updateRest = true);
   [[nodiscard]] bool collapseActive(const dynamics::World& world, const std::vector<uint32_t>& index);

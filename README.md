@@ -160,6 +160,8 @@ the consuming engine.
 - Change bodies only through `<talus/dynamics/edits/edits.h>` (teleports,
   impulses, shape changes, removals). Writing fields such as
   `RigidBody::velocity` directly skips cache updates, waking and joint rules.
+  A direct write to `RigidBody::asleep` is invisible to `world.step()`: wake
+  bodies with `dynamics::wakeBody` or an edit.
 - The world owns its containers. Sampled-field pointers are borrowed: keep
   their storage alive while any body uses them.
 
@@ -327,11 +329,16 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
   there. In `talus::dynamics::step`, a sleeping rigid body costs almost nothing
   in all other worlds.
 - In `talus::World::step`, the destruction update also visits only awake
-  bodies: 1 to 2 µs per step among 20,000 sleeping bodies on the Ryzen 7 7840HS
-  laptop, against 0.67 ms when it visited every body. It still visits every
-  rigid body in the update after an update that threw, in an update whose
-  scheduled removal takes away a whole piece, and in every update while
-  `discardBelow` is finite.
+  bodies. Among 20,000 sleeping bodies it costs below 1 µs per step on one
+  worker of the Ryzen 7 7840HS laptop and 1 to 2 µs on eight, against 0.67 ms
+  and 0.26 ms when it visited every body. It still visits every rigid body:
+  - in the update after an update that threw;
+  - from the point where an update removes a body itself: a scheduled removal
+    of a whole piece, a split that empties an anchored piece, or the removal of
+    frozen debris or of bodies below `discardBelow`;
+  - in its rest tracker and body-id map, in the first update after a body
+    removal, a tier switch, a removed lattice or a moved or removed static body;
+  - in every update while `discardBelow` is finite.
 
 ## Repository layout
 
