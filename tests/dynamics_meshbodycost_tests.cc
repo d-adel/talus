@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "bowlfixture.h"
 #include "meshfixtures.h"
 
 #include <talus/dynamics/bodyset/bodyset.h>
@@ -9,6 +10,7 @@
 #include <talus/dynamics/pipeline/pipeline.h>
 #include <talus/dynamics/scheduler/scheduler.h>
 #include <talus/dynamics/tiers/tiers.h>
+#include <talus/field/sampledsdf/sampledsdf.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -453,6 +455,74 @@ TEST_CASE("fill cost of a mesh slab sliding on a box", "[.][fillcost]") {
       "fillcost side %.2f m contacts %.0f step_ms %.3f fill_ms %.4f "
       "worst_fill_ms %.4f narrowphase_ms %.4f state %016llx\n",
       side,
+      result.contacts,
+      result.step,
+      result.fill,
+      result.worstFill,
+      result.narrowphase,
+      static_cast<unsigned long long>(stateHash(world))
+    );
+  }
+}
+
+TEST_CASE(
+  "fill cost of a mesh ball spinning in a field bowl",
+  "[.][fillcost]"
+) {
+  const Threads threads;
+  const Mesh sphere = meshfixture::icosphere(0.25f, 4u);
+  MeshShapeSettings settings;
+
+  settings.mass = 50.0;
+  settings.friction = 0.0;
+
+  const MeshShape ball =
+    meshShape(sphere.vertices, sphere.indices, settings, threads.workers);
+
+  for (const float radius : {0.30f, 0.26f}) {
+    const talus::field::SampledSdf bowl = bowlfixture::field(radius);
+    World world;
+
+    world.parameters.timePairs = true;
+    (void)addBoxFloor(world, glm::dvec3(4.0, 0.5, 4.0));
+
+    const glm::dvec3 bowlAt(0.0, static_cast<double>(bowlfixture::half.y), 0.0);
+
+    (void)bowlfixture::addBowl(world.bodies, bowl, bowlAt, 500.0, 0.0);
+
+    const double drop = static_cast<double>(radius) - 0.25 + 0.0005;
+    const uint32_t ballId = addMeshBody(
+      world.bodies,
+      ball,
+      bowlAt + glm::dvec3(bowlfixture::cavity(radius))
+        - glm::dvec3(0.0, drop, 0.0),
+      noTurn,
+      glm::dvec3(0.0)
+    );
+    const std::optional<BodyRef> spun = findBody(world.bodies, ballId);
+
+    REQUIRE(spun.has_value());
+    world.bodies.rigids[spun->index].angularVelocity =
+      glm::dvec3(0.0, 1.0, 3.0);
+
+    Timings timings;
+
+    for (uint32_t frame = 0u; frame != 90u; ++frame) {
+      const StepReport report = step(world);
+
+      REQUIRE_FALSE(report.nonFinite);
+
+      if (frame >= 10u) {
+        timings.add(report);
+      }
+    }
+
+    const Costs result = timings.mean();
+
+    std::printf(
+      "fillcost ball in bowl %.2f m contacts %.0f step_ms %.3f fill_ms %.4f "
+      "worst_fill_ms %.4f narrowphase_ms %.4f state %016llx\n",
+      static_cast<double>(radius),
       result.contacts,
       result.step,
       result.fill,

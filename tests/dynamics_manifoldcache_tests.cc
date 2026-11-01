@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "bowlfixture.h"
 #include "meshfixtures.h"
 
 #include <talus/dynamics/bodyset/bodyset.h>
@@ -10,6 +11,7 @@
 #include <talus/dynamics/pipeline/pipeline.h>
 #include <talus/dynamics/scheduler/scheduler.h>
 #include <talus/dynamics/softstep/simdwidth.h>
+#include <talus/dynamics/tiers/tiers.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -19,6 +21,7 @@
 #include <bit>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <random>
 #include <span>
 #include <utility>
@@ -260,6 +263,28 @@ std::vector<glm::dvec3> normalPool(std::mt19937_64& random) {
   return pool;
 }
 
+std::vector<glm::dvec3> curvedPool(std::mt19937_64& random) {
+  const glm::dvec3 axis = direction(random);
+  std::vector<glm::dvec3> pool;
+
+  for (uint32_t base = 0u; base != 1500u; ++base) {
+    const glm::dvec3 across =
+      glm::normalize(glm::cross(axis, direction(random)));
+    const glm::dvec3 normal =
+      glm::angleAxis(0.45 * unit(random), across) * axis;
+    const glm::dvec3 side =
+      glm::normalize(glm::cross(normal, direction(random)));
+
+    pool.push_back(normal);
+
+    for (const double angle : {0.1405, 0.1425}) {
+      pool.push_back(glm::angleAxis(angle, side) * normal);
+    }
+  }
+
+  return pool;
+}
+
 std::vector<Contact> randomRecords(
   std::mt19937_64& random,
   size_t count,
@@ -433,6 +458,62 @@ uint32_t largestPair(const World& world) {
   return largest;
 }
 
+struct Replayed {
+  uint32_t compared = 0u;
+  uint32_t largest = 0u;
+};
+
+Replayed replayAgainstScan(World& world, uint32_t frames) {
+  std::mt19937_64 random(7u);
+  ManifoldCache replay;
+  Replayed replayed;
+
+  for (uint32_t frame = 0u; frame != frames; ++frame) {
+    REQUIRE_FALSE(step(world).nonFinite);
+
+    for (uint32_t slot = 0u; slot != world.manifolds.size(); ++slot) {
+      if (!world.manifolds.live(slot)
+          || world.manifolds.at(slot).points.empty()) {
+        continue;
+      }
+
+      const CachedBodyPair& pair = world.manifolds.at(slot);
+
+      replay.createPairs(
+        world.bodies,
+        std::vector<BodyPair>{{pair.first, pair.second}}
+      );
+
+      const uint32_t mine = replay.find(pair.pair);
+
+      REQUIRE(mine != noSlot);
+
+      std::vector<Contact> records = world.manifolds.records(slot);
+
+      if (frame % 2u == 1u) {
+        shuffle(random, records);
+      }
+
+      replayed.compared += 1u;
+      replayed.largest =
+        std::max(replayed.largest, static_cast<uint32_t>(records.size()));
+      CAPTURE(frame, slot, records.size());
+      CHECK(
+        rebuildAndCompare(
+          replay,
+          world.bodies,
+          mine,
+          records,
+          replayed.compared,
+          true
+        )
+        == 0u
+      );
+    }
+  }
+
+  return replayed;
+}
 }
 
 TEST_CASE(
@@ -489,6 +570,40 @@ TEST_CASE(
 }
 
 TEST_CASE(
+  "rebuilt manifolds of curved contacts carry the same twist as a full scan "
+  "of the old ones",
+  "[dynamics][manifoldcache]"
+) {
+  const BodySet bodies = twoBoxes();
+  const BodyRef first{Side::Rigid, 0u};
+  const BodyRef second{Side::Rigid, 1u};
+  std::mt19937_64 random(20261102u);
+  const std::vector<glm::dvec3> pool = curvedPool(random);
+  ManifoldCache cache;
+
+  cache.sync(bodies, std::vector<BodyPair>{{first, second}});
+
+  const uint32_t slot = cache.find(pairKey(bodies, first, second));
+
+  REQUIRE(slot != noSlot);
+
+  uint32_t round = 0u;
+
+  for (const size_t size : {300u, 1500u, 2000u, 40u, 800u, 2000u}) {
+    round += 1u;
+
+    std::vector<Contact> records = randomRecords(random, size, pool);
+
+    for (uint32_t index = 0u; index != records.size(); ++index) {
+      records[index].manifold = index;
+    }
+
+    CAPTURE(round, size);
+    CHECK(rebuildAndCompare(cache, bodies, slot, records, round, true) == 0u);
+  }
+}
+
+TEST_CASE(
   "manifolds rebuilt from sliding mesh bodies match a full scan of the old "
   "ones",
   "[dynamics][manifoldcache]"
@@ -497,52 +612,52 @@ TEST_CASE(
 
   addSlidingSlabs(world);
 
-  std::mt19937_64 random(7u);
-  ManifoldCache replay;
-  uint32_t round = 0u;
-  uint32_t compared = 0u;
-  uint32_t largest = 0u;
+  const Replayed replayed = replayAgainstScan(world, 40u);
 
-  for (uint32_t frame = 0u; frame != 40u; ++frame) {
-    REQUIRE_FALSE(step(world).nonFinite);
+  CAPTURE(replayed.compared, replayed.largest);
+  CHECK(replayed.compared >= 80u);
+  CHECK(replayed.largest > 300u);
+}
 
-    for (uint32_t slot = 0u; slot != world.manifolds.size(); ++slot) {
-      if (!world.manifolds.live(slot)
-          || world.manifolds.at(slot).points.empty()) {
-        continue;
-      }
+TEST_CASE(
+  "manifolds rebuilt from a ball spinning in a bowl match a full scan of the "
+  "old ones",
+  "[dynamics][manifoldcache]"
+) {
+  const talus::field::SampledSdf bowl = bowlfixture::field(0.30f);
+  const Threads threads;
+  const Mesh sphere = meshfixture::icosphere(0.25f, 4u);
+  MeshShapeSettings settings;
 
-      const CachedBodyPair& pair = world.manifolds.at(slot);
+  settings.mass = 50.0;
+  settings.friction = 0.0;
 
-      replay.createPairs(
-        world.bodies,
-        std::vector<BodyPair>{{pair.first, pair.second}}
-      );
+  const MeshShape ball =
+    meshShape(sphere.vertices, sphere.indices, settings, threads.workers);
+  const glm::dvec3 bowlAt(0.0, static_cast<double>(bowlfixture::half.y), 0.0);
+  World world;
 
-      const uint32_t mine = replay.find(pair.pair);
+  (void)bowlfixture::addBowl(world.bodies, bowl, bowlAt, 500.0, 0.0);
 
-      REQUIRE(mine != noSlot);
+  const uint32_t id = addMeshBody(
+    world.bodies,
+    ball,
+    bowlAt + glm::dvec3(bowlfixture::cavity(0.30f))
+      - glm::dvec3(0.0, 0.0505, 0.0),
+    noTurn,
+    glm::dvec3(0.0)
+  );
+  const std::optional<BodyRef> spun = findBody(world.bodies, id);
 
-      std::vector<Contact> records = world.manifolds.records(slot);
+  REQUIRE(spun.has_value());
+  world.bodies.rigids[spun->index].angularVelocity = glm::dvec3(0.0, 1.0, 3.0);
+  world.parameters.gravity = glm::dvec3(0.0);
 
-      if (frame % 2u == 1u) {
-        shuffle(random, records);
-      }
+  const Replayed replayed = replayAgainstScan(world, 8u);
 
-      round += 1u;
-      compared += 1u;
-      largest = std::max(largest, static_cast<uint32_t>(records.size()));
-      CAPTURE(frame, slot, records.size());
-      CHECK(
-        rebuildAndCompare(replay, world.bodies, mine, records, round, true)
-        == 0u
-      );
-    }
-  }
-
-  CAPTURE(compared, largest);
-  CHECK(compared >= 80u);
-  CHECK(largest > 300u);
+  CAPTURE(replayed.compared, replayed.largest);
+  CHECK(replayed.compared >= 8u);
+  CHECK(replayed.largest > 1000u);
 }
 
 TEST_CASE(

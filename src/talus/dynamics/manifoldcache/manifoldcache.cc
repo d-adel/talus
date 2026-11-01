@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
+#include <limits>
 #include <ranges>
 #include <utility>
 #include <vector>
@@ -15,6 +17,9 @@ namespace talus::dynamics {
 namespace {
 
 constexpr size_t scanLimit = 32u;
+constexpr size_t treeLimit = 32u;
+constexpr uint32_t leafItems = 8u;
+constexpr uint32_t noItem = 0xFFFFFFFFu;
 
 uint64_t mixed(uint64_t value) {
   value += 0x9E3779B97F4A7C15ull;
@@ -124,6 +129,16 @@ private:
   std::vector<Value> m_values;
 };
 
+struct NormalNode {
+  glm::dvec3 low{0.0};
+  glm::dvec3 high{0.0};
+  double reach = 0.0;
+  uint32_t begin = 0u;
+  uint32_t end = 0u;
+  uint32_t left = 0u;
+  uint32_t right = 0u;
+};
+
 struct FillScratch {
   FlatTable<uint32_t, uint32_t> groups;
   FlatTable<PointKey, std::array<uint32_t, 2>> points;
@@ -135,6 +150,10 @@ struct FillScratch {
   std::vector<uint32_t> order;
   std::vector<uint32_t> runEnds;
   std::vector<uint32_t> distinctNormals;
+  std::vector<uint32_t> treeItems;
+  std::vector<uint32_t> looseItems;
+  std::vector<NormalNode> nodes;
+  std::vector<uint32_t> stack;
 };
 
 FillScratch& fillScratch() {
@@ -239,6 +258,144 @@ void indexOld(const CachedBodyPair& pair, FillScratch& scratch) {
   }
 
   scratch.twists.reset(scratch.starts.size());
+  scratch.nodes.clear();
+
+  if (scratch.distinctNormals.size() <= treeLimit) {
+    return;
+  }
+
+  scratch.treeItems.clear();
+  scratch.looseItems.clear();
+
+  for (const uint32_t index : scratch.distinctNormals) {
+    const glm::dvec3& normal = old[index].basis[0];
+
+    (std::isfinite(normal.x) && std::isfinite(normal.y)
+         && std::isfinite(normal.z)
+       ? scratch.treeItems
+       : scratch.looseItems)
+      .push_back(index);
+  }
+
+  if (scratch.treeItems.empty()) {
+    return;
+  }
+
+  const auto build =
+    [&](const auto& self, uint32_t begin, uint32_t end) -> uint32_t {
+    NormalNode node;
+
+    node.low = glm::dvec3(std::numeric_limits<double>::infinity());
+    node.high = glm::dvec3(-std::numeric_limits<double>::infinity());
+    node.begin = begin;
+    node.end = end;
+
+    for (uint32_t at = begin; at != end; ++at) {
+      const glm::dvec3& normal = old[scratch.treeItems[at]].basis[0];
+
+      node.low = glm::min(node.low, normal);
+      node.high = glm::max(node.high, normal);
+      node.reach = std::max(node.reach, glm::dot(normal, normal));
+    }
+
+    const uint32_t made = static_cast<uint32_t>(scratch.nodes.size());
+
+    scratch.nodes.push_back(node);
+
+    if (end - begin <= leafItems) {
+      return made;
+    }
+
+    const glm::dvec3 size = node.high - node.low;
+    const glm::length_t axis = size.x >= size.y && size.x >= size.z ? 0
+                               : size.y >= size.z                   ? 1
+                                                                    : 2;
+    const uint32_t middle = begin + (end - begin) / 2u;
+
+    std::nth_element(
+      scratch.treeItems.begin() + begin,
+      scratch.treeItems.begin() + middle,
+      scratch.treeItems.begin() + end,
+      [&](uint32_t a, uint32_t b) {
+        return old[a].basis[0][axis] < old[b].basis[0][axis];
+      }
+    );
+
+    const uint32_t left = self(self, begin, middle);
+    const uint32_t right = self(self, middle, end);
+
+    scratch.nodes[made].left = left;
+    scratch.nodes[made].right = right;
+
+    return made;
+  };
+
+  (void)build(build, 0u, static_cast<uint32_t>(scratch.treeItems.size()));
+}
+
+double treeTwist(
+  const std::vector<CachedManifold>& old,
+  FillScratch& scratch,
+  const CachedManifold& manifold
+) {
+  const glm::dvec3& normal = manifold.basis[0];
+  const double length = glm::dot(normal, normal);
+  double closest = sharedNormal;
+  uint32_t pick = noItem;
+  const auto consider = [&](uint32_t index) {
+    const CachedManifold& before = old[index];
+    const double aligned = glm::dot(before.basis[0], normal);
+
+    if (before.flipped == manifold.flipped
+        && (aligned > closest || (aligned == closest && (pick == noItem || index > pick)))) {
+      closest = aligned;
+      pick = index;
+    }
+  };
+
+  for (const uint32_t index : scratch.looseItems) {
+    consider(index);
+  }
+
+  const auto apartFrom = [&](const NormalNode& node) {
+    const glm::dvec3 outside = glm::max(
+      glm::max(node.low - normal, normal - node.high),
+      glm::dvec3(0.0)
+    );
+
+    return glm::dot(outside, outside);
+  };
+
+  scratch.stack.assign(1u, 0u);
+
+  while (!scratch.stack.empty()) {
+    const NormalNode& node = scratch.nodes[scratch.stack.back()];
+    const double apart = apartFrom(node);
+    const double bound = 0.5 * (node.reach + length - apart);
+    const double slack = 1.0e-12 * (1.0 + node.reach + length + apart);
+
+    scratch.stack.pop_back();
+
+    if (bound + slack < closest) {
+      continue;
+    }
+
+    if (node.left == 0u) {
+      for (uint32_t at = node.begin; at != node.end; ++at) {
+        consider(scratch.treeItems[at]);
+      }
+    } else {
+      const bool leftFirst = apartFrom(scratch.nodes[node.left])
+                             <= apartFrom(scratch.nodes[node.right]);
+      const uint32_t nearer = leftFirst ? node.left : node.right;
+      const uint32_t farther = leftFirst ? node.right : node.left;
+
+      scratch.stack.push_back(farther);
+      scratch.stack.push_back(nearer);
+    }
+  }
+
+  return pick == noItem ? 0.0 : old[pick].twist;
 }
 
 template<typename Indices>
@@ -1105,11 +1262,13 @@ void ManifoldCache::fill(
         double& known = scratch->twists.insert(key, 0.0, added);
 
         if (added) {
-          known = alignedTwist(
-            pair.spareManifolds,
-            scratch->distinctNormals,
-            manifold
-          );
+          known = scratch->nodes.empty()
+                    ? alignedTwist(
+                        pair.spareManifolds,
+                        scratch->distinctNormals,
+                        manifold
+                      )
+                    : treeTwist(pair.spareManifolds, *scratch, manifold);
         }
 
         lastKey = key;
