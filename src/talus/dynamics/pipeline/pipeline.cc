@@ -451,6 +451,17 @@ std::span<const uint32_t> awakeRigids(const World& world) {
   return world.awake.indices;
 }
 
+bool awakeSuperset(const World& world, std::vector<uint32_t>& rigids) {
+  if (world.awake.layout != world.bodies.layout
+      || world.awake.rigidCount > world.bodies.rigids.size()) {
+    return false;
+  }
+
+  rigids = liveRigids(world.awake, world.bodies);
+
+  return true;
+}
+
 std::unordered_set<uint64_t> recordedPairs(std::span<const Contact> contacts) {
   std::unordered_set<uint64_t> pairs;
 

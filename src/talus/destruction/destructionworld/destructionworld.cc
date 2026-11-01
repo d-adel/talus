@@ -146,16 +146,6 @@ struct End {
   glm::dvec3 local{0.0};
 };
 
-std::vector<uint32_t> indexById(const dynamics::World& world) {
-  std::vector<uint32_t> index(world.bodies.nextId, noIndex);
-
-  for (uint32_t at = 0u; at != world.bodies.rigids.size(); ++at) {
-    index[world.bodies.rigids[at].id] = at;
-  }
-
-  return index;
-}
-
 uint32_t rigidIndex(const std::vector<uint32_t>& index, uint32_t id) {
   if (id >= index.size() || index[id] == noIndex) {
     throw std::logic_error("A destruction piece lost its body");
@@ -413,8 +403,35 @@ uint32_t DestructionWorld::pieceOf(uint32_t body) const {
   return body < m_pieceOfBody.size() ? m_pieceOfBody[body] : noPiece;
 }
 
+void DestructionWorld::refreshIndex(const dynamics::World& world) {
+  const std::vector<dynamics::RigidBody>& rigids = world.bodies.rigids;
+
+  if (m_rescan || m_indexLayout != world.bodies.layout
+      || m_indexed > rigids.size() || m_index.size() > world.bodies.nextId) {
+    m_index.assign(world.bodies.nextId, noIndex);
+    m_indexed = 0u;
+  } else {
+    m_index.resize(world.bodies.nextId, noIndex);
+  }
+
+  for (size_t at = m_indexed; at != rigids.size(); ++at) {
+    m_index[rigids[at].id] = static_cast<uint32_t>(at);
+  }
+
+  m_indexed = rigids.size();
+  m_indexLayout = world.bodies.layout;
+}
+
+bool DestructionWorld::listAwake(const dynamics::World& world) {
+  return !m_rescan && dynamics::awakeSuperset(world, m_awake);
+}
+
 void DestructionWorld::countBodies(const dynamics::World& world, const dynamics::Workers& workers, DestructionReport& report, bool updateRest) {
-  if (updateRest) {
+  const bool listed = listAwake(world);
+
+  if (updateRest && listed) {
+    m_rest.updateAwake(world, workers);
+  } else if (updateRest) {
     m_rest.update(world, workers);
   }
 
@@ -423,13 +440,35 @@ void DestructionWorld::countBodies(const dynamics::World& world, const dynamics:
   report.awakeManifolds = 0u;
 
   std::vector<std::array<uint32_t, 3>> sums(workers.count, std::array<uint32_t, 3>{});
+  const auto awake = [&](const dynamics::BodyRef& ref) {
+    if (ref.side != dynamics::Side::Rigid) {
+      return false;
+    }
+
+    const dynamics::RigidBody& body = world.bodies.rigids[ref.index];
+
+    return body.mass > 0.0 && !body.asleep;
+  };
+  const auto touching = [&](uint32_t slot) {
+    if (!world.manifolds.live(slot)
+        || world.manifolds.at(slot).points.empty()) {
+      return false;
+    }
+
+    const dynamics::CachedBodyPair& pair = world.manifolds.at(slot);
+
+    return awake(pair.first) || awake(pair.second);
+  };
+  const auto scanned =
+    static_cast<uint32_t>(listed ? m_awake.size() : world.bodies.rigids.size());
 
   dynamics::parallelFor(
     workers,
-    static_cast<uint32_t>(world.bodies.rigids.size()),
+    scanned,
     scanRange,
     [&](uint32_t begin, uint32_t end, uint32_t worker) {
-      for (uint32_t rigid = begin; rigid != end; ++rigid) {
+      for (uint32_t entry = begin; entry != end; ++entry) {
+        const uint32_t rigid = listed ? m_awake[entry] : entry;
         const dynamics::RigidBody& body = world.bodies.rigids[rigid];
 
         if (!(body.mass > 0.0) || body.asleep) {
@@ -439,37 +478,41 @@ void DestructionWorld::countBodies(const dynamics::World& world, const dynamics:
         sums[worker][0] += m_rest.resting(body.id) ? 0u : 1u;
 
         if (pieceOf(body.id) != noPiece && body.compound != nullptr) {
-          sums[worker][1] += static_cast<uint32_t>(body.compound->children.size());
+          sums[worker][1] +=
+            static_cast<uint32_t>(body.compound->children.size());
         }
-      }
-    }
-  );
 
-  dynamics::parallelFor(
-    workers,
-    static_cast<uint32_t>(world.manifolds.size()),
-    scanRange,
-    [&](uint32_t begin, uint32_t end, uint32_t worker) {
-      for (uint32_t slot = begin; slot != end; ++slot) {
-        if (!world.manifolds.live(slot) || world.manifolds.at(slot).points.empty()) {
+        if (!listed) {
           continue;
         }
 
-        const dynamics::CachedBodyPair& pair = world.manifolds.at(slot);
-        bool awake = false;
-
-        for (const dynamics::BodyRef& ref : {pair.first, pair.second}) {
-          if (ref.side == dynamics::Side::Rigid) {
-            const dynamics::RigidBody& body = world.bodies.rigids[ref.index];
-
-            awake = awake || (body.mass > 0.0 && !body.asleep);
+        for (const uint32_t slot : world.manifolds.pairsOf(body.id)) {
+          if (!touching(slot)) {
+            continue;
           }
-        }
 
-        sums[worker][2] += awake ? 1u : 0u;
+          const dynamics::CachedBodyPair& pair = world.manifolds.at(slot);
+          const dynamics::BodyRef& owner =
+            awake(pair.first) ? pair.first : pair.second;
+
+          sums[worker][2] += owner.index == rigid ? 1u : 0u;
+        }
       }
     }
   );
+
+  if (!listed) {
+    dynamics::parallelFor(
+      workers,
+      static_cast<uint32_t>(world.manifolds.size()),
+      scanRange,
+      [&](uint32_t begin, uint32_t end, uint32_t worker) {
+        for (uint32_t slot = begin; slot != end; ++slot) {
+          sums[worker][2] += touching(slot) ? 1u : 0u;
+        }
+      }
+    );
+  }
 
   for (const std::array<uint32_t, 3>& sum : sums) {
     report.moving += sum[0];
@@ -548,8 +591,12 @@ void DestructionWorld::freezeResting(dynamics::World& world, DestructionReport& 
     uint32_t rigid = 0u;
   };
   std::vector<Resting> resting;
+  const bool listed = listAwake(world);
+  const auto scanned =
+    static_cast<uint32_t>(listed ? m_awake.size() : world.bodies.rigids.size());
 
-  for (uint32_t rigid = 0u; rigid != world.bodies.rigids.size(); ++rigid) {
+  for (uint32_t entry = 0u; entry != scanned; ++entry) {
+    const uint32_t rigid = listed ? m_awake[entry] : entry;
     const dynamics::RigidBody& body = world.bodies.rigids[rigid];
     const uint32_t at = pieceOf(body.id);
 
@@ -1709,6 +1756,7 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
   dynamics::Stopwatch clock;
 
   ++m_steps;
+  m_rescan = m_recover;
 
   DestructionReport report;
 
@@ -1722,7 +1770,7 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
   report.profile.removals = clock.lap();
 
   const auto count = static_cast<uint32_t>(m_pieces.size());
-  const std::vector<uint32_t> index = indexById(world);
+  refreshIndex(world);
   const std::unordered_set<uint64_t> recorded = dynamics::recordedPairs(world.contacts);
   constexpr uint64_t blastPair = 0xFFFFFFFFFFFFFFFFull;
   std::vector<PieceContribution> blasting;
@@ -1762,7 +1810,7 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
     dynamics::resolveWorkers(world.workerCount, world.enqueueTask, world.finishTask, world.userTaskContext, world.scheduler);
 
   countBodies(world, workers, report);
-  report.collapse = collapseActive(world, index);
+  report.collapse = collapseActive(world, m_index);
   guardTouched(world);
   const auto countThaws = [&](const std::vector<uint32_t>& bodyIndex) {
     std::erase_if(m_frozen, [&](const std::pair<uint32_t, uint64_t>& entry) {
@@ -1776,9 +1824,9 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
     });
   };
 
-  countThaws(index);
+  countThaws(m_index);
 
-  const Visit visit = visitOf(world, workers, index, count, blastsByPiece);
+  const Visit visit = visitOf(world, workers, m_index, count, blastsByPiece);
   const auto visits = static_cast<uint32_t>(visit.pieces.size());
   std::vector<std::vector<ChunkLoad>> loads(visits);
   std::vector<std::vector<Contribution>> gathered(visits);
@@ -1816,7 +1864,7 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
           continue;
         }
 
-        const uint32_t rigid = rigidIndex(index, m_pieces[at].body);
+        const uint32_t rigid = rigidIndex(m_index, m_pieces[at].body);
         const dynamics::RigidBody& body = world.bodies.rigids[rigid];
         const bool resting = visit.all ? still(world, body, at) : visit.moving[entry] == 0u;
 
@@ -1869,7 +1917,8 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
       continue;
     }
 
-    const dynamics::RigidBody& body = world.bodies.rigids[rigidIndex(index, piece.body)];
+    const dynamics::RigidBody& body =
+      world.bodies.rigids[rigidIndex(m_index, piece.body)];
 
     queueCase(at, LoadCase{std::move(gathered[entry]), gravityOf(world, body, at), m_steps}, report);
     gathered[entry].clear();
@@ -1929,7 +1978,8 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
     }
 
     if (deferred != 0u) {
-      const dynamics::RigidBody& body = world.bodies.rigids[rigidIndex(index, m_pieces[at].body)];
+      const dynamics::RigidBody& body =
+        world.bodies.rigids[rigidIndex(m_index, m_pieces[at].body)];
       const glm::dvec3 gravity = fromCase[entry] != 0u ? caseGravity[entry] : gravityOf(world, body, at);
       const uint64_t since = fromCase[entry] != 0u ? caseSince[entry] : m_steps;
       const CasePhase phase = casePhase[entry] == CasePhase::Booked ? CasePhase::Booked : CasePhase::Fracturing;
@@ -1971,7 +2021,8 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
 
     if (!m_pieces[at].pending && casePhase[entry] != CasePhase::Booked) {
       std::vector<ChunkImpulse>& impulses = m_buildings[m_pieces[at].building].impulses;
-      const dynamics::RigidBody& body = world.bodies.rigids[rigidIndex(index, m_pieces[at].body)];
+      const dynamics::RigidBody& body =
+        world.bodies.rigids[rigidIndex(m_index, m_pieces[at].body)];
       const Layout layout = layoutOf(body, at);
 
       for (Contribution& contribution : gathered[entry]) {
@@ -1997,7 +2048,8 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
     }
 
     if (!m_pieces[at].pending) {
-      const dynamics::RigidBody& body = world.bodies.rigids[rigidIndex(index, m_pieces[at].body)];
+      const dynamics::RigidBody& body =
+        world.bodies.rigids[rigidIndex(m_index, m_pieces[at].body)];
       const glm::dvec3 gravity = fromCase[entry] != 0u ? caseGravity[entry] : gravityOf(world, body, at);
       const uint64_t since = fromCase[entry] != 0u ? caseSince[entry] : m_steps;
 
@@ -2019,7 +2071,8 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
       try {
         const uint32_t at = visit.pieces[entry];
         Piece& piece = m_pieces[at];
-        const dynamics::RigidBody& body = world.bodies.rigids[rigidIndex(index, piece.body)];
+        const dynamics::RigidBody& body =
+          world.bodies.rigids[rigidIndex(m_index, piece.body)];
 
         if (bondless(piece.structure)) {
           piece.pending = false;
@@ -2108,8 +2161,9 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
   m_collapse.insert(m_collapse.end(), report.created.begin(), report.created.end());
   report.collapse = report.collapse || !report.created.empty();
 
-  const std::vector<uint32_t> splitIndex = report.created.empty() ? std::vector<uint32_t>{} : indexById(world);
-  const std::vector<uint32_t>& finalIndex = report.created.empty() ? index : splitIndex;
+  if (!report.created.empty()) {
+    refreshIndex(world);
+  }
 
   for (Record& record : m_buildings) {
     std::erase_if(record.impulses, [&](const ChunkImpulse& impulse) {
@@ -2122,7 +2176,8 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
       const Piece& piece = m_pieces[at];
       const bool restarting = !piece.cases.empty() && piece.cases.front().phase == CasePhase::Booked;
 
-      return (!piece.pending && !restarting) || world.bodies.rigids[rigidIndex(finalIndex, piece.body)].mass > 0.0;
+      return (!piece.pending && !restarting)
+             || world.bodies.rigids[rigidIndex(m_index, piece.body)].mass > 0.0;
     });
   }
 
@@ -2141,7 +2196,7 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
   }
   report.cost = predictCost(stepCounts(report));
   freezeResting(world, report);
-  removeFrozen(world, report, finalIndex);
+  removeFrozen(world, report, m_index);
   removeBelow(world, report);
 
   if (report.removedFrozen != 0u || report.discarded != 0u) {
@@ -2150,10 +2205,10 @@ DestructionReport DestructionWorld::updatePieces(dynamics::World& world) {
   }
 
   if (report.removedFrozen != 0u || report.discarded != 0u) {
-    countThaws(indexById(world));
-  } else {
-    countThaws(finalIndex);
+    refreshIndex(world);
   }
+
+  countThaws(m_index);
   m_lastPrediction = report.cost.total;
 
   for (uint32_t at = 0u; at != m_pieces.size(); ++at) {
@@ -2510,15 +2565,17 @@ DestructionWorld::Visit DestructionWorld::visitOf(
 
   std::vector<std::vector<uint32_t>> moved(workers.count);
   std::vector<std::exception_ptr> failures(workers.count);
+  const bool listed = listAwake(world);
 
   dynamics::parallelFor(
     workers,
-    static_cast<uint32_t>(world.bodies.rigids.size()),
+    static_cast<uint32_t>(listed ? m_awake.size() : world.bodies.rigids.size()),
     scanRange,
     [&](uint32_t begin, uint32_t end, uint32_t worker) {
       try {
-        for (uint32_t rigid = begin; rigid != end; ++rigid) {
-          const dynamics::RigidBody& body = world.bodies.rigids[rigid];
+        for (uint32_t entry = begin; entry != end; ++entry) {
+          const dynamics::RigidBody& body =
+            world.bodies.rigids[listed ? m_awake[entry] : entry];
 
           if (body.mass > 0.0 && !body.asleep) {
             moved[worker].push_back(pieceOf(body.id));

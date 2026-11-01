@@ -31,14 +31,17 @@ uint64_t mixWord(uint64_t hash, uint64_t word) {
   return hash;
 }
 
-uint64_t mixDouble(uint64_t hash, double value) {
+uint64_t bitsOf(double value) {
   uint64_t bits = 0u;
 
   std::memcpy(&bits, &value, sizeof(bits));
 
-  return mixWord(hash, bits);
+  return bits;
 }
 
+uint64_t mixDouble(uint64_t hash, double value) {
+  return mixWord(hash, bitsOf(value));
+}
 }
 
 Motion motionOf(const talus::dynamics::World& world) {
@@ -216,16 +219,42 @@ uint64_t stateHash(
 }
 
 bool sameOutcome(const talus::destruction::DestructionReport& a, const talus::destruction::DestructionReport& b) {
-  return a.step == b.step && a.removed == b.removed && a.gathered == b.gathered && a.refused == b.refused && a.loads == b.loads
-         && a.solved == b.solved && a.tolerated == b.tolerated
-         && a.rounds == b.rounds && a.factorizations == b.factorizations && a.solvedChunks == b.solvedChunks
-         && a.factorizedChunks == b.factorizedChunks && a.pending == b.pending && a.blasted == b.blasted
-         && a.driven == b.driven && a.fired == b.fired && a.broken == b.broken && a.created == b.created
-         && a.fractured == b.fractured && a.frozen == b.frozen && a.thawed == b.thawed
-         && a.removedFrozen == b.removedFrozen && a.discarded == b.discarded && a.guarded == b.guarded && a.deferredFractures == b.deferredFractures
-         && a.maxPendingAge == b.maxPendingAge && a.maxBreakDelay == b.maxBreakDelay
-         && a.casesQueued == b.casesQueued && a.casesReplaced == b.casesReplaced && a.casesMerged == b.casesMerged
-         && a.casesStarted == b.casesStarted && a.deferred == b.deferred && a.overRounds == b.overRounds;
+  return a.step == b.step && a.removed == b.removed && a.gathered == b.gathered
+         && a.refused == b.refused && a.loads == b.loads && a.solved == b.solved
+         && a.tolerated == b.tolerated && a.rounds == b.rounds
+         && a.factorizations == b.factorizations
+         && a.solvedChunks == b.solvedChunks
+         && a.factorizedChunks == b.factorizedChunks && a.pending == b.pending
+         && a.blasted == b.blasted && a.driven == b.driven && a.fired == b.fired
+         && a.broken == b.broken && a.created == b.created
+         && a.fractured == b.fractured && a.frozen == b.frozen
+         && a.thawed == b.thawed && a.removedFrozen == b.removedFrozen
+         && a.discarded == b.discarded && a.guarded == b.guarded
+         && a.deferredFractures == b.deferredFractures
+         && a.maxPendingAge == b.maxPendingAge
+         && a.maxBreakDelay == b.maxBreakDelay && a.casesQueued == b.casesQueued
+         && a.casesReplaced == b.casesReplaced && a.casesMerged == b.casesMerged
+         && a.casesStarted == b.casesStarted && a.deferred == b.deferred
+         && a.overRounds == b.overRounds && a.moving == b.moving
+         && a.awakeChunks == b.awakeChunks && a.bodies == b.bodies
+         && a.awakeManifolds == b.awakeManifolds;
 }
 
+bool sameReport(
+  const talus::destruction::DestructionReport& a,
+  const talus::destruction::DestructionReport& b
+) {
+  const auto same = [](double first, double second) {
+    return bitsOf(first) == bitsOf(second);
+  };
+
+  return sameOutcome(a, b) && a.visited == b.visited
+         && a.factorWork == b.factorWork && a.wideWork == b.wideWork
+         && a.wide == b.wide && a.collapse == b.collapse
+         && same(a.overWork, b.overWork) && same(a.room, b.room)
+         && same(a.roundWork, b.roundWork) && same(a.cost.rigid, b.cost.rigid)
+         && same(a.cost.update, b.cost.update)
+         && same(a.cost.stress, b.cost.stress)
+         && same(a.cost.total, b.cost.total);
+}
 }

@@ -160,6 +160,8 @@ the consuming engine.
 - Change bodies only through `<talus/dynamics/edits/edits.h>` (teleports,
   impulses, shape changes, removals). Writing fields such as
   `RigidBody::velocity` directly skips cache updates, waking and joint rules.
+  A direct write to `RigidBody::asleep` is invisible to `world.step()`: wake
+  bodies with `dynamics::wakeBody` or an edit.
 - The world owns its containers. Sampled-field pointers are borrowed: keep
   their storage alive while any body uses them.
 
@@ -370,9 +372,16 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
 
 - Only x86-64 builds are qualified.
 - The workload controller's cost constants are unqualified. They underpredict
-  in reference checks, and the large district test missed the 4 ms physics
-  goal. Rubble can stay awake, and thin-sheet glass does not shatter
-  convincingly.
+  in reference checks, but overpredict for sleeping bodies, and the large
+  district test missed the 4 ms physics goal. Rubble can stay awake, and
+  thin-sheet glass does not shatter convincingly.
+- The workload controller still charges every rigid body, asleep or awake:
+  57.6 + 156.2 ns per body (`budget.h`). At the default 3.6 ms target, an idle
+  world above about 16,800 rigid bodies counts as over budget. The controller
+  then caps fractures at 4 chunks per step, refuses extra stress rounds outside
+  a collapse and freezes resting debris early. Above about 4,700 bodies it also
+  removes frozen single-chunk debris; each removal makes the next dynamics step
+  and rest-tracker pass visit every body.
 - One ball/soft-face test and two joint tests are expected failures: 680 cases,
   3 expected failures, Windows/MSVC Release, at `4a5ecf6`.
 - One 20-body humanoid costs 0.225 ms per step (0.148 ms in joints) on a Ryzen 7
@@ -404,9 +413,23 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
   each step and visits every lattice island. Sleeping rigid bodies are not free
   there. In `talus::dynamics::step`, a sleeping rigid body costs almost nothing
   in all other worlds.
-- `talus::World::step` also runs the destruction update, which still visits every
-  rigid body each step: about 0.67 ms among 20,000 sleeping bodies on one worker
-  and 0.26 ms on eight (Ryzen 7 7840HS laptop).
+- In `talus::World::step`, the destruction update also visits only awake
+  bodies. Among 20,000 sleeping bodies it costs below 1 µs per step on one
+  worker of the Ryzen 7 7840HS laptop and 1 to 2 µs on eight, against 0.67 ms
+  and 0.26 ms when it visited every body. It still visits every rigid body:
+  - in the update after an update that threw;
+  - from the point where an update removes a body itself: a scheduled removal
+    of a whole piece, a split that empties an anchored piece, or the removal of
+    frozen debris or of bodies below `discardBelow`;
+  - in its rest tracker and body-id map, in the first update after a body
+    removal, a tier switch, a removed lattice or a moved or removed static body;
+  - in every update while `discardBelow` is finite;
+  - in each impulse, split or removal by body id, which searches every rigid
+    body.
+
+  Frozen debris has mass 0, stays out of islands and never falls asleep. It
+  stays on the awake list and costs more than sleeping debris until it thaws
+  or is removed.
 - A sharp box edge that crosses a field body away from the box's corners and
   edge midpoints sinks about half the point spacing into the field face: 10 mm
   measured at the default 2 cm spacing.

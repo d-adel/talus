@@ -10,7 +10,8 @@ add_executable(talus_tests
     fieldbody_tests.cc field_meshsdf_tests.cc deformedfield_tests.cc destruction_tests.cc
     destruction_factor_tests.cc destructionworld_tests.cc budget_tests.cc
     neohookean_tests.cc destructionfixtures.cc pinning.cc quietfailures.cc
-    fixtures/district.cc fixtures/humanoid.cc fixtures/mover.cc integration_tests.cc)
+    fixtures/district.cc fixtures/humanoid.cc fixtures/mover.cc integration_tests.cc
+    world_awake_tests.cc)
 target_link_libraries(talus_tests PRIVATE Talus::Physics Catch2::Catch2WithMain)
 target_include_directories(talus_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 if (MSVC)
