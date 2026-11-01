@@ -27,6 +27,7 @@
 #include <numbers>
 #include <optional>
 #include <span>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -88,7 +89,11 @@ const RigidBody& bodyOf(const World& world, uint32_t id) {
   return world.bodies.rigids[ref->index];
 }
 
-uint32_t addBoxFloor(World& world, const glm::dvec3& half) {
+uint32_t addAnchoredBox(
+  World& world,
+  const glm::dvec3& half,
+  const glm::dvec3& centre
+) {
   CompoundChild slab;
 
   slab.half = half;
@@ -98,7 +103,7 @@ uint32_t addBoxFloor(World& world, const glm::dvec3& half) {
     .rigids[addCompoundBody(
       world.bodies,
       std::vector<CompoundChild>{slab},
-      glm::dvec3(0.0, -half.y, 0.0),
+      centre,
       noTurn,
       glm::dvec3(0.0),
       0.5,
@@ -106,6 +111,10 @@ uint32_t addBoxFloor(World& world, const glm::dvec3& half) {
       true
     )]
     .id;
+}
+
+uint32_t addBoxFloor(World& world, const glm::dvec3& half) {
+  return addAnchoredBox(world, half, glm::dvec3(0.0, -half.y, 0.0));
 }
 
 uint32_t addBoxBody(
@@ -196,6 +205,36 @@ std::array<PlacedPart, 12> characterLayout() {
   };
 }
 
+std::array<PlacedPart, 12> handsByLegsLayout() {
+  const auto halfOf = [](Part kind) {
+    return partShapes[kind].half;
+  };
+  const double footY = halfOf(foot).y;
+  const double shinY = 2.0 * halfOf(foot).y + partGap + halfOf(shin).y;
+  const double thighY = shinY + halfOf(shin).y + partGap + halfOf(thigh).y;
+  const double bodyY = thighY + halfOf(thigh).y + partGap + halfOf(body).y;
+  const double headY = bodyY + halfOf(body).y + partGap + halfOf(head).y;
+  const double handY = thighY;
+  const double armY = handY + halfOf(hand).y + partGap + halfOf(arm).y;
+  const double armX = halfOf(body).x + partGap + halfOf(arm).x;
+  const double legX = armX - halfOf(hand).x - partGap - halfOf(thigh).x;
+
+  return {
+    PlacedPart{body, {0.0, bodyY, 0.0}},
+    PlacedPart{head, {0.0, headY, 0.0}},
+    PlacedPart{thigh, {-legX, thighY, 0.0}},
+    PlacedPart{shin, {-legX, shinY, 0.0}},
+    PlacedPart{foot, {-legX, footY, 0.0}},
+    PlacedPart{thigh, {legX, thighY, 0.0}},
+    PlacedPart{shin, {legX, shinY, 0.0}},
+    PlacedPart{foot, {legX, footY, 0.0}},
+    PlacedPart{arm, {-armX, armY, 0.0}},
+    PlacedPart{hand, {-armX, handY, 0.0}},
+    PlacedPart{arm, {armX, armY, 0.0}},
+    PlacedPart{hand, {armX, handY, 0.0}}
+  };
+}
+
 constexpr std::array<std::array<uint32_t, 2>, 11> characterFilters{
   std::array<uint32_t, 2>{0u, 9u},
   std::array<uint32_t, 2>{0u, 11u},
@@ -226,9 +265,19 @@ constexpr std::array<std::array<uint32_t, 2>, 11> characterJoints{
 
 using PartSpacing = std::array<double, partKinds>;
 
-const MeshShape& partMesh(Part kind, double spacing) {
-  static std::map<std::pair<uint32_t, double>, MeshShape> shapes;
-  const std::pair<uint32_t, double> key{kind, spacing};
+Mesh roundedMesh(const glm::vec3& half) {
+  Mesh mesh = meshfixture::icosphere(1.0f, 3u);
+
+  for (glm::vec3& vertex : mesh.vertices) {
+    vertex *= half;
+  }
+
+  return mesh;
+}
+
+const MeshShape& partMesh(Part kind, double spacing, bool rounded = false) {
+  static std::map<std::tuple<uint32_t, double, bool>, MeshShape> shapes;
+  const std::tuple<uint32_t, double, bool> key{kind, spacing, rounded};
   const auto found = shapes.find(key);
 
   if (found != shapes.end()) {
@@ -237,7 +286,7 @@ const MeshShape& partMesh(Part kind, double spacing) {
 
   const Threads threads;
   const glm::vec3 half(partShapes[kind].half);
-  const Mesh mesh = meshfixture::box(-half, half);
+  const Mesh mesh = rounded ? roundedMesh(half) : meshfixture::box(-half, half);
   MeshShapeSettings settings;
 
   settings.mass = partShapes[kind].mass;
@@ -291,28 +340,30 @@ Character addCharacter(
   World& world,
   const glm::dvec3& at,
   const PartSpacing* spacing,
-  std::span<const std::array<uint32_t, 2>> filters
+  std::span<const std::array<uint32_t, 2>> filters,
+  const std::array<PlacedPart, 12>& layout = characterLayout(),
+  bool rounded = false
 ) {
-  const std::array<PlacedPart, 12> layout = characterLayout();
   Character character;
 
   for (size_t index = 0u; index != layout.size(); ++index) {
     const PlacedPart& part = layout[index];
 
-    character.parts[index] = spacing != nullptr
-                               ? addMeshBody(
-                                   world.bodies,
-                                   partMesh(part.kind, (*spacing)[part.kind]),
-                                   at + part.centre,
-                                   noTurn,
-                                   glm::dvec3(0.0)
-                                 )
-                               : addBoxBody(
-                                   world,
-                                   partShapes[part.kind].half,
-                                   partShapes[part.kind].mass,
-                                   at + part.centre
-                                 );
+    character.parts[index] =
+      spacing != nullptr
+        ? addMeshBody(
+            world.bodies,
+            partMesh(part.kind, (*spacing)[part.kind], rounded),
+            at + part.centre,
+            noTurn,
+            glm::dvec3(0.0)
+          )
+        : addBoxBody(
+            world,
+            partShapes[part.kind].half,
+            partShapes[part.kind].mass,
+            at + part.centre
+          );
   }
 
   for (const auto& [parent, child] : characterJoints) {
@@ -445,6 +496,37 @@ bool allAsleep(const World& world) {
   });
 }
 
+struct StoredCensus {
+  uint32_t stored = 0u;
+  uint32_t beyondBand = 0u;
+  uint32_t betweenParts = 0u;
+};
+
+StoredCensus storedCensus(const World& world) {
+  const double band =
+    world.parameters.speculativeDistance + world.parameters.margin;
+  StoredCensus census;
+
+  for (uint32_t slot = 0u; slot != world.manifolds.size(); ++slot) {
+    if (!world.manifolds.live(slot)) {
+      continue;
+    }
+
+    const CachedBodyPair& pair = world.manifolds.at(slot);
+    const bool parts =
+      pair.second.side == Side::Rigid
+      && world.bodies.rigids[pair.first.index].shape == RigidShape::Sampled
+      && world.bodies.rigids[pair.second.index].shape == RigidShape::Sampled;
+
+    for (const CachedContactPoint& point : pair.points) {
+      census.stored += 1u;
+      census.beyondBand += point.separation >= band ? 1u : 0u;
+      census.betweenParts += parts ? 1u : 0u;
+    }
+  }
+
+  return census;
+}
 }
 
 TEST_CASE("fill cost of a mesh slab sliding on a box", "[.][fillcost]") {
@@ -726,5 +808,156 @@ TEST_CASE(
       static_cast<unsigned long long>(stateHash(world))
     );
     CHECK(lowest >= -0.01);
+  }
+}
+
+TEST_CASE("step cost of a mesh character turning on a kerb", "[.][turncost]") {
+  constexpr double kerbHeight = 0.15;
+  constexpr double turnRate = 3.0;
+  constexpr double swingRate = 8.0;
+  const PartSpacing game{0.03, 0.03, 0.02, 0.02, 0.04, 0.02, 0.02};
+  const std::vector<std::array<uint32_t, 2>> armsTouchLegs(
+    characterFilters.begin(),
+    characterFilters.end()
+  );
+  const std::vector<std::array<uint32_t, 2>> onlyHead = gameFilters();
+  const std::array<PlacedPart, 12> layout = handsByLegsLayout();
+
+  struct Phase {
+    const char* name = "";
+    uint32_t steps = 0u;
+    double rate = 0.0;
+    double swing = 0.0;
+    double step = 0.0;
+    double worstStep = 0.0;
+    double narrowphase = 0.0;
+    double fill = 0.0;
+    double solver = 0.0;
+    double stored = 0.0;
+    double active = 0.0;
+    double beyondBand = 0.0;
+    double betweenParts = 0.0;
+    uint32_t worstStored = 0u;
+    uint32_t activeAtWorst = 0u;
+    StepReport slowest{};
+  };
+
+  for (const std::vector<std::array<uint32_t, 2>>* filters :
+       {&onlyHead, &armsTouchLegs}) {
+    for (const uint32_t workers : {1u, 8u}) {
+      World world;
+
+      world.workerCount = workers;
+      world.parameters.timePairs = true;
+      (void)addBoxFloor(world, glm::dvec3(4.0, 0.5, 4.0));
+      (void)addAnchoredBox(
+        world,
+        glm::dvec3(0.6, 0.5 * kerbHeight, 0.4),
+        glm::dvec3(0.0, 0.5 * kerbHeight, 0.0)
+      );
+
+      const Character character = addCharacter(
+        world,
+        glm::dvec3(0.0, kerbHeight, 0.15),
+        &game,
+        *filters,
+        layout,
+        true
+      );
+
+      std::array<Phase, 4> phases{
+        Phase{"stand", 60u, 0.0, 0.0},
+        Phase{"about", 60u, 0.0, std::numbers::pi},
+        Phase{"spin", 120u, turnRate, 0.0},
+        Phase{"stop", 60u, 0.0, 0.0}
+      };
+      double yaw = 0.0;
+
+      for (Phase& phase : phases) {
+        const double aim = yaw + phase.swing;
+
+        for (uint32_t frame = 0u; frame != phase.steps; ++frame) {
+          const double ease =
+            phase.swing != 0.0
+              ? 1.0 - std::exp(-swingRate * world.parameters.dt)
+              : 0.0;
+
+          yaw += phase.rate * world.parameters.dt + (aim - yaw) * ease;
+          REQUIRE(setSpringTarget(
+            world,
+            character.holder,
+            {character.rest,
+             glm::angleAxis(yaw, glm::dvec3(0.0, 1.0, 0.0)) * character.turn}
+          ));
+
+          const StepReport report = step(world);
+          const StoredCensus census = storedCensus(world);
+
+          REQUIRE_FALSE(report.nonFinite);
+          phase.step += report.profile.total;
+
+          if (report.profile.total > phase.worstStep) {
+            phase.worstStep = report.profile.total;
+            phase.slowest = report;
+          }
+
+          phase.narrowphase += report.profile.pairs.narrowphase;
+          phase.fill += report.profile.pairs.build;
+          phase.solver += report.profile.prepare + report.profile.substeps;
+          phase.stored += static_cast<double>(report.contacts);
+          phase.active += static_cast<double>(report.activeContacts);
+          phase.beyondBand += static_cast<double>(census.beyondBand);
+          phase.betweenParts += static_cast<double>(census.betweenParts);
+
+          if (report.contacts > phase.worstStored) {
+            phase.worstStored = report.contacts;
+            phase.activeAtWorst = report.activeContacts;
+          }
+        }
+      }
+
+      for (const Phase& phase : phases) {
+        const double count = static_cast<double>(phase.steps);
+
+        std::printf(
+          "turncost filters %zu workers %u phase %s stored %.0f max_stored %u "
+          "active %.1f active_at_max %u beyond_band %.0f between_parts %.0f "
+          "step_ms %.3f narrowphase_ms %.4f fill_ms %.4f solver_ms %.4f "
+          "slowest_ms %.3f slowest_stored %u slowest_active %u "
+          "slowest_narrowphase_ms %.4f slowest_fill_ms %.4f "
+          "slowest_solver_ms %.4f\n",
+          filters->size(),
+          workers,
+          phase.name,
+          phase.stored / count,
+          phase.worstStored,
+          phase.active / count,
+          phase.activeAtWorst,
+          phase.beyondBand / count,
+          phase.betweenParts / count,
+          phase.step / count,
+          phase.narrowphase / count,
+          phase.fill / count,
+          phase.solver / count,
+          phase.worstStep,
+          phase.slowest.contacts,
+          phase.slowest.activeContacts,
+          phase.slowest.profile.pairs.narrowphase,
+          phase.slowest.profile.pairs.build,
+          phase.slowest.profile.prepare + phase.slowest.profile.substeps
+        );
+      }
+
+      const MeshFrame torso = meshFrame(bodyOf(world, character.parts[0]));
+
+      std::printf(
+        "turncost filters %zu workers %u yaw %.3f torso_y %.4f state %016llx\n",
+        filters->size(),
+        workers,
+        2.0 * std::atan2(torso.rotation.y, torso.rotation.w),
+        torso.position.y,
+        static_cast<unsigned long long>(stateHash(world))
+      );
+    }
   }
 }
