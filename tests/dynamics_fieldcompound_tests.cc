@@ -390,6 +390,51 @@ TEST_CASE(
 }
 
 TEST_CASE(
+  "a field body rolling along a box face stays on it",
+  "[dynamics][fieldcompound]"
+) {
+  World world;
+
+  (void)addFloor(world);
+
+  const uint32_t ball =
+    addBall(world, glm::dvec3(-0.5, ballRadius + 0.01, 0.0), 0.5);
+
+  run(world, 60u);
+  REQUIRE(
+    setVelocity(world, world.bodies.rigids[ball].id, glm::dvec3(1.0, 0.0, 0.0))
+  );
+
+  double deepest = 0.0;
+  double lowest = std::numeric_limits<double>::infinity();
+  double highest = -std::numeric_limits<double>::infinity();
+  double speed = 0.0;
+  double spin = 0.0;
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    REQUIRE_FALSE(step(world).nonFinite);
+
+    const RigidBody& body = world.bodies.rigids[ball];
+
+    deepest = std::min(deepest, lowestPoint(body));
+    lowest = std::min(lowest, body.position.y);
+    highest = std::max(highest, body.position.y);
+
+    if (frame == 9u) {
+      speed = glm::length(body.velocity);
+      spin = glm::length(body.angularVelocity) * ballRadius;
+    }
+  }
+
+  CAPTURE(deepest, lowest, highest, speed, spin);
+  CHECK(deepest >= -0.002);
+  CHECK(lowest >= ballRadius - 0.004);
+  CHECK(highest <= ballRadius + 0.002);
+  CHECK(speed > 0.3);
+  CHECK(std::abs(spin - speed) <= 0.2 * speed);
+}
+
+TEST_CASE(
   "a box edge resting on a field body is held at its edge points",
   "[dynamics][fieldcompound]"
 ) {

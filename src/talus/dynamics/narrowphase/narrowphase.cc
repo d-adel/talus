@@ -625,6 +625,34 @@ uint32_t groupByNormal(
   return static_cast<uint32_t>(normals.size());
 }
 
+void groupByDirection(std::vector<Contact>& contacts) {
+  thread_local std::vector<size_t> leads;
+
+  leads.clear();
+
+  for (size_t index = 0u; index != contacts.size(); ++index) {
+    Contact& contact = contacts[index];
+    uint32_t group = 0u;
+
+    while (group != leads.size()) {
+      const Contact& lead = contacts[leads[group]];
+
+      if (lead.a.side == contact.a.side && lead.a.body == contact.a.body
+          && glm::dot(contact.basis[0], lead.basis[0]) >= sharedNormal) {
+        break;
+      }
+
+      group += 1u;
+    }
+
+    if (group == leads.size()) {
+      leads.push_back(index);
+    }
+
+    contact.manifold = group;
+  }
+}
+
 bool staticPoseHolds(
   const RigidBody& body,
   const CachedPose& cached,
@@ -1475,10 +1503,11 @@ void compoundPair(
     compoundAgainstField(bodies, boxes, points, reach, scratch.found, contacts);
     fieldAgainstCompound(bodies, points, boxes, reach, scratch.found, contacts);
 
-    for (size_t index = 0u; index != contacts.size(); ++index) {
-      contacts[index].manifold = static_cast<uint32_t>(index);
-      contacts[index].cached = pose;
-      contacts[index].cached.separation = contacts[index].gap;
+    groupByDirection(contacts);
+
+    for (Contact& contact : contacts) {
+      contact.cached = pose;
+      contact.cached.separation = contact.gap;
     }
 
     clock.charge(&PairTicks::narrowphase);
