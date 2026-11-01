@@ -542,6 +542,21 @@ bool brickHoldsSurface(const SampledSdf& field, uint32_t brick) {
 }
 
 void finishBricks(SampledSdf& field) {
+  const glm::uvec3& resolution = field.resolution;
+
+  if (resolution.x < 2u || resolution.y < 2u || resolution.z < 2u) {
+    throw std::invalid_argument(
+      "A sampled field needs at least two lattice points on every axis"
+    );
+  }
+
+  if (field.distances.size()
+      != static_cast<size_t>(resolution.x) * resolution.y * resolution.z) {
+    throw std::invalid_argument(
+      "A sampled field needs one distance per lattice point"
+    );
+  }
+
   const glm::uvec3 bricks = brickCounts(field);
   const size_t count = static_cast<size_t>(bricks.x) * bricks.y * bricks.z;
 

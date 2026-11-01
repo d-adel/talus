@@ -702,6 +702,30 @@ TEST_CASE("bakeMesh refuses faces with zero area", "[field][meshsdf]") {
   CHECK_THROWS_AS(baked(sliver, low, high, resolution), std::invalid_argument);
 }
 
+TEST_CASE(
+  "finishBricks refuses a field it cannot summarise",
+  "[field][sampledsdf]"
+) {
+  talus::field::SampledSdf field;
+  field.voxelSize = glm::vec3(0.1f);
+  field.resolution = glm::uvec3(4u);
+  field.distances.assign(64u, 1.0f);
+  field.materials.assign(64u, 0u);
+
+  CHECK_NOTHROW(talus::field::finishBricks(field));
+
+  talus::field::SampledSdf missing = field;
+  missing.distances.pop_back();
+  CHECK_THROWS_AS(talus::field::finishBricks(missing), std::invalid_argument);
+
+  for (uint32_t axis = 0u; axis != 3u; ++axis) {
+    talus::field::SampledSdf thin = field;
+    thin.resolution[axis] = 1u;
+    thin.distances.assign(16u, 1.0f);
+    CHECK_THROWS_AS(talus::field::finishBricks(thin), std::invalid_argument);
+  }
+}
+
 TEST_CASE("mesh bake cost", "[.][meshsdfcost]") {
   const Mesh& mesh = sphereMesh();
   std::shared_ptr<talus::dynamics::Scheduler> scheduler;
