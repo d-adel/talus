@@ -574,7 +574,7 @@ bool sameRest(const talus::World& a, const talus::World& b) {
 
 struct TwinRun {
   uint64_t digest = 0u;
-  uint32_t listedUpdates = 0u;
+  uint32_t layoutKeptSteps = 0u;
   uint32_t sleepySteps = 0u;
   uint32_t wideAwake = 0u;
   uint32_t jointWakes = 0u;
@@ -655,7 +655,7 @@ TwinRun runTwins(uint32_t workers, uint32_t width) {
     }
 
     run.wideAwake += dynamics.awake.indices.size() > serialLimit ? 1u : 0u;
-    run.listedUpdates += dynamics.bodies.layout == layout ? 1u : 0u;
+    run.layoutKeptSteps += dynamics.bodies.layout == layout ? 1u : 0u;
     run.sleepySteps +=
       2u * dynamics.awake.indices.size() < dynamics.bodies.rigids.size() ? 1u
                                                                          : 0u;
@@ -689,7 +689,7 @@ TEST_CASE(
     const TwinRun run = runTwins(workers, width);
 
     INFO("workers " << workers << " width " << width);
-    REQUIRE(run.listedUpdates > twinSteps / 2u);
+    REQUIRE(run.layoutKeptSteps > twinSteps / 2u);
     CHECK(run.sleepySteps > twinSteps / 2u);
     CHECK(run.frozen > 0u);
     CHECK(run.thawed > 0u);

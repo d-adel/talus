@@ -1616,3 +1616,54 @@ TEST_CASE("a step that throws leaves the next step full", "[dynamics][awake]") {
   CHECK(world.bodies.rigids[indexOf(world, lifted)].position.y < before);
   CHECK(listedAwake(world) == scannedAwake(world));
 }
+
+TEST_CASE(
+  "the awake superset holds every awake body between steps and refuses a "
+  "list whose indices shifted",
+  "[dynamics][awake]"
+) {
+  World world;
+  std::vector<uint32_t> crates;
+  std::vector<uint32_t> superset;
+  const auto holdsAwake = [&] {
+    return awakeSuperset(world, superset)
+           && std::ranges::includes(superset, scannedAwake(world));
+  };
+
+  addFloor(world);
+
+  for (uint32_t index = 0u; index != 5u; ++index) {
+    crates.push_back(addCrate(
+      world,
+      glm::dvec3(0.3 * static_cast<double>(index) - 0.6, crateHalf, 0.0)
+    ));
+  }
+
+  for (uint32_t frame = 0u; frame != 600u && !allResting(world); ++frame) {
+    REQUIRE_FALSE(step(world).nonFinite);
+  }
+
+  REQUIRE(allResting(world));
+  REQUIRE_FALSE(step(world).nonFinite);
+  REQUIRE(awakeSuperset(world, superset));
+  CHECK(superset.empty());
+
+  REQUIRE(setVelocity(world, crates[3], glm::dvec3(0.0, 0.0, 0.1)));
+  CHECK(holdsAwake());
+  CHECK(std::ranges::binary_search(superset, indexOf(world, crates[3])));
+
+  const uint32_t added = addCrate(world, glm::dvec3(1.5, crateHalf, 0.0));
+
+  CHECK(holdsAwake());
+  CHECK(std::ranges::binary_search(superset, indexOf(world, added)));
+
+  REQUIRE_FALSE(step(world).nonFinite);
+  CHECK(holdsAwake());
+
+  REQUIRE(removeBody(world, crates[0]));
+  addCrate(world, glm::dvec3(-1.5, crateHalf, 0.0));
+  CHECK_FALSE(awakeSuperset(world, superset));
+
+  REQUIRE_FALSE(step(world).nonFinite);
+  CHECK(holdsAwake());
+}
