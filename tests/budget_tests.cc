@@ -1219,3 +1219,115 @@ TEST_CASE("a lever hit thaws a frozen beam when rotation can move its tip above 
   CHECK(talus::dynamics::thawStruck(world, talus::destruction::restSpeed) == 1u);
   CHECK(!talus::dynamics::isFrozen(rigid(world, target)));
 }
+
+TEST_CASE(
+  "a rest tracker that walks the awake list counts as one that scans every "
+  "body, "
+  "through a removal that shifts indices and a body that falls asleep between "
+  "two updates",
+  "[destruction][budget][awake]"
+) {
+  talus::dynamics::World world;
+  DestructionWorld owner;
+
+  addFloor(world, owner);
+
+  const uint32_t lead =
+    addSlider(world, glm::dvec3(-5.0, 0.251, 0.0), glm::dvec3(0.0));
+  const uint32_t settler =
+    addSlider(world, glm::dvec3(0.0, 0.27, 0.0), glm::dvec3(0.0));
+  const talus::dynamics::Workers workers;
+  talus::destruction::RestTracker listed;
+  talus::destruction::RestTracker scanned;
+  const auto track = [&] {
+    listed.updateAwake(world, workers);
+    scanned.update(world, workers);
+
+    for (uint32_t id = 0u; id != world.bodies.nextId; ++id) {
+      INFO("body " << id);
+      REQUIRE(listed.restSteps(id) == scanned.restSteps(id));
+    }
+  };
+  const auto aboutToSleep = [&] {
+    const talus::dynamics::RigidBody& body = rigid(world, settler);
+
+    return !body.asleep
+           && body.sleepTime
+                >= world.parameters.timeToSleep - 3.0 * world.parameters.dt;
+  };
+
+  for (uint32_t step = 0u; step != 600u && !aboutToSleep(); ++step) {
+    REQUIRE(!talus::dynamics::step(world).nonFinite);
+    track();
+  }
+
+  REQUIRE(aboutToSleep());
+  REQUIRE(scanned.restSteps(settler) > 0u);
+  REQUIRE(talus::dynamics::removeBody(world, lead));
+  static_cast<void>(
+    addSlider(world, glm::dvec3(5.0, 0.251, 0.0), glm::dvec3(0.0))
+  );
+
+  for (uint32_t step = 0u; step != 10u && !rigid(world, settler).asleep;
+       ++step) {
+    REQUIRE(!talus::dynamics::step(world).nonFinite);
+  }
+
+  REQUIRE(rigid(world, settler).asleep);
+  REQUIRE(!talus::dynamics::step(world).nonFinite);
+  track();
+  CHECK(listed.restSteps(settler) == 0u);
+
+  REQUIRE(
+    talus::dynamics::setVelocity(world, settler, glm::dvec3(0.0, 0.0, 0.05))
+  );
+  REQUIRE(!talus::dynamics::step(world).nonFinite);
+  track();
+  CHECK(listed.restSteps(settler) == 1u);
+}
+
+TEST_CASE(
+  "the destruction update finds a piece whose body index shifted after a "
+  "removal and an append between updates",
+  "[destruction][budget][awake]"
+) {
+  talus::dynamics::World world;
+  DestructionWorld destruction;
+
+  addFloor(world, destruction);
+
+  const uint32_t spacer =
+    addSlider(world, glm::dvec3(-5.0, 0.251, 0.0), glm::dvec3(0.0));
+  const uint32_t box =
+    addBox(world, destruction, glm::dvec3(0.0, BOX_HALF + 0.001, 0.0));
+  const uint32_t rocker = addSlider(
+    world,
+    glm::dvec3(0.0, 2.0 * BOX_HALF + 0.25 + 0.002, 0.0),
+    glm::dvec3(0.0)
+  );
+  const auto rockOnce = [&](uint32_t step) {
+    const double speed = (step / 20u) % 2u == 0u ? 0.1 : -0.1;
+
+    REQUIRE(
+      talus::dynamics::setVelocity(world, rocker, glm::dvec3(speed, 0.0, 0.0))
+    );
+  };
+
+  for (uint32_t step = 0u; step != 30u; ++step) {
+    rockOnce(step);
+    static_cast<void>(advanceOnce(world, destruction));
+  }
+
+  REQUIRE(talus::dynamics::removeBody(world, spacer));
+  static_cast<void>(
+    addSlider(world, glm::dvec3(5.0, 0.251, 0.0), glm::dvec3(0.0))
+  );
+  rockOnce(30u);
+
+  talus::destruction::DestructionReport report;
+
+  REQUIRE_NOTHROW(report = advanceOnce(world, destruction));
+  CHECK(report.visited >= 1u);
+  CHECK(report.gathered >= 1u);
+  CHECK(!destruction.chunkLoads(box).empty());
+}

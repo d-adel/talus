@@ -326,6 +326,8 @@ private:
     std::span<const PieceContribution> blasting
   );
   [[nodiscard]] uint32_t pieceOf(uint32_t body) const;
+  void refreshIndex(const dynamics::World& world);
+  [[nodiscard]] bool listAwake(const dynamics::World& world);
   void countBodies(const dynamics::World& world, const dynamics::Workers& workers, DestructionReport& report, bool updateRest = true);
   [[nodiscard]] bool collapseActive(const dynamics::World& world, const std::vector<uint32_t>& index);
   void guardPiece(uint32_t at, uint64_t until);
@@ -406,6 +408,11 @@ private:
   std::vector<uint32_t> m_tools;
   std::vector<std::pair<uint32_t, uint64_t>> m_frozen;
   double m_lastPrediction = 0.0;
+  std::vector<uint32_t> m_index;
+  uint64_t m_indexLayout = 0u;
+  size_t m_indexed = 0u;
+  std::vector<uint32_t> m_awake;
+  bool m_rescan = false;
 };
 
 }
