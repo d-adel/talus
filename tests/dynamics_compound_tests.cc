@@ -1173,7 +1173,11 @@ TEST_CASE("a box and a ball on a compound touch only the child under them", "[dy
   CHECK(world.manifolds.at(onBall).manifoldPoints[0].firstChild == 8u);
 }
 
-TEST_CASE("a compound on a sampled body gets one reduced manifold on its touching children", "[dynamics][compound]") {
+TEST_CASE(
+  "a compound on a sampled body gets one reduced manifold on its touching "
+  "children and a contact from the body's point under it",
+  "[dynamics][compound]"
+) {
   const talus::field::SampledSdf slabField = boxShape(glm::dvec3(0.3, 0.05, 0.3));
   talus::dynamics::BodySet bodies;
   const uint32_t slab = talus::dynamics::addRigidBox(
@@ -1193,20 +1197,30 @@ TEST_CASE("a compound on a sampled body gets one reduced manifold on its touchin
   REQUIRE(cache.size() == 1u);
 
   const talus::dynamics::CachedBodyPair& pair = cache.at(0u);
+  const std::vector<uint32_t> bottom{0u, 1u, 4u, 5u};
   std::vector<uint32_t> touched;
+  std::vector<uint32_t> under;
 
-  REQUIRE(pair.manifolds.size() == 1u);
-  REQUIRE(pair.points.size() == 4u);
-  CHECK(pair.manifolds[0].flipped);
+  REQUIRE(pair.manifolds.size() == 2u);
+  REQUIRE(pair.points.size() == 5u);
   CHECK(pair.pose.valid);
 
-  for (const talus::dynamics::CachedManifoldPoint& point : pair.manifoldPoints) {
-    CHECK(point.firstChild == talus::dynamics::noChild);
-    touched.push_back(point.secondChild);
+  for (const talus::dynamics::CachedManifold& manifold : pair.manifolds) {
+    for (uint32_t index = manifold.start;
+         index != manifold.start + manifold.count;
+         ++index) {
+      const talus::dynamics::CachedManifoldPoint& point =
+        pair.manifoldPoints[index];
+
+      CHECK(point.firstChild == talus::dynamics::noChild);
+      (manifold.flipped ? touched : under).push_back(point.secondChild);
+    }
   }
 
   std::sort(touched.begin(), touched.end());
-  CHECK(touched == std::vector<uint32_t>{0u, 1u, 4u, 5u});
+  CHECK(touched == bottom);
+  REQUIRE(under.size() == 1u);
+  CHECK(std::ranges::find(bottom, under[0]) != bottom.end());
 }
 
 TEST_CASE("a flipped manifold with a stored pose anchors each point on its own body", "[dynamics][compound]") {

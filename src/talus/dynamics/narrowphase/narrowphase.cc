@@ -149,23 +149,13 @@ bool movable(const BodySet& bodies, const BodyRef& ref) {
   return ref.side == Side::Rigid && bodies.rigids[ref.index].mass > 0.0;
 }
 
-bool primitiveHit(
-  const RigidBody& target,
+bool boxHit(
+  const glm::dvec3& half,
   const glm::dvec3& local,
   const glm::dvec3& toward,
   double band,
   Hit& hit
 ) {
-  if (target.shape == RigidShape::Sphere) {
-    const double distance = glm::length(local);
-
-    hit.normal = distance > 0.0 ? local / distance : glm::dvec3(0.0, 1.0, 0.0);
-    hit.gap = distance - target.radius;
-
-    return hit.gap < band;
-  }
-
-  const glm::dvec3 half = target.halfExtents;
   const double tie = 0.01 * std::min({half.x, half.y, half.z});
   const glm::dvec3 offset = local - glm::clamp(local, -half, half);
   const double distance = glm::length(offset);
@@ -198,6 +188,25 @@ bool primitiveHit(
   hit.gap = -bestDepth;
 
   return hit.gap < band;
+}
+
+bool primitiveHit(
+  const RigidBody& target,
+  const glm::dvec3& local,
+  const glm::dvec3& toward,
+  double band,
+  Hit& hit
+) {
+  if (target.shape == RigidShape::Sphere) {
+    const double distance = glm::length(local);
+
+    hit.normal = distance > 0.0 ? local / distance : glm::dvec3(0.0, 1.0, 0.0);
+    hit.gap = distance - target.radius;
+
+    return hit.gap < band;
+  }
+
+  return boxHit(target.halfExtents, local, toward, band, hit);
 }
 
 void addContact(
@@ -1014,6 +1023,28 @@ Bounds boundsInBody(const RigidBody& body, const Bounds& world) {
   return boxBoundsIn(back * (middle - body.position), back, half);
 }
 
+bool outerEdge(
+  const CompoundShape& shape,
+  uint32_t index,
+  const glm::dvec3& sample
+) {
+  const CompoundChild& child = shape.children[index];
+  const glm::dvec3 local =
+    glm::conjugate(child.rotation) * (sample - child.centre);
+  int exposed = 0;
+
+  for (int axis = 0; axis != 3; ++axis) {
+    if (std::abs(local[axis]) > 0.5 * child.half[axis]) {
+      const uint32_t face =
+        2u * static_cast<uint32_t>(axis) + (local[axis] > 0.0 ? 1u : 0u);
+
+      exposed += (shape.exposed[index] & (1u << face)) != 0u ? 1 : 0;
+    }
+  }
+
+  return exposed >= 2;
+}
+
 void compoundAgainstField(
   const BodySet& bodies,
   const BodyRef& points,
@@ -1037,6 +1068,11 @@ void compoundAgainstField(
     const std::array<glm::dvec3, childSampleCount> samples = childSamples(child);
 
     for (uint32_t sample = 0u; sample != childSampleCount; ++sample) {
+      if (field.side == Side::Rigid
+          && !outerEdge(shape, index, samples[sample])) {
+        continue;
+      }
+
       const glm::dvec3 point = body.position + turn * samples[sample];
       Hit hit;
       ContactSide side;
@@ -1084,6 +1120,80 @@ void compoundAgainstField(
       );
       contacts.back().restitution = restitution;
     }
+  }
+}
+
+void fieldAgainstCompound(
+  const BodySet& bodies,
+  const BodyRef& points,
+  const BodyRef& boxes,
+  double band,
+  std::vector<uint32_t>& candidates,
+  std::vector<Contact>& contacts
+) {
+  const RigidBody& body = bodies.rigids[points.index];
+  const RigidBody& target = bodies.rigids[boxes.index];
+  const CompoundShape& shape = *target.compound;
+  const glm::dmat3 turn = glm::mat3_cast(body.rotation);
+  const glm::dmat3 targetTurn = glm::mat3_cast(target.rotation);
+  const glm::dmat3 back = glm::transpose(targetTurn);
+  const glm::dvec3 middle = back * (body.position - target.position);
+  const double friction =
+    std::sqrt(frictionOf(bodies, points) * frictionOf(bodies, boxes));
+  const double restitution =
+    std::max(restitutionOf(bodies, points), restitutionOf(bodies, boxes));
+
+  for (uint32_t index = 0u; index != body.samples.size(); ++index) {
+    const glm::dvec3 local =
+      back * (body.position + turn * body.samples[index] - target.position);
+    const CompoundChild* nearest = nullptr;
+    Hit best;
+
+    overlappingChildren(shape, grown(Bounds{local, local}, band), candidates);
+
+    for (const uint32_t candidate : candidates) {
+      const CompoundChild& child = shape.children[candidate];
+      const glm::dquat inverse = glm::conjugate(child.rotation);
+      Hit hit;
+
+      if (boxHit(
+            child.half,
+            inverse * (local - child.centre),
+            inverse * (middle - child.centre),
+            band,
+            hit
+          )
+          && (nearest == nullptr || hit.gap < best.gap)) {
+        nearest = &child;
+        best = hit;
+      }
+    }
+
+    if (nearest == nullptr) {
+      continue;
+    }
+
+    const glm::dvec3 normal = nearest->rotation * best.normal;
+    ContactSide side;
+    ContactSide other;
+
+    side.side = Side::Rigid;
+    side.body = points.index;
+    side.local = body.samples[index];
+    other.side = Side::Rigid;
+    other.body = boxes.index;
+    other.child = nearest->key;
+    other.local = local - best.gap * normal;
+    addContact(
+      contacts,
+      side,
+      other,
+      targetTurn * normal,
+      best.gap,
+      friction,
+      contactKey(bodies, points, boxes, index)
+    );
+    contacts.back().restitution = restitution;
   }
 }
 
@@ -1328,16 +1438,22 @@ void compoundPair(
 
   if (a.shape == RigidShape::Sampled || b.shape == RigidShape::Sampled) {
     const bool onFirst = compound(a);
+    const BodyRef& boxes = onFirst ? first : second;
+    const BodyRef& points = onFirst ? second : first;
     const CachedPose pose = poseOf(a, b);
 
-    compoundAgainstField(
-      bodies,
-      onFirst ? first : second,
-      onFirst ? second : first,
-      reach,
-      scratch.found,
-      contacts
-    );
+    compoundAgainstField(bodies, boxes, points, reach, scratch.found, contacts);
+    clock.charge(&PairTicks::narrowphase);
+
+    const uint32_t groups = groupByNormal(bodies, contacts, 0u, reach, band);
+    const size_t begin = contacts.size();
+
+    clock.charge(&PairTicks::reduce);
+    fieldAgainstCompound(bodies, points, boxes, reach, scratch.found, contacts);
+
+    for (size_t index = begin; index != contacts.size(); ++index) {
+      contacts[index].manifold = groups + static_cast<uint32_t>(index - begin);
+    }
 
     for (Contact& contact : contacts) {
       contact.cached = pose;
@@ -1345,8 +1461,6 @@ void compoundPair(
     }
 
     clock.charge(&PairTicks::narrowphase);
-    (void)groupByNormal(bodies, contacts, 0u, reach, band);
-    clock.charge(&PairTicks::reduce);
 
     return;
   }
