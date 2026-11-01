@@ -923,8 +923,9 @@ TEST_CASE("step cost of a mesh character turning on a kerb", "[.][turncost]") {
           "turncost filters %zu workers %u phase %s stored %.0f max_stored %u "
           "active %.1f active_at_max %u beyond_band %.0f between_parts %.0f "
           "step_ms %.3f narrowphase_ms %.4f fill_ms %.4f solver_ms %.4f "
-          "slowest_ms %.3f stored %u active %u narrowphase_ms %.4f "
-          "fill_ms %.4f solver_ms %.4f\n",
+          "slowest_ms %.3f slowest_stored %u slowest_active %u "
+          "slowest_narrowphase_ms %.4f slowest_fill_ms %.4f "
+          "slowest_solver_ms %.4f\n",
           filters->size(),
           workers,
           phase.name,

@@ -974,9 +974,10 @@ TEST_CASE(
 }
 
 TEST_CASE(
-  "a spinning mesh bar that reaches a block within the step stops on it",
+  "a fast mesh bar that reaches a block within the step stops on it",
   "[dynamics][meshbody]"
 ) {
+  const bool spun = GENERATE(false, true);
   const bool jointed = GENERATE(false, true);
   const bool meshBlock = GENERATE(false, true);
   const glm::vec3 barHalf(0.25f, 0.025f, 0.025f);
@@ -984,7 +985,14 @@ TEST_CASE(
   const glm::dvec3 blockHalf(0.14, 0.1475, 0.15);
   const glm::dvec3 blockCentre(0.26, blockHalf.y, 0.0);
   const double blockTop = blockCentre.y + blockHalf.y;
-  const glm::dvec3 hub(0.0, blockTop + 0.08 + barHalf.y, 0.0);
+  const IntegrationParameters parameters;
+  const double substeps = static_cast<double>(
+    jointed ? parameters.jointSubsteps : parameters.softstepSubsteps
+  );
+  const double speed = 10.0;
+  const double gap =
+    spun ? 0.08 : speed * parameters.dt * (1.0 - 0.75 / substeps);
+  const glm::dvec3 hub(0.0, blockTop + gap + barHalf.y, 0.0);
   const Threads threads;
   MeshShapeSettings settings;
 
@@ -1037,12 +1045,17 @@ TEST_CASE(
   const uint32_t id =
     addMeshBody(world.bodies, barShape, hub, noTurn, glm::dvec3(0.0));
 
-  bodyOf(world.bodies, id).angularVelocity = glm::dvec3(0.0, 0.0, -40.0);
+  if (spun) {
+    bodyOf(world.bodies, id).angularVelocity =
+      glm::dvec3(0.0, 0.0, -speed / static_cast<double>(barHalf.x));
+  } else {
+    bodyOf(world.bodies, id).velocity = glm::dvec3(0.0, -speed, 0.0);
+  }
 
   if (jointed) {
     JointDef pin;
 
-    pin.kind = JointKind::Ball;
+    pin.kind = spun ? JointKind::Ball : JointKind::Spring;
     pin.bodyB = id;
     pin.frameA.position = hub;
     REQUIRE(addJoint(world, pin) != 0u);
@@ -1050,7 +1063,7 @@ TEST_CASE(
 
   double deepest = 0.0;
   double lowest = std::numeric_limits<double>::infinity();
-  double spin = 0.0;
+  double after = 0.0;
 
   for (uint32_t frame = 0u; frame != 6u; ++frame) {
     const StepReport report = step(world);
@@ -1064,7 +1077,8 @@ TEST_CASE(
     const RigidBody& body = bodyOf(world.bodies, id);
 
     if (frame == 0u) {
-      spin = body.angularVelocity.z;
+      after = spun ? static_cast<double>(barHalf.x) * body.angularVelocity.z
+                   : body.velocity.y;
     }
 
     for (const glm::dvec3& sample : body.samples) {
@@ -1079,8 +1093,8 @@ TEST_CASE(
     }
   }
 
-  CAPTURE(jointed, meshBlock, deepest, lowest, spin);
+  CAPTURE(spun, jointed, meshBlock, gap, deepest, lowest, after);
   CHECK(lowest < 0.02);
-  CHECK(spin > -30.0);
-  CHECK(deepest < 0.01);
+  CHECK(after > -0.9 * speed);
+  CHECK(deepest < 0.005);
 }

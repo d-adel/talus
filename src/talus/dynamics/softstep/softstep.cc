@@ -56,8 +56,8 @@ struct Point {
   float normalMass = 0.0f;
   float relativeVelocity = 0.0f;
   float leverArm = 0.0f;
-  float reach = 0.0f;
-  float slack = 0.0f;
+  float anchorRadius = 0.0f;
+  float anchorSpread = 0.0f;
 };
 
 struct Constraint {
@@ -308,6 +308,14 @@ void warmStart(
   }
 }
 
+bool speculative(float separation) {
+  return separation > 0.0f;
+}
+
+float speculativeBias(float separation, float invH) {
+  return speculative(separation) ? separation * invH : 0.0f;
+}
+
 void push(
   std::vector<State>& states,
   const Constraint& constraint,
@@ -337,8 +345,8 @@ void push(
     float massScale = 1.0f;
     float impulseScale = 0.0f;
 
-    if (s > 0.0f) {
-      velocityBias = s * invH;
+    if (speculative(s)) {
+      velocityBias = speculativeBias(s, invH);
     } else {
       velocityBias =
         std::max(softness.massScale * softness.biasRate * s, -contactSpeed);
@@ -401,7 +409,7 @@ void relax(
     Point& cp = points[constraint.start + index];
     const glm::vec3 ds = dp + (stateB.dq * cp.rB - stateA.dq * cp.rA);
     const float s = glm::dot(ds, normal) + cp.baseSeparation;
-    const float velocityBias = s > 0.0f ? s * invH : 0.0f;
+    const float velocityBias = speculativeBias(s, invH);
     const glm::vec3 vrA = vA + glm::cross(wA, cp.rA);
     const glm::vec3 vrB = vB + glm::cross(wB, cp.rB);
     const float vn = glm::dot(vrB - vrA, normal);
@@ -520,7 +528,7 @@ void restitute(
       const glm::vec3 ds = dp + (stateB.dq * cp.rB - stateA.dq * cp.rA);
       const float s = glm::dot(ds, normal) + cp.baseSeparation;
 
-      velocityBias = s > 0.0f ? s * invH : 0.0f;
+      velocityBias = speculativeBias(s, invH);
     }
 
     const glm::vec3 vrA = vA + glm::cross(wA, cp.rA);
@@ -587,9 +595,9 @@ struct Facing {
   uint32_t a = 0u;
   uint32_t b = 0u;
   glm::vec3 offset{0.0f};
-  float floor = std::numeric_limits<float>::infinity();
-  float reach = 0.0f;
-  float slack = 0.0f;
+  float nearest = std::numeric_limits<float>::infinity();
+  float anchorRadius = 0.0f;
+  float anchorSpread = 0.0f;
   float base = 0.0f;
 };
 
@@ -616,6 +624,12 @@ struct Drift {
 
 constexpr float driftMargin = 1.0e-5f;
 constexpr float driftRate = 1.0f - driftMargin;
+
+bool cannotPush(float separationBelow, float speedBelow, float invH) {
+  return speculative(separationBelow)
+         && speedBelow + driftRate * speculativeBias(separationBelow, invH)
+              > 0.0f;
+}
 
 const Drift& driftOf(
   const std::vector<State>& states,
@@ -659,21 +673,18 @@ bool dormant(
 
   for (uint32_t index = 0u; index != constraint.count; ++index) {
     const Point& cp = points[constraint.start + index];
+    const float radius = cp.anchorRadius;
+    const float spread = cp.anchorSpread;
     const float gap =
-      cp.baseSeparation + shift - cp.slack - drift.turn * cp.reach
+      cp.baseSeparation + shift - spread - drift.turn * radius
       - driftMargin
-          * (drift.span + 2.0f * cp.reach + std::abs(cp.baseSeparation));
-
-    if (!(gap > 0.0f)) {
-      return false;
-    }
-
+          * (drift.span + 2.0f * radius + std::abs(cp.baseSeparation));
     const float speed =
-      approach - drift.spinB * cp.slack - drift.spin * cp.reach
+      approach - drift.spinB * spread - drift.spin * radius
       - driftMargin
-          * (drift.pace + drift.spins * (cp.reach + drift.stretch + cp.slack));
+          * (drift.pace + drift.spins * (radius + drift.stretch + spread));
 
-    if (!(speed + driftRate * gap * invH > 0.0f)) {
+    if (!cannotPush(gap, speed, invH)) {
       return false;
     }
   }
@@ -694,22 +705,18 @@ bool calmPair(
   for (uint32_t index = 0u; index != calm.count; ++index) {
     const Facing& facing = calm.facings[index];
     const Drift& drift = driftOf(states, facing, drifts[index]);
+    const float radius = facing.anchorRadius;
+    const float spread = facing.anchorSpread;
     const float gap =
-      facing.floor - glm::length(drift.shift - facing.offset)
-      - drift.turn * facing.reach
-      - driftMargin * (drift.span + 2.0f * facing.reach + facing.base);
-
-    if (!(gap > 0.0f)) {
-      return false;
-    }
-
+      facing.nearest - glm::length(drift.shift - facing.offset)
+      - drift.turn * radius
+      - driftMargin * (drift.span + 2.0f * radius + facing.base);
     const float speed =
-      -glm::length(drift.closing) - drift.spinB * facing.slack
-      - drift.spin * facing.reach
+      -glm::length(drift.closing) - drift.spinB * spread - drift.spin * radius
       - driftMargin
-          * (drift.pace + drift.spins * (facing.reach + drift.stretch + facing.slack));
+          * (drift.pace + drift.spins * (radius + drift.stretch + spread));
 
-    if (!(speed + driftRate * gap * invH > 0.0f)) {
+    if (!cannotPush(gap, speed, invH)) {
       return false;
     }
   }
@@ -1211,15 +1218,15 @@ SoftstepResult solveSoftstep(
         Point& cp = points[constraint.start + point];
         const glm::vec3 apart = cp.rB - cp.rA;
 
-        cp.reach = glm::length(cp.rA);
-        cp.slack = glm::length(apart - facing.offset);
-        facing.floor = std::min(
-          facing.floor,
+        cp.anchorRadius = glm::length(cp.rA);
+        cp.anchorSpread = glm::length(apart - facing.offset);
+        facing.nearest = std::min(
+          facing.nearest,
           cp.baseSeparation + glm::dot(apart, constraint.normal)
-            - 2.0f * cp.slack
+            - 2.0f * cp.anchorSpread
         );
-        facing.reach = std::max(facing.reach, cp.reach);
-        facing.slack = std::max(facing.slack, cp.slack);
+        facing.anchorRadius = std::max(facing.anchorRadius, cp.anchorRadius);
+        facing.anchorSpread = std::max(facing.anchorSpread, cp.anchorSpread);
         facing.base = std::max(facing.base, std::abs(cp.baseSeparation));
       }
     }
