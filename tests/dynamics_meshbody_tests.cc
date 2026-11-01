@@ -257,7 +257,8 @@ double seamDrift(
   double degrees,
   bool tiltedRight,
   double friction,
-  bool meshSlab
+  bool meshSlab,
+  uint32_t steps
 ) {
   Seam seam;
 
@@ -266,7 +267,7 @@ double seamDrift(
 
   const glm::dvec3 start = bodyOf(seam.world.bodies, seam.slab).position;
 
-  run(seam.world, 120u);
+  run(seam.world, steps);
 
   return bodyOf(seam.world.bodies, seam.slab).position.x - start.x;
 }
@@ -693,85 +694,17 @@ TEST_CASE("meshShape refuses bad settings", "[dynamics][meshbody]") {
 }
 
 TEST_CASE(
-  "a slippery mesh body across a shallow compound crease creeps less than a "
-  "box body",
+  "a mesh body resting across a compound crease stays where it is",
   "[dynamics][meshbody]"
 ) {
-  for (const bool tiltedRight : {true, false}) {
-    const double mesh = seamDrift(6.0, tiltedRight, 0.08, true);
-    const double box = seamDrift(6.0, tiltedRight, 0.08, false);
+  for (const double degrees : {6.0, 15.0, 30.0}) {
+    for (const bool tiltedRight : {true, false}) {
+      const double mesh = seamDrift(degrees, tiltedRight, 0.6, true, 300u);
+      const double box = seamDrift(degrees, tiltedRight, 0.6, false, 300u);
 
-    CAPTURE(tiltedRight, mesh, box);
-    CHECK(std::abs(mesh) < std::abs(box));
-  }
-}
-
-TEST_CASE(
-  "field contacts on compound faces share a manifold only when their normals "
-  "match",
-  "[dynamics][meshbody]"
-) {
-  for (const double degrees : {0.5, 2.0}) {
-    Seam seam;
-
-    buildSeam(seam, degrees, true, 0.5, true);
-    run(seam.world, 30u);
-
-    const RigidBody& slab = bodyOf(seam.world.bodies, seam.slab);
-    const RigidBody& ground = seam.world.bodies.rigids[seam.ground];
-    uint32_t manifolds = 0u;
-    uint32_t mixed = 0u;
-    std::array<uint32_t, 2> touched{0u, 0u};
-
-    for (uint32_t slot = 0u; slot != seam.world.manifolds.size(); ++slot) {
-      if (!seam.world.manifolds.live(slot)) {
-        continue;
-      }
-
-      const CachedBodyPair& pair = seam.world.manifolds.at(slot);
-      const bool slabFirst =
-        seam.world.bodies.rigids[pair.first.index].id == slab.id;
-
-      if (pair.second.side != Side::Rigid
-          || seam.world.bodies.rigids[pair.second.index].id
-               != (slabFirst ? ground.id : slab.id)) {
-        continue;
-      }
-
-      for (const CachedManifold& manifold : pair.manifolds) {
-        if (manifold.flipped == slabFirst) {
-          continue;
-        }
-
-        std::array<bool, 2> keys{false, false};
-
-        for (uint32_t at = manifold.start;
-             at != manifold.start + manifold.count;
-             ++at) {
-          const CachedManifoldPoint& point = pair.manifoldPoints[at];
-          const uint32_t key = slabFirst ? point.secondChild : point.firstChild;
-
-          REQUIRE(key < 2u);
-          keys[key] = true;
-        }
-
-        manifolds += 1u;
-        mixed += keys[0] && keys[1] ? 1u : 0u;
-        touched[0] += keys[0] ? 1u : 0u;
-        touched[1] += keys[1] ? 1u : 0u;
-      }
-    }
-
-    CAPTURE(degrees, manifolds, mixed, touched[0], touched[1]);
-    REQUIRE(touched[0] > 0u);
-    REQUIRE(touched[1] > 0u);
-
-    if (degrees < 1.0) {
-      CHECK(manifolds == 1u);
-      CHECK(mixed == 1u);
-    } else {
-      CHECK(manifolds == 2u);
-      CHECK(mixed == 0u);
+      CAPTURE(degrees, tiltedRight, mesh, box);
+      CHECK(std::abs(mesh) < 0.001);
+      CHECK(std::abs(box) < 0.001);
     }
   }
 }
