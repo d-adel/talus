@@ -118,7 +118,7 @@ bool allAsleep(const World& world) {
   });
 }
 
-SceneRun runScene(Scene scene, uint32_t sleepers) {
+SceneRun runScene(Scene scene, uint32_t sleepers, bool forceFull) {
   static const talus::field::SampledSdf floorField =
     boxField(glm::dvec3(60.0, 1.0, 60.0), 0.25);
   static const talus::field::SampledSdf crateField =
@@ -238,6 +238,10 @@ SceneRun runScene(Scene scene, uint32_t sleepers) {
       }
     }
 
+    if (forceFull) {
+      world.bodies.layout += 1u;
+    }
+
     const StepReport report = step(world);
 
     REQUIRE_FALSE(report.nonFinite);
@@ -286,7 +290,7 @@ TEST_CASE("step cost among many sleeping bodies", "[.][sleepcost]") {
     double emptyStepUs = 0.0;
 
     for (const uint32_t sleepers : {0u, 5000u, 20000u}) {
-      const SceneRun run = runScene(scene, sleepers);
+      const SceneRun run = runScene(scene, sleepers, false);
       const double stepUs = run.median[phaseCount - 1];
 
       if (sleepers == 0u) {
@@ -324,6 +328,15 @@ TEST_CASE("step cost among many sleeping bodies", "[.][sleepcost]") {
         sleepers,
         stepUs,
         perSleepingNs
+      );
+
+      const SceneRun forced = runScene(scene, sleepers, true);
+
+      std::printf(
+        "sleepcost scene %s bodies %u forced_full_step_us %.2f\n",
+        sceneName(scene),
+        sleepers,
+        forced.median[phaseCount - 1]
       );
 
       if (sleepers != 20000u) {

@@ -8,6 +8,7 @@
 #include <talus/dynamics/edits/edits.h>
 #include <talus/dynamics/joints/jointedits.h>
 #include <talus/dynamics/pipeline/pipeline.h>
+#include <talus/dynamics/softstep/simdwidth.h>
 #include <talus/dynamics/tiers/tiers.h>
 #include <talus/field/sampledsdf/sampledsdf.h>
 #include <talus/material.h>
@@ -833,6 +834,29 @@ void forceFullStep(World& world) {
   world.bodies.layout += 1u;
 }
 
+struct Lanes {
+  uint32_t workers;
+  uint32_t width;
+};
+
+std::vector<Lanes> twinLanes() {
+  std::vector<Lanes> lanes{{1u, 0u}, {8u, 4u}};
+
+  lanes.push_back({4u, hasAvx2() ? 8u : 1u});
+
+  return lanes;
+}
+
+StepReport stepCounting(World& world, uint32_t& sparse) {
+  const bool listed = walksAwakeOnly(world);
+  const uint64_t layout = world.bodies.layout;
+  const StepReport report = step(world);
+
+  sparse += listed && world.bodies.layout == layout ? 1u : 0u;
+
+  return report;
+}
+
 bool sameBits(double a, double b) {
   return std::bit_cast<uint64_t>(a) == std::bit_cast<uint64_t>(b);
 }
@@ -1299,31 +1323,35 @@ TEST_CASE(
   "through every kind of edit",
   "[dynamics][awake]"
 ) {
-  World walked;
-  World full;
-  Yard walkedYard = buildYard(walked);
-  Yard fullYard = buildYard(full);
-  Dice walkedDice;
-  Dice fullDice;
-  uint32_t sparse = 0u;
-  constexpr uint32_t frames = 2000u;
+  for (const Lanes& lanes : twinLanes()) {
+    CAPTURE(lanes.workers, lanes.width);
+    World walked;
+    World full;
+    walked.workerCount = full.workerCount = lanes.workers;
+    walked.simdWidth = full.simdWidth = lanes.width;
+    Yard walkedYard = buildYard(walked);
+    Yard fullYard = buildYard(full);
+    Dice walkedDice;
+    Dice fullDice;
+    uint32_t sparse = 0u;
+    constexpr uint32_t frames = 2000u;
 
-  for (uint32_t frame = 0u; frame != frames; ++frame) {
-    CAPTURE(frame);
-    editYard(walked, walkedYard, walkedDice, frame);
-    editYard(full, fullYard, fullDice, frame);
-    forceFullStep(full);
-    sparse += walksAwakeOnly(walked) ? 1u : 0u;
+    for (uint32_t frame = 0u; frame != frames; ++frame) {
+      CAPTURE(frame);
+      editYard(walked, walkedYard, walkedDice, frame);
+      editYard(full, fullYard, fullDice, frame);
+      forceFullStep(full);
 
-    const StepReport fromList = step(walked);
-    const StepReport fromAll = step(full);
+      const StepReport fromList = stepCounting(walked, sparse);
+      const StepReport fromAll = step(full);
 
-    requireSameReport(fromList, fromAll);
-    requireSameBodies(walked, full);
+      requireSameReport(fromList, fromAll);
+      requireSameBodies(walked, full);
+    }
+
+    CAPTURE(sparse);
+    REQUIRE(2u * sparse > frames);
   }
-
-  CAPTURE(sparse);
-  CHECK(2u * sparse > frames);
 }
 
 TEST_CASE(
@@ -1332,36 +1360,40 @@ TEST_CASE(
   "zero-mass compounds",
   "[dynamics][awake]"
 ) {
-  World walked;
-  World full;
-  Bench walkedBench = buildBench(walked);
-  Bench fullBench = buildBench(full);
-  uint32_t sparse = 0u;
-  uint32_t thawed = 0u;
-  constexpr uint32_t frames = 720u;
+  for (const Lanes& lanes : twinLanes()) {
+    CAPTURE(lanes.workers, lanes.width);
+    World walked;
+    World full;
+    walked.workerCount = full.workerCount = lanes.workers;
+    walked.simdWidth = full.simdWidth = lanes.width;
+    Bench walkedBench = buildBench(walked);
+    Bench fullBench = buildBench(full);
+    uint32_t sparse = 0u;
+    uint32_t thawed = 0u;
+    constexpr uint32_t frames = 720u;
 
-  for (uint32_t frame = 0u; frame != frames; ++frame) {
-    CAPTURE(frame);
-    editBench(walked, walkedBench, frame);
-    editBench(full, fullBench, frame);
-    forceFullStep(full);
-    sparse += walksAwakeOnly(walked) ? 1u : 0u;
+    for (uint32_t frame = 0u; frame != frames; ++frame) {
+      CAPTURE(frame);
+      editBench(walked, walkedBench, frame);
+      editBench(full, fullBench, frame);
+      forceFullStep(full);
 
-    const StepReport fromList = step(walked);
-    const StepReport fromAll = step(full);
+      const StepReport fromList = stepCounting(walked, sparse);
+      const StepReport fromAll = step(full);
 
-    REQUIRE_FALSE(fromList.nonFinite);
-    requireSameReport(fromList, fromAll);
-    requireSameBodies(walked, full);
-    thawed += fromList.thawed;
+      REQUIRE_FALSE(fromList.nonFinite);
+      requireSameReport(fromList, fromAll);
+      requireSameBodies(walked, full);
+      thawed += fromList.thawed;
+    }
+
+    CAPTURE(sparse, thawed);
+    REQUIRE(2u * sparse > frames);
+    CHECK(thawed >= 1u);
+    CHECK_FALSE(
+      isFrozen(walked.bodies.rigids[indexOf(walked, walkedBench.pressed)])
+    );
   }
-
-  CAPTURE(sparse, thawed);
-  CHECK(2u * sparse > frames);
-  CHECK(thawed >= 1u);
-  CHECK_FALSE(
-    isFrozen(walked.bodies.rigids[indexOf(walked, walkedBench.pressed)])
-  );
 }
 
 TEST_CASE(

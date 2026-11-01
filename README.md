@@ -317,9 +317,13 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
 - A character spawned exactly at its rest height misses the ground with its
   first in-air ray.
 - `world.islands` lists only islands with an awake body or a lattice.
-- A step after a body removal, a tier switch or a contact-band change visits
-  every body: about 1.4 ms among 20,000 sleeping bodies on the Ryzen 7 7840HS
-  laptop.
+- A step after a body removal, a lattice added or removed, a tier switch, a
+  contact reset (`resetContacts`) or a contact-band change visits every body.
+  That step costs about 1.4 ms among 20,000 sleeping bodies on the Ryzen 7
+  7840HS laptop.
+- A world that holds any lattice body still copies every rigid body's velocity
+  each step and visits every lattice island. Sleeping rigid bodies are not free
+  there.
 
 ## Repository layout
 

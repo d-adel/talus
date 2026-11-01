@@ -2058,17 +2058,17 @@ TEST_CASE(
     const talus::dynamics::AwakeList& awake = walked->world.awake;
     const talus::dynamics::IntegrationParameters& parameters =
       walked->world.parameters;
-
-    sparse +=
-      awake.layout == walked->world.bodies.layout
-          && awake.latticeCount == walked->world.bodies.lattices.size()
-          && awake.rigidCount <= walked->world.bodies.rigids.size()
-          && awake.band == parameters.speculativeDistance + parameters.margin
-        ? 1u
-        : 0u;
+    const uint64_t layout = walked->world.bodies.layout;
+    const bool listed =
+      awake.layout == layout
+      && awake.latticeCount == walked->world.bodies.lattices.size()
+      && awake.rigidCount <= walked->world.bodies.rigids.size()
+      && awake.band == parameters.speculativeDistance + parameters.margin;
 
     const DestructionReport fromList = visitStep(*walked);
     const DestructionReport fromAll = visitStep(*full);
+
+    sparse += listed && walked->world.bodies.layout == layout ? 1u : 0u;
 
     INFO("step " << step);
     REQUIRE(destructionfixture::sameOutcome(fromList, fromAll));
