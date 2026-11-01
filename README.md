@@ -198,7 +198,9 @@ const MeshFrame pose = meshFrame(world.dynamics.bodies.rigids[ref.index]);
 ```
 
 - The mesh must be closed: each edge is shared by two faces in opposite
-  directions. Either winding direction works. Shells must not overlap.
+  directions. The check uses vertex indices, so weld a mesh that is split at
+  UV or normal seams by position first. Either winding direction works.
+  Shells must not overlap.
   `meshShape` compares the volume enclosed by the triangles with the volume of
   the baked field and refuses a difference above area × voxel / 2, which
   overlapping shells, and shells nested with the same winding, produce. It
@@ -213,7 +215,10 @@ const MeshFrame pose = meshFrame(world.dynamics.bodies.rigids[ref.index]);
   1.3 times that on curved or tilted faces. A small mesh uses a finer spacing
   and gets at least about 24.
   `voxel` is the field's lattice spacing. With 0, it is the mesh's thinnest
-  extent / 12, at most 1 cm and at least 4 mm.
+  extent / 12, at most 1 cm and at least 4 mm. A part thinner than about one
+  voxel may hold no lattice point and then has no collision. A body holds at
+  most 262,144 contact points (the width of a contact key); `meshShape`
+  refuses more.
 - `addMeshBody` puts the mesh's own frame at the given pose and returns the
   body ID, not an index. `findBody` in `<talus/dynamics/tiers/tiers.h>` gives
   the current index. The body's position is its centre of mass. `meshFrame`
@@ -222,25 +227,19 @@ const MeshFrame pose = meshFrame(world.dynamics.bodies.rigids[ref.index]);
 - Bodies borrow the shape's field. Keep the `MeshShape` alive while any body
   uses it. Many bodies can share one shape.
 - Pass `Workers` from `resolveWorkers` to bake on several threads. The result
-  is identical to a serial bake. Bake at load, not during play.
-- Each touching point is its own contact and its own constraint. A 1 m flat
-  mesh body sliding on one box at 2 cm spacing has about 2,900 contacts and
-  costs about 2.2 to 2.4 ms per step, about 0.1 ms of it contact bookkeeping
-  (Ryzen 7 7840HS laptop, MSVC Release, one worker). Use a coarser `spacing`
-  for large flat bodies.
-- Two curved field bodies in wide contact cost more bookkeeping, because each
-  contact keeps its own normal: a mesh ball spinning in a field bowl with
-  3,700 contacts spends about 1.5 ms per step on it.
-- Two field bodies whose bounds overlap probe each other's points that lie
-  near the other's field, every step, even when they do not touch. Bodies
-  joined by a joint are not tested unless the joint sets `collideConnected`;
-  a joint that only excludes a pair still costs about 0.7 µs per step.
-- Four standing characters of 12 mesh boxes each, with feet at 4 cm, body and
-  head at 3 cm and limbs at 2 cm spacing, cost about 2.5 ms per step on the
-  same laptop when every unjointed part pair except head against arm or hand
-  is excluded, and 3.0 ms when 11 pairs are excluded. At 2 cm everywhere they
-  cost 5.1 to 6.1 ms. Built from box compounds they cost 0.23 to 0.32 ms
-  (`[.][meshbodycost]`).
+  is identical to a serial bake. Bake at load, not during play. A scheduler
+  runs one caller at a time: to bake while a world steps, give the bake its
+  own scheduler, not the world's.
+- Each touching point is its own contact and its own constraint, so a body's
+  cost grows with its touching points: about 0.8 µs per contact per step on
+  one worker of a Ryzen 7 7840HS laptop (MSVC Release) for a flat body sliding
+  on a box. Two curved field bodies sliding in wide contact add about 0.3 to
+  0.4 µs per contact. Use a coarser `spacing` for large bodies.
+  `[.][fillcost]` and `[.][meshbodycost]` measure these costs.
+- Two field bodies whose bounds overlap probe each other's points near the
+  other's field every step, even when they do not touch. Jointed bodies are not
+  tested unless the joint sets `collideConnected`; a joint used only to
+  exclude a pair costs about 0.7 µs per step.
 - Field bodies meet boxes both ways. The body's points push on boxes and
   compound children, and the outer edges and corners of a box push on the
   field.
@@ -400,10 +399,14 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
 - A sharp box edge that crosses a field body away from the box's corners and
   edge midpoints sinks about half the point spacing into the field face: 10 mm
   measured at the default 2 cm spacing.
-- Field bodies have no continuous collision against other moving bodies. A
-  fast, thin part can pass through another moving body in one step.
-- Flush seams between separate box bodies bump a sliding field body by about
-  3.6 mm.
+- No body, of any shape, has continuous collision against another moving
+  body. A fast, thin field part can pass through another moving body in one
+  step.
+- Flush seams between boxes can catch a field body sliding across them. At
+  0.3 to 1 m/s without friction, a 0.3 m mesh slab stops at the seam between
+  two box bodies and at the seam between two children of one compound; a
+  10 cm mesh ball hops about 10 mm and slows to 0.14 m/s at the seam between
+  two box bodies at 1 m/s, and stops there at 0.3 m/s.
 - A field body resting on a static field, such as a heightfield, sinks about
   14 mm into it.
 - Small round field bodies sag 1 to 3 mm between contact points at 2 cm
