@@ -839,7 +839,7 @@ TEST_CASE("step cost of a mesh character turning on a kerb", "[.][turncost]") {
     double betweenParts = 0.0;
     uint32_t worstStored = 0u;
     uint32_t activeAtWorst = 0u;
-    StepReport slowest;
+    StepReport slowest{};
   };
 
   for (const std::vector<std::array<uint32_t, 2>>* filters :
