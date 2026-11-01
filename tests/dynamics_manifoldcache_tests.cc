@@ -9,6 +9,7 @@
 #include <talus/dynamics/narrowphase/narrowphase.h>
 #include <talus/dynamics/pipeline/pipeline.h>
 #include <talus/dynamics/scheduler/scheduler.h>
+#include <talus/dynamics/softstep/simdwidth.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -328,26 +329,108 @@ BodySet twoBoxes() {
   return bodies;
 }
 
-void addSlab(
-  World& world,
-  const glm::vec3& half,
-  double mass,
-  double friction,
-  const glm::dvec3& at,
-  const glm::dquat& turn,
-  const glm::dvec3& velocity,
-  std::vector<MeshShape>& shapes
-) {
-  const Threads threads;
-  const Mesh mesh = meshfixture::box(-half, half);
-  MeshShapeSettings settings;
+struct Slab {
+  glm::vec3 half{0.0f};
+  double mass = 0.0;
+  double friction = 0.0;
+  glm::dvec3 at{0.0};
+  glm::dquat turn{1.0, 0.0, 0.0, 0.0};
+  glm::dvec3 velocity{0.0};
+};
 
-  settings.mass = mass;
-  settings.friction = friction;
-  shapes.push_back(
-    meshShape(mesh.vertices, mesh.indices, settings, threads.workers)
+std::array<Slab, 3> slabs() {
+  return {
+    Slab{
+      {0.2f, 0.04f, 0.2f},
+      40.0,
+      0.0,
+      {-1.2, 0.04, 0.0},
+      noTurn,
+      {1.0, 0.0, 0.0}
+    },
+    Slab{
+      {0.4f, 0.05f, 0.4f},
+      300.0,
+      0.5,
+      {0.8, 0.05, 0.0},
+      noTurn,
+      {0.0, 0.0, 0.0}
+    },
+    Slab{
+      {0.15f, 0.04f, 0.15f},
+      10.0,
+      0.02,
+      {0.6, 0.141, 0.1},
+      glm::angleAxis(0.3, glm::dvec3(0.0, 1.0, 0.0)),
+      {0.5, 0.0, -0.2}
+    }
+  };
+}
+
+const std::array<MeshShape, 3>& slabShapes() {
+  static const std::array<MeshShape, 3> shapes = [] {
+    const Threads threads;
+    std::array<MeshShape, 3> made;
+
+    for (size_t index = 0u; index != made.size(); ++index) {
+      const Slab slab = slabs()[index];
+      const Mesh mesh = meshfixture::box(-slab.half, slab.half);
+      MeshShapeSettings settings;
+
+      settings.mass = slab.mass;
+      settings.friction = slab.friction;
+      made[index] =
+        meshShape(mesh.vertices, mesh.indices, settings, threads.workers);
+    }
+
+    return made;
+  }();
+
+  return shapes;
+}
+
+void addSlidingSlabs(World& world) {
+  CompoundChild floor;
+
+  floor.half = glm::dvec3(3.0, 0.5, 3.0);
+  floor.density = 1000.0;
+  (void)addCompoundBody(
+    world.bodies,
+    std::vector<CompoundChild>{floor},
+    glm::dvec3(0.0, -0.5, 0.0),
+    noTurn,
+    glm::dvec3(0.0),
+    0.5,
+    0.0,
+    true
   );
-  (void)addMeshBody(world.bodies, shapes.back(), at, turn, velocity);
+
+  for (size_t index = 0u; index != slabs().size(); ++index) {
+    const Slab slab = slabs()[index];
+
+    (void)addMeshBody(
+      world.bodies,
+      slabShapes()[index],
+      slab.at,
+      slab.turn,
+      slab.velocity
+    );
+  }
+}
+
+uint32_t largestPair(const World& world) {
+  uint32_t largest = 0u;
+
+  for (uint32_t slot = 0u; slot != world.manifolds.size(); ++slot) {
+    if (world.manifolds.live(slot)) {
+      largest = std::max(
+        largest,
+        static_cast<uint32_t>(world.manifolds.at(slot).points.size())
+      );
+    }
+  }
+
+  return largest;
 }
 
 }
@@ -410,52 +493,9 @@ TEST_CASE(
   "ones",
   "[dynamics][manifoldcache]"
 ) {
-  std::vector<MeshShape> shapes;
   World world;
-  CompoundChild floor;
 
-  floor.half = glm::dvec3(3.0, 0.5, 3.0);
-  floor.density = 1000.0;
-  (void)addCompoundBody(
-    world.bodies,
-    std::vector<CompoundChild>{floor},
-    glm::dvec3(0.0, -0.5, 0.0),
-    noTurn,
-    glm::dvec3(0.0),
-    0.5,
-    0.0,
-    true
-  );
-  addSlab(
-    world,
-    {0.2f, 0.04f, 0.2f},
-    40.0,
-    0.0,
-    {-1.2, 0.04, 0.0},
-    noTurn,
-    {1.0, 0.0, 0.0},
-    shapes
-  );
-  addSlab(
-    world,
-    {0.4f, 0.05f, 0.4f},
-    300.0,
-    0.5,
-    {0.8, 0.05, 0.0},
-    noTurn,
-    {0.0, 0.0, 0.0},
-    shapes
-  );
-  addSlab(
-    world,
-    {0.15f, 0.04f, 0.15f},
-    10.0,
-    0.02,
-    {0.6, 0.141, 0.1},
-    glm::angleAxis(0.3, glm::dvec3(0.0, 1.0, 0.0)),
-    {0.5, 0.0, -0.2},
-    shapes
-  );
+  addSlidingSlabs(world);
 
   std::mt19937_64 random(7u);
   ManifoldCache replay;
@@ -503,4 +543,58 @@ TEST_CASE(
   CAPTURE(compared, largest);
   CHECK(compared >= 80u);
   CHECK(largest > 300u);
+}
+
+TEST_CASE(
+  "sliding mesh bodies step identically across workers and widths",
+  "[dynamics][manifoldcache]"
+) {
+  const auto run = [](uint32_t workers, uint32_t width) {
+    World world;
+    uint32_t largest = 0u;
+
+    world.workerCount = workers;
+    world.simdWidth = width;
+    addSlidingSlabs(world);
+
+    for (uint32_t frame = 0u; frame != 30u; ++frame) {
+      REQUIRE_FALSE(step(world).nonFinite);
+      largest = std::max(largest, largestPair(world));
+    }
+
+    return std::pair{world.bodies.rigids, largest};
+  };
+  const auto [serial, largest] = run(1u, 1u);
+
+  CAPTURE(largest);
+  REQUIRE(largest > 300u);
+
+  std::vector<uint32_t> widths{1u, 4u};
+
+  if (hasAvx2()) {
+    widths.push_back(8u);
+  }
+
+  for (const uint32_t workers : {1u, 4u, 8u}) {
+    for (const uint32_t width : widths) {
+      CAPTURE(workers, width);
+
+      const std::vector<RigidBody> bodies = run(workers, width).first;
+
+      REQUIRE(bodies.size() == serial.size());
+
+      for (size_t index = 0u; index != serial.size(); ++index) {
+        CAPTURE(index);
+        CHECK(sameBits(bodies[index].position, serial[index].position));
+        CHECK(sameBits(bodies[index].velocity, serial[index].velocity));
+        CHECK(
+          sameBits(bodies[index].angularVelocity, serial[index].angularVelocity)
+        );
+        CHECK(sameBits(bodies[index].rotation.x, serial[index].rotation.x));
+        CHECK(sameBits(bodies[index].rotation.y, serial[index].rotation.y));
+        CHECK(sameBits(bodies[index].rotation.z, serial[index].rotation.z));
+        CHECK(sameBits(bodies[index].rotation.w, serial[index].rotation.w));
+      }
+    }
+  }
 }
