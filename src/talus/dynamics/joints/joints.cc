@@ -61,6 +61,14 @@ uint32_t JointRecords::add(JointSet& joints, const JointDef& def) {
   Joint joint;
   joint.id = joints.nextId_++;
   joint.def = def;
+
+  if (def.kind == JointKind::Pogo) {
+    joint.impulses.pogo = def.pogo.force;
+    joint.impulses.pogoSpeed = def.pogo.speed;
+    joint.report.pogoForce = def.pogo.force;
+    joint.report.pogoSpeed = def.pogo.speed;
+  }
+
   joints.joints_.push_back(joint);
   joints.holdPair(def);
 

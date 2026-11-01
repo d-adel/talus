@@ -87,13 +87,33 @@ bool validSpring(const SpringSettings& spring) {
          && validGain(spring.angularDamping) && validCap(spring.maxTorque);
 }
 
+bool validPlanar(const PlanarVelocitySettings& planar) {
+  return finite(planar.targetVelocity) && validCap(planar.maxForce);
+}
+
+bool validPogo(const PogoSettings& pogo) {
+  const double length = glm::length(pogo.normal);
+
+  return finite(pogo.normal) && finite(length) && length > 1e-12
+         && validGain(pogo.restLength) && validGain(pogo.hertz)
+         && validGain(pogo.dampingRatio) && validCap(pogo.maxTension)
+         && validCap(pogo.maxCompression) && finite(pogo.force)
+         && finite(pogo.speed);
+}
+
+bool validCollision(const JointDef& def) {
+  return (def.kind != JointKind::PlanarVelocity && def.kind != JointKind::Pogo)
+         || def.collideConnected;
+}
+
 bool validDef(const JointDef& def) {
-  return def.kind <= JointKind::Spring && validFrame(def.frameA) && validFrame(def.frameB)
+  return def.kind <= JointKind::Pogo && validFrame(def.frameA) && validFrame(def.frameB)
     && finite(def.hertz) && def.hertz > 0.0 && finite(def.dampingRatio)
     && def.dampingRatio >= 0.0 && finite(def.hinge.lower) && finite(def.hinge.upper)
     && (!def.hinge.enabled
         || (def.hinge.lower <= def.hinge.upper && withinTurn(def.hinge.lower, 0.99) && withinTurn(def.hinge.upper, 0.99)))
-    && validCone(def.cone) && validDrive(def.drive) && validSpring(def.spring);
+    && validCone(def.cone) && validDrive(def.drive) && validSpring(def.spring)
+    && validPlanar(def.planar) && validPogo(def.pogo) && validCollision(def);
 }
 
 JointFrame normalised(const JointFrame& frame) {
@@ -104,9 +124,33 @@ JointFrame normalised(const JointFrame& frame) {
 }
 
 bool resolves(const World& world, uint32_t id) {
-  const std::optional<BodyRef> ref = findBody(world.bodies, id);
+  const std::optional<BodyRef> ref = locateBody(world, id);
 
   return ref && ref->side == Side::Rigid;
+}
+
+bool heavy(const World& world, uint32_t id) {
+  if (id == noBody) {
+    return false;
+  }
+
+  const std::optional<BodyRef> ref = locateBody(world, id);
+
+  return ref && ref->side == Side::Rigid
+         && world.bodies.rigids[ref->index].mass > 0.0;
+}
+
+bool standsOn(const World& world, const JointDef& def) {
+  if (def.kind != JointKind::Pogo) {
+    return true;
+  }
+
+  const RigidBody& body =
+    world.bodies.rigids[locateBody(world, def.bodyB)->index];
+  const glm::dvec3 axis =
+    body.rotation * def.frameB.rotation * glm::dvec3(0.0, 1.0, 0.0);
+
+  return glm::dot(def.pogo.normal, axis) >= pogoSteepestCosine;
 }
 
 void wakeJointBodies(World& world, const JointDef& def) {
@@ -115,7 +159,7 @@ void wakeJointBodies(World& world, const JointDef& def) {
       continue;
     }
 
-    if (const std::optional<BodyRef> ref = findBody(world.bodies, id)) {
+    if (const std::optional<BodyRef> ref = locateBody(world, id)) {
       wakeBody(world.bodies, *ref);
     }
   }
@@ -194,6 +238,12 @@ uint32_t addJoint(World& world, const JointDef& def) {
   stored.frameA = normalised(def.frameA);
   stored.frameB = normalised(def.frameB);
   stored.spring.target = normalised(def.spring.target);
+  stored.pogo.normal = glm::normalize(def.pogo.normal);
+
+  if (!standsOn(world, stored)) {
+    return 0u;
+  }
+
   wakeJointBodies(world, stored);
 
   if (excludesPair(stored)) {
@@ -211,12 +261,13 @@ bool removeJoint(World& world, uint32_t joint) {
   }
 
   const JointDef def = found->def;
+  const bool linksIslands = heavy(world, def.bodyA) && heavy(world, def.bodyB);
 
   dropJoint(world, joint, def);
 
-  if (def.bodyA != noBody) {
+  if (linksIslands) {
     world.islandStore.markRemoved(def.bodyB);
-    world.islandStore.requestSplit(def.bodyB);
+    world.islandStore.offerSplit(def.bodyB);
   }
 
   return true;
@@ -261,6 +312,58 @@ bool setSpringSettings(
 
   found->def.spring = spring;
   found->def.spring.target = normalised(spring.target);
+  wakeJointBodies(world, found->def);
+
+  return true;
+}
+
+bool setPlanarVelocity(
+  World& world,
+  uint32_t joint,
+  const PlanarVelocitySettings& planar
+) {
+  Joint* found = JointRecords::find(world.joints, joint);
+
+  if (found == nullptr || found->def.kind != JointKind::PlanarVelocity
+      || !validPlanar(planar)) {
+    return false;
+  }
+
+  found->def.planar = planar;
+  wakeJointBodies(world, found->def);
+
+  return true;
+}
+
+bool setPogo(
+  World& world,
+  uint32_t joint,
+  const JointFrame& frameA,
+  const JointFrame& frameB,
+  const PogoSettings& pogo
+) {
+  Joint* found = JointRecords::find(world.joints, joint);
+
+  if (found == nullptr || found->def.kind != JointKind::Pogo
+      || !validFrame(frameA) || !validFrame(frameB) || !validPogo(pogo)) {
+    return false;
+  }
+
+  JointDef edited = found->def;
+  edited.frameA = normalised(frameA);
+  edited.frameB = normalised(frameB);
+  edited.pogo = pogo;
+  edited.pogo.normal = glm::normalize(pogo.normal);
+
+  if (!standsOn(world, edited)) {
+    return false;
+  }
+
+  found->def = edited;
+  found->impulses.pogo = pogo.force;
+  found->impulses.pogoSpeed = pogo.speed;
+  found->report.pogoForce = pogo.force;
+  found->report.pogoSpeed = pogo.speed;
   wakeJointBodies(world, found->def);
 
   return true;
@@ -329,7 +432,7 @@ void rebaseJoints(
   }
 
   if (split != noBody) {
-    world.islandStore.requestSplit(split);
+    world.islandStore.offerSplit(split);
   }
 }
 

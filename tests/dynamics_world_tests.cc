@@ -838,6 +838,122 @@ TEST_CASE(
 }
 
 TEST_CASE(
+  "a sleeping box touched by a moving mass-0 body wakes and is pushed",
+  "[dynamics][world][sleep]"
+) {
+  const talus::field::SampledSdf crate = boxField(glm::dvec3(0.05), 0.01);
+  const talus::field::SampledSdf floor = floorField();
+  talus::dynamics::World world;
+
+  talus::dynamics::addStatic(world.bodies, floor, 0.5);
+
+  const uint32_t box = addCrate(world, crate, glm::dvec3(0.0, 0.15, 0.0));
+
+  uint32_t settle = 0u;
+
+  while (settle != 300u && !rigidOf(world, box).asleep) {
+    REQUIRE(!talus::dynamics::step(world).nonFinite);
+    ++settle;
+  }
+
+  REQUIRE(rigidOf(world, box).asleep);
+
+  const uint32_t index = talus::dynamics::addRigidBox(
+    world.bodies,
+    crate,
+    glm::dvec3(0.05),
+    0.0,
+    glm::dvec3(-0.3, 0.15, 0.0),
+    glm::dvec3(1.0, 0.0, 0.0),
+    0.5,
+    3u
+  );
+  const uint32_t pusher = world.bodies.rigids[index].id;
+  bool awakeByFrame30 = false;
+  double deepestOverlap = 0.0;
+
+  for (uint32_t frame = 1u; frame <= 60u; ++frame) {
+    REQUIRE(!talus::dynamics::step(world).nonFinite);
+
+    if (frame == 30u) {
+      awakeByFrame30 = !rigidOf(world, box).asleep;
+    }
+
+    const double gap =
+      rigidOf(world, box).position.x - rigidOf(world, pusher).position.x - 0.1;
+
+    deepestOverlap = std::max(deepestOverlap, -gap);
+  }
+
+  CHECK(awakeByFrame30);
+  CHECK(rigidOf(world, box).position.x >= 0.2);
+  CHECK(deepestOverlap <= world.parameters.speculativeDistance);
+}
+
+TEST_CASE(
+  "a sleeping lattice block touched by a moving mass-0 body wakes and is "
+  "pushed",
+  "[dynamics][world][sleep]"
+) {
+  const std::vector<talus::PhysicalMaterial> lanes{rubber()};
+  talus::field::SampledSdf blockField;
+  const auto mesh = latticeBlock(glm::dvec3(0.05), 0.025, lanes, blockField);
+  const talus::field::SampledSdf crate = boxField(glm::dvec3(0.05), 0.01);
+  const talus::field::SampledSdf floor = floorField();
+  talus::dynamics::World world;
+
+  talus::dynamics::addStatic(world.bodies, floor, 0.5);
+  talus::dynamics::addLattice(
+    world.bodies,
+    mesh,
+    lanes,
+    glm::dvec3(0.0, 0.151, 0.0),
+    glm::dvec3(0.0),
+    0.5
+  );
+
+  uint32_t settle = 0u;
+
+  while (settle != 300u && !world.bodies.lattices.front().asleep) {
+    REQUIRE(!talus::dynamics::step(world).nonFinite);
+    ++settle;
+  }
+
+  REQUIRE(world.bodies.lattices.front().asleep);
+
+  const uint32_t index = talus::dynamics::addRigidBox(
+    world.bodies,
+    crate,
+    glm::dvec3(0.05),
+    0.0,
+    glm::dvec3(-0.3, 0.15, 0.0),
+    glm::dvec3(1.0, 0.0, 0.0),
+    0.5,
+    3u
+  );
+  const uint32_t pusher = world.bodies.rigids[index].id;
+  bool awakeByFrame30 = false;
+  double deepestOverlap = 0.0;
+
+  for (uint32_t frame = 1u; frame <= 60u; ++frame) {
+    REQUIRE(!talus::dynamics::step(world).nonFinite);
+
+    if (frame == 30u) {
+      awakeByFrame30 = !world.bodies.lattices.front().asleep;
+    }
+
+    const double gap = latticeCentre(world.bodies.lattices.front()).x
+                       - rigidOf(world, pusher).position.x - 0.1;
+
+    deepestOverlap = std::max(deepestOverlap, -gap);
+  }
+
+  CHECK(awakeByFrame30);
+  CHECK(latticeCentre(world.bodies.lattices.front()).x >= 0.2);
+  CHECK(deepestOverlap <= world.parameters.speculativeDistance);
+}
+
+TEST_CASE(
   "a glass pane box under a steel block box on a sloped zero-mass box ledge does not turn under it",
   "[dynamics][world][sleep]"
 ) {

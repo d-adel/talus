@@ -61,6 +61,25 @@ public:
   void markMoved(uint32_t id);
   void rebuildTrees();
 
+  template<typename Visit>
+  void rayQuery(
+    const glm::dvec3& from,
+    const glm::dvec3& to,
+    Visit&& visit
+  ) const {
+    double clip = 1.0;
+
+    clip =
+      m_fixedTree.rayQuery(from, to, clip, [&visit](uint32_t id, double at) {
+        return visit(true, id, at);
+      });
+    m_movingTree.rayQuery(from, to, clip, [&visit](uint32_t id, double at) {
+      return visit(false, id, at);
+    });
+  }
+
+  [[nodiscard]] uint32_t seenBodies() const;
+  [[nodiscard]] uint32_t seenStatics() const;
   [[nodiscard]] std::span<const BodyPair> created() const;
   [[nodiscard]] std::span<const BodyPair> latticePairs() const;
   [[nodiscard]] std::span<const uint32_t> changedProxies() const;

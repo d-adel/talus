@@ -535,6 +535,14 @@ void BroadPhase::rebuildTrees() {
   m_fixedTree.rebuild();
 }
 
+uint32_t BroadPhase::seenBodies() const {
+  return static_cast<uint32_t>(m_moving.size());
+}
+
+uint32_t BroadPhase::seenStatics() const {
+  return static_cast<uint32_t>(m_fixed.size());
+}
+
 void BroadPhase::markMoved(uint32_t id) {
   if (id < m_moving.size()) {
     m_moving[id].forced = true;

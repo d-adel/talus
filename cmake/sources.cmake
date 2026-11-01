@@ -37,6 +37,7 @@ set(TALUS_SOURCES
     src/talus/dynamics/pipeline/pipeline.cc
     src/talus/dynamics/projection/projection.cc
     src/talus/dynamics/rays/rays.cc
+    src/talus/dynamics/rays/worldray.cc
     src/talus/dynamics/resolution/resolution.cc
     src/talus/dynamics/scheduler/scheduler.cc
     src/talus/dynamics/screen/screen.cc

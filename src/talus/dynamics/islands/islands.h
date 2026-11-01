@@ -63,6 +63,7 @@ public:
     const JointSet& joints
   );
   void requestSplit(uint32_t id);
+  void offerSplit(uint32_t id);
   [[nodiscard]] uint32_t takeSplit();
   [[nodiscard]] uint32_t pendingSplit() const;
 

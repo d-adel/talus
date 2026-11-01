@@ -19,7 +19,15 @@ from [Box3D](https://github.com/erincatto/box3d) by Erin Catto, at commit
 5d83df83ab47172c2c745b44315e7538ead02397. It follows Box3D's soft constraint
 softness (`b3MakeSoft` in `src/solver.h`) and its joint solvers in
 `src/joint.c`, `src/spherical_joint.c`, `src/revolute_joint.c` and
-`src/motor_joint.c`. Box3D is distributed under the following license.
+`src/motor_joint.c`.
+
+The planar velocity and pogo joint rows in the same file are adapted from
+Box3D's `src/mover_joint.c` and `src/pogo_joint.c`, added in Box3D pull
+request 202, at merge commit 336263320469e5e9febfe18697ab562488f7e97a. The
+test host in `tests/fixtures/mover.cc` follows that commit's
+`samples/dynamic_mover.cpp`.
+
+Box3D is distributed under the following license.
 
 ```text
 MIT License

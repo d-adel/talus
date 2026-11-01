@@ -16,11 +16,15 @@ namespace talus::dynamics {
 
 inline constexpr double jointInfinity = std::numeric_limits<double>::infinity();
 
+inline constexpr double pogoSteepestCosine = 0.25;
+
 enum class JointKind : uint8_t {
   Ball,
   Hinge,
   SwingTwist,
-  Spring
+  Spring,
+  PlanarVelocity,
+  Pogo
 };
 
 struct JointFrame {
@@ -67,6 +71,22 @@ struct SpringSettings {
   double maxTorque = jointInfinity;
 };
 
+struct PlanarVelocitySettings {
+  glm::dvec3 targetVelocity{0.0};
+  double maxForce = 0.0;
+};
+
+struct PogoSettings {
+  glm::dvec3 normal{0.0, 1.0, 0.0};
+  double restLength = 0.0;
+  double hertz = 0.0;
+  double dampingRatio = 0.0;
+  double maxTension = 0.0;
+  double maxCompression = 0.0;
+  double force = 0.0;
+  double speed = 0.0;
+};
+
 struct JointDef {
   JointKind kind = JointKind::Ball;
   uint32_t bodyA = noBody;
@@ -80,12 +100,16 @@ struct JointDef {
   ConeLimit cone{};
   JointDrive drive{};
   SpringSettings spring{};
+  PlanarVelocitySettings planar{};
+  PogoSettings pogo{};
 };
 
 struct JointReport {
   glm::dvec3 force{0.0};
   glm::dvec3 torque{0.0};
   glm::dvec3 driveTorque{0.0};
+  double pogoForce = 0.0;
+  double pogoSpeed = 0.0;
   bool limitActive = false;
   bool driveSaturated = false;
   bool forceSaturated = false;
@@ -103,6 +127,9 @@ struct JointImpulses {
   glm::dvec3 drive{0.0};
   glm::dvec3 springLinear{0.0};
   glm::dvec3 springAngular{0.0};
+  glm::dvec2 planar{0.0};
+  double pogo = 0.0;
+  double pogoSpeed = 0.0;
 };
 
 struct Joint {

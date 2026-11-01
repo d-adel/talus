@@ -484,7 +484,7 @@ bool setRigidPose(
   const glm::dvec3& position,
   const glm::dquat& rotation
 ) {
-  const std::optional<BodyRef> ref = findBody(world.bodies, id);
+  const std::optional<BodyRef> ref = locateBody(world, id);
 
   if (!ref || ref->side != Side::Rigid) {
     return false;
@@ -508,7 +508,7 @@ bool setRigidPose(
 }
 
 bool setVelocity(World& world, uint32_t id, const glm::dvec3& velocity) {
-  const std::optional<BodyRef> ref = findBody(world.bodies, id);
+  const std::optional<BodyRef> ref = locateBody(world, id);
 
   if (!ref) {
     return false;

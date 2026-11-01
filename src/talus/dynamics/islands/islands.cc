@@ -668,6 +668,12 @@ void IslandStore::requestSplit(uint32_t id) {
   m_splitBody = id;
 }
 
+void IslandStore::offerSplit(uint32_t id) {
+  if (m_splitBody == noBody) {
+    m_splitBody = id;
+  }
+}
+
 uint32_t IslandStore::takeSplit() {
   const uint32_t id = std::exchange(m_splitBody, noBody);
 
