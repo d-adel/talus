@@ -508,14 +508,13 @@ double outsideGapBound(const SampledSdf& field, const glm::dvec3& point) {
     brickIndex(bricks, cell.base / glm::uvec3(BRICK_CELLS));
   const double lowest = field.brickMinimum[brick];
   const double steepest = field.brickLipschitz[brick];
-  const glm::dvec3 magnitude = glm::max(
-    glm::abs(glm::dvec3(field.origin)),
-    glm::abs(glm::dvec3(maximumCorner(field)))
+  const double farthest = std::max(
+    std::abs(at.clamped.x),
+    std::max(std::abs(at.clamped.y), std::abs(at.clamped.z))
   );
-  const double reach =
-    lowest + at.outside - 1.0e-9 * (1.0 + std::abs(lowest) + at.outside)
-    - 1.0e-6 * steepest
-        * (1.0 + std::max({magnitude.x, magnitude.y, magnitude.z}));
+  const double reach = lowest + at.outside
+                       - 1.0e-9 * (1.0 + std::abs(lowest) + at.outside)
+                       - 1.0e-6 * steepest * (1.0 + farthest);
   const double slope =
     std::sqrt(1.0 + steepest * steepest) * (1.0 + 1.0e-5) + 1.0e-9;
 
