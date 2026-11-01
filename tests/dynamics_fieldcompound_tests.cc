@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <numbers>
 #include <span>
 #include <vector>
 
@@ -386,6 +387,72 @@ TEST_CASE(
   CAPTURE(low, high, travelled);
   CHECK(high - low < 0.001);
   CHECK(travelled > 0.9);
+}
+
+TEST_CASE(
+  "a box edge resting on a field body is held at its edge points",
+  "[dynamics][fieldcompound]"
+) {
+  const glm::vec3 slabHalf(0.5f, 0.05f, 0.5f);
+  const talus::field::SampledSdf slab = baked(
+    {fixture::box(glm::vec3(0.0f), slabHalf)},
+    -slabHalf - glm::vec3(0.03f),
+    slabHalf + glm::vec3(0.03f),
+    0.01f
+  );
+  const glm::dvec3 barHalf(0.15, 0.02, 0.02);
+  World world;
+
+  (void)addFloor(world);
+
+  const RigidBody upright = rigidFromField(
+    slab,
+    {},
+    std::vector<talus::PhysicalMaterial>(1),
+    sampleBudget
+  );
+  const uint32_t slabIndex = addFieldBody(
+    world,
+    slab,
+    500.0,
+    glm::dvec3(0.0, 0.05, 0.0) + upright.fieldOrigin,
+    upright.fieldRotation,
+    0.5
+  );
+  const uint32_t barIndex = addCompoundBody(
+    world.bodies,
+    std::vector<CompoundChild>{part(glm::dvec3(0.0), barHalf, 0u)},
+    glm::dvec3(0.03, 0.1 + barHalf.y * std::numbers::sqrt2 + 0.002, 0.012),
+    glm::angleAxis(std::numbers::pi / 4.0, glm::dvec3(1.0, 0.0, 0.0)),
+    glm::dvec3(0.0),
+    0.5,
+    0.0,
+    false
+  );
+
+  run(world, 120u);
+
+  const RigidBody& support = world.bodies.rigids[slabIndex];
+  const glm::dquat turn =
+    support.rotation * glm::conjugate(support.fieldRotation);
+  const glm::dvec3 up = turn * glm::dvec3(0.0, 1.0, 0.0);
+  const glm::dvec3 top =
+    support.position
+    + turn * (glm::dvec3(0.0, slabHalf.y, 0.0) - support.fieldOrigin);
+  const RigidBody& bar = world.bodies.rigids[barIndex];
+  double depth = -std::numeric_limits<double>::infinity();
+
+  for (const glm::dvec3& sample :
+       childSamples(bar.compound->children.front())) {
+    depth = std::max(
+      depth,
+      glm::dot(top - (bar.position + bar.rotation * sample), up)
+    );
+  }
+
+  CAPTURE(depth, glm::length(bar.velocity));
+  CHECK(depth <= 0.002);
+  CHECK(glm::length(bar.velocity) < 0.01);
 }
 
 TEST_CASE(

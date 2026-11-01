@@ -1174,8 +1174,8 @@ TEST_CASE("a box and a ball on a compound touch only the child under them", "[dy
 }
 
 TEST_CASE(
-  "a compound on a sampled body gets one reduced manifold on its touching "
-  "children and a contact from the body's point under it",
+  "a compound on a sampled body gets a contact at each outer point of its "
+  "touching children and a contact from the body's point under it",
   "[dynamics][compound]"
 ) {
   const talus::field::SampledSdf slabField = boxShape(glm::dvec3(0.3, 0.05, 0.3));
@@ -1198,27 +1198,30 @@ TEST_CASE(
 
   const talus::dynamics::CachedBodyPair& pair = cache.at(0u);
   const std::vector<uint32_t> bottom{0u, 1u, 4u, 5u};
+  std::vector<uint32_t> expected;
   std::vector<uint32_t> touched;
   std::vector<uint32_t> under;
 
-  REQUIRE(pair.manifolds.size() == 2u);
-  REQUIRE(pair.points.size() == 5u);
+  for (const uint32_t child : bottom) {
+    expected.insert(expected.end(), 5u, child);
+  }
+
+  REQUIRE(pair.manifolds.size() == 21u);
+  REQUIRE(pair.points.size() == 21u);
   CHECK(pair.pose.valid);
 
   for (const talus::dynamics::CachedManifold& manifold : pair.manifolds) {
-    for (uint32_t index = manifold.start;
-         index != manifold.start + manifold.count;
-         ++index) {
-      const talus::dynamics::CachedManifoldPoint& point =
-        pair.manifoldPoints[index];
+    REQUIRE(manifold.count == 1u);
 
-      CHECK(point.firstChild == talus::dynamics::noChild);
-      (manifold.flipped ? touched : under).push_back(point.secondChild);
-    }
+    const talus::dynamics::CachedManifoldPoint& point =
+      pair.manifoldPoints[manifold.start];
+
+    CHECK(point.firstChild == talus::dynamics::noChild);
+    (manifold.flipped ? touched : under).push_back(point.secondChild);
   }
 
   std::sort(touched.begin(), touched.end());
-  CHECK(touched == bottom);
+  CHECK(touched == expected);
   REQUIRE(under.size() == 1u);
   CHECK(std::ranges::find(bottom, under[0]) != bottom.end());
 }

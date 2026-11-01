@@ -1443,21 +1443,12 @@ void compoundPair(
     const CachedPose pose = poseOf(a, b);
 
     compoundAgainstField(bodies, boxes, points, reach, scratch.found, contacts);
-    clock.charge(&PairTicks::narrowphase);
-
-    const uint32_t groups = groupByNormal(bodies, contacts, 0u, reach, band);
-    const size_t begin = contacts.size();
-
-    clock.charge(&PairTicks::reduce);
     fieldAgainstCompound(bodies, points, boxes, reach, scratch.found, contacts);
 
-    for (size_t index = begin; index != contacts.size(); ++index) {
-      contacts[index].manifold = groups + static_cast<uint32_t>(index - begin);
-    }
-
-    for (Contact& contact : contacts) {
-      contact.cached = pose;
-      contact.cached.separation = contact.gap;
+    for (size_t index = 0u; index != contacts.size(); ++index) {
+      contacts[index].manifold = static_cast<uint32_t>(index);
+      contacts[index].cached = pose;
+      contacts[index].cached.separation = contacts[index].gap;
     }
 
     clock.charge(&PairTicks::narrowphase);
