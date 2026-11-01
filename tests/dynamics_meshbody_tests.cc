@@ -15,7 +15,6 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
-#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -188,23 +187,28 @@ TEST_CASE(
   CHECK(std::abs(shape.body.mass - 3.0) <= 3.0e-12);
 
   const glm::dvec3 size = 2.0 * glm::dvec3(boxHalf);
-  std::array<double, 3> expected{
+  const glm::dvec3 expected(
     3.0 * (size.y * size.y + size.z * size.z) / 12.0,
     3.0 * (size.x * size.x + size.z * size.z) / 12.0,
     3.0 * (size.x * size.x + size.y * size.y) / 12.0
-  };
-  std::array<double, 3> moments{
-    shape.body.moment.x,
-    shape.body.moment.y,
-    shape.body.moment.z
-  };
+  );
 
-  std::sort(expected.begin(), expected.end());
-  std::sort(moments.begin(), moments.end());
+  for (uint32_t axis = 0u; axis != 3u; ++axis) {
+    glm::dvec3 unit(0.0);
 
-  for (size_t axis = 0u; axis != 3u; ++axis) {
-    CAPTURE(axis, moments[axis], expected[axis]);
-    CHECK(std::abs(moments[axis] - expected[axis]) <= 0.03 * expected[axis]);
+    unit[axis] = 1.0;
+
+    const glm::dvec3 along = glm::abs(shape.body.fieldRotation * unit);
+    const uint32_t side = along.x >= along.y && along.x >= along.z ? 0u
+                          : along.y >= along.z                     ? 1u
+                                                                   : 2u;
+
+    CAPTURE(axis, side, along[side], shape.body.moment[axis], expected[side]);
+    CHECK(along[side] >= 0.999);
+    CHECK(
+      std::abs(shape.body.moment[axis] - expected[side])
+      <= 0.03 * expected[side]
+    );
   }
 
   const double area =
@@ -523,4 +527,17 @@ TEST_CASE("meshShape refuses bad settings", "[dynamics][meshbody]") {
   unbounded.vertices.front().x = std::numeric_limits<float>::infinity();
   refused(unbounded, {});
   refused(Mesh{}, {});
+
+  const Mesh speck{
+    {{0.002f, 0.0f, 0.0f},
+     {0.0f, 0.002f, 0.0f},
+     {0.0f, 0.0f, 0.002f},
+     {0.002f, 0.002f, 0.002f}},
+    {0u, 1u, 2u, 0u, 3u, 1u, 0u, 2u, 3u, 1u, 3u, 2u}
+  };
+
+  for (const double value : {0.01, 0.0025}) {
+    CAPTURE(value);
+    refused(speck, with(&MeshShapeSettings::voxel, value));
+  }
 }

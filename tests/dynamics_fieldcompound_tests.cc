@@ -450,8 +450,17 @@ TEST_CASE(
     );
   }
 
-  CAPTURE(depth, glm::length(bar.velocity));
+  const glm::dquat barTurn =
+    bar.rotation * bar.compound->children.front().rotation;
+  const double sideY =
+    std::abs(glm::dot(barTurn * glm::dvec3(0.0, 1.0, 0.0), up));
+  const double sideZ =
+    std::abs(glm::dot(barTurn * glm::dvec3(0.0, 0.0, 1.0), up));
+
+  CAPTURE(depth, sideY, sideZ, glm::length(bar.velocity));
   CHECK(depth <= 0.002);
+  CHECK(sideY > 0.6);
+  CHECK(sideZ > 0.6);
   CHECK(glm::length(bar.velocity) < 0.01);
 }
 
