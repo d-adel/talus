@@ -481,6 +481,41 @@ template FieldProbeOf<float> probe<float>(
   const glm::vec3& point
 );
 
+double outsideGapBound(const SampledSdf& field, const glm::dvec3& point) {
+  const double unknown = -std::numeric_limits<double>::infinity();
+
+  if (field.resolution.x < 2u || field.resolution.y < 2u
+      || field.resolution.z < 2u) {
+    return unknown;
+  }
+
+  const GridClamp<double> at = clampToGrid(field, point);
+
+  if (!(at.outside > 0.0)) {
+    return unknown;
+  }
+
+  const glm::uvec3 bricks = brickCounts(field);
+  const size_t count = static_cast<size_t>(bricks.x) * bricks.y * bricks.z;
+
+  if (field.brickMinimum.size() != count
+      || field.brickLipschitz.size() != count) {
+    return unknown;
+  }
+
+  const LatticeCell<double> cell = locate(field, at.clamped);
+  const uint32_t brick =
+    brickIndex(bricks, cell.base / glm::uvec3(BRICK_CELLS));
+  const double lowest = field.brickMinimum[brick];
+  const double steepest = field.brickLipschitz[brick];
+  const double reach =
+    lowest + at.outside - 1.0e-9 * (1.0 + std::abs(lowest) + at.outside);
+  const double slope =
+    std::sqrt(1.0 + steepest * steepest) * (1.0 + 1.0e-5) + 1.0e-9;
+
+  return reach > 0.0 ? reach / slope : reach;
+}
+
 template FieldProbeOf<double> probe<double>(
   const SampledSdf& field,
   const glm::dvec3& point

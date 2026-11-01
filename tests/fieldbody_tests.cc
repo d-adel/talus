@@ -12,6 +12,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <vector>
 
@@ -201,4 +202,71 @@ TEST_CASE(
   CHECK(body.samples.empty());
   CHECK(body.mass > 0.0);
   CHECK(std::abs(body.friction - 0.7) <= 1.0e-6);
+}
+
+TEST_CASE(
+  "the outside gap bound never exceeds the probed gap",
+  "[dynamics][fieldbody]"
+) {
+  const glm::vec3 half(0.1f, 0.05f, 0.08f);
+  const std::vector<talus::field::SampledSdf> fields{
+    baked(
+      {fixture::box(glm::vec3(0.0f), half)},
+      -half - 0.03f,
+      half + 0.03f,
+      0.01f
+    ),
+    baked(
+      {fixture::box(glm::vec3(0.0f), half)},
+      -half + 0.02f,
+      half - 0.02f,
+      0.01f
+    ),
+    baked(
+      {fixture::sphere(glm::vec3(0.0f), 0.1f)},
+      glm::vec3(-0.104f),
+      glm::vec3(0.104f),
+      0.008f
+    )
+  };
+
+  for (size_t index = 0u; index != fields.size(); ++index) {
+    const talus::field::SampledSdf& field = fields[index];
+    const glm::dvec3 low(field.origin);
+    const glm::dvec3 high = low
+                            + glm::dvec3(field.voxelSize)
+                                * glm::dvec3(field.resolution - glm::uvec3(1u));
+    uint32_t outside = 0u;
+    uint32_t bounded = 0u;
+    double worst = std::numeric_limits<double>::infinity();
+
+    for (int x = -12; x <= 12; ++x) {
+      for (int y = -12; y <= 12; ++y) {
+        for (int z = -12; z <= 12; ++z) {
+          const glm::dvec3 at = glm::dvec3(x, y, z) / 12.0;
+          const glm::dvec3 point =
+            0.5 * (low + high) + at * (0.5 * (high - low) + glm::dvec3(0.12));
+          const talus::field::FieldProbeOf<double> probed =
+            talus::field::probe<double>(field, point);
+          const double gap = probed.distance / glm::length(probed.gradient);
+          const double bound = talus::field::outsideGapBound(field, point);
+          const bool beyond = glm::any(glm::lessThan(point, low))
+                              || glm::any(glm::greaterThan(point, high));
+
+          outside += beyond ? 1u : 0u;
+          bounded += bound >= 0.02 ? 1u : 0u;
+          worst = std::min(worst, gap - bound);
+
+          if (!beyond) {
+            CHECK(bound == -std::numeric_limits<double>::infinity());
+          }
+        }
+      }
+    }
+
+    CAPTURE(index, outside, bounded, worst);
+    CHECK(worst >= 0.0);
+    CHECK(outside > 10000u);
+    CHECK(bounded > outside / 4u);
+  }
 }

@@ -124,6 +124,10 @@ bool fieldHit(
   double band,
   Hit& hit
 ) {
+  if (field::outsideGapBound(field, point) >= band) {
+    return false;
+  }
+
   const field::FieldProbeOf<double> probed = field::probe<double>(field, point);
   const double slope = glm::length(probed.gradient);
 
@@ -315,31 +319,47 @@ void pointsAgainst(
 ) {
   const double friction =
     std::sqrt(frictionOf(bodies, points) * frictionOf(bodies, field));
+  thread_local std::vector<glm::dvec3> positions;
   std::vector<std::pair<ContactSide, glm::dvec3>> sources;
+
+  positions.clear();
 
   if (points.side == Side::Lattice) {
     latticeSources(bodies.lattices[points.index], points.index, sources);
+
+    for (const auto& [side, position] : sources) {
+      positions.push_back(position);
+    }
   } else {
     const RigidBody& body = bodies.rigids[points.index];
     const glm::dmat3 turn = glm::mat3_cast(body.rotation);
 
     for (const glm::dvec3& sample : body.samples) {
-      ContactSide side;
-
-      side.side = Side::Rigid;
-      side.body = points.index;
-      side.local = sample;
-      sources.emplace_back(side, body.position + turn * sample);
+      positions.push_back(body.position + turn * sample);
     }
 
     if (body.radius > 0.0) {
-      ContactSide side;
-
-      side.side = Side::Rigid;
-      side.body = points.index;
-      sources.emplace_back(side, body.position);
+      positions.push_back(body.position);
     }
   }
+
+  const auto sideAt = [&](uint32_t index) {
+    if (points.side == Side::Lattice) {
+      return sources[index].first;
+    }
+
+    const RigidBody& body = bodies.rigids[points.index];
+    ContactSide side;
+
+    side.side = Side::Rigid;
+    side.body = points.index;
+
+    if (index < body.samples.size()) {
+      side.local = body.samples[index];
+    }
+
+    return side;
+  };
 
   const double radius =
     points.side == Side::Rigid ? bodies.rigids[points.index].radius : 0.0;
@@ -356,9 +376,17 @@ void pointsAgainst(
       static_cast<double>(std::max<size_t>(lattice.position.size(), 1u));
   }
 
-  for (uint32_t index = 0u; index != sources.size(); ++index) {
-    const glm::dvec3& point = sources[index].second;
-    const bool centre = radius > 0.0 && index + 1u == sources.size();
+  const RigidBody* const target =
+    field.side == Side::Rigid ? &bodies.rigids[field.index] : nullptr;
+  const glm::dmat3 targetTurn =
+    target != nullptr ? glm::mat3_cast(target->rotation) : glm::dmat3(1.0);
+  const glm::dmat3 targetBack = glm::transpose(targetTurn);
+  const glm::dmat3 targetFrame =
+    target != nullptr ? glm::mat3_cast(target->fieldRotation) : glm::dmat3(1.0);
+
+  for (uint32_t index = 0u; index != positions.size(); ++index) {
+    const glm::dvec3& point = positions[index];
+    const bool centre = radius > 0.0 && index + 1u == positions.size();
     const double inflate = centre ? radius : 0.0;
     Hit hit;
     ContactSide other;
@@ -379,53 +407,50 @@ void pointsAgainst(
       other.side = Side::Static;
       other.body = field.index;
     } else {
-      const RigidBody& target = bodies.rigids[field.index];
-      const glm::dmat3 turn = glm::mat3_cast(target.rotation);
-      const glm::dmat3 frame = glm::mat3_cast(target.fieldRotation);
-      const glm::dvec3 local =
-        glm::transpose(turn) * (point - target.position);
+      const glm::dvec3 local = targetBack * (point - target->position);
 
-      const bool exact = points.side == Side::Lattice && primitive(target);
-      const bool found =
-        exact ? primitiveHit(
-                  target,
-                  local,
-                  glm::transpose(turn) * (middle - target.position),
-                  band + inflate,
-                  hit
-                )
-              : fieldHit(
-                  *target.field,
-                  target.fieldOrigin + frame * local,
-                  band + inflate,
-                  hit
-                );
+      const bool exact = points.side == Side::Lattice && primitive(*target);
+      const bool found = exact ? primitiveHit(
+                                   *target,
+                                   local,
+                                   targetBack * (middle - target->position),
+                                   band + inflate,
+                                   hit
+                                 )
+                               : fieldHit(
+                                   *target->field,
+                                   target->fieldOrigin + targetFrame * local,
+                                   band + inflate,
+                                   hit
+                                 );
 
       if (!found) {
         continue;
       }
 
       if (!exact) {
-        hit.normal = glm::transpose(frame) * hit.normal;
+        hit.normal = glm::transpose(targetFrame) * hit.normal;
       }
 
       other.side = Side::Rigid;
       other.body = field.index;
       other.local = local - hit.gap * hit.normal;
-      hit.normal = turn * hit.normal;
+      hit.normal = targetTurn * hit.normal;
     }
+
+    ContactSide side = sideAt(index);
 
     if (centre) {
       const RigidBody& body = bodies.rigids[points.index];
 
       hit.gap -= radius;
-      sources[index].first.local =
+      side.local =
         glm::transpose(glm::mat3_cast(body.rotation)) * (-radius * hit.normal);
     }
 
     addContact(
       contacts,
-      sources[index].first,
+      side,
       other,
       hit.normal,
       hit.gap,
@@ -1146,10 +1171,15 @@ void fieldAgainstCompound(
   for (uint32_t index = 0u; index != body.samples.size(); ++index) {
     const glm::dvec3 local =
       back * (body.position + turn * body.samples[index] - target.position);
+    const Bounds reach = grown(Bounds{local, local}, band);
     const CompoundChild* nearest = nullptr;
     Hit best;
 
-    overlappingChildren(shape, grown(Bounds{local, local}, band), candidates);
+    if (!overlaps(shape.bounds, reach)) {
+      continue;
+    }
+
+    overlappingChildren(shape, reach, candidates);
 
     for (const uint32_t candidate : candidates) {
       const CompoundChild& child = shape.children[candidate];

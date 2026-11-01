@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -376,6 +377,28 @@ std::array<uint32_t, 2> pairCensus(const World& world) {
   return census;
 }
 
+uint64_t stateHash(const World& world) {
+  uint64_t hash = 0xCBF29CE484222325ull;
+  const auto mix = [&](double value) {
+    hash = (hash ^ std::bit_cast<uint64_t>(value)) * 0x100000001B3ull;
+  };
+
+  for (const RigidBody& rigid : world.bodies.rigids) {
+    for (uint32_t axis = 0u; axis != 3u; ++axis) {
+      mix(rigid.position[axis]);
+      mix(rigid.velocity[axis]);
+      mix(rigid.angularVelocity[axis]);
+    }
+
+    mix(rigid.rotation.x);
+    mix(rigid.rotation.y);
+    mix(rigid.rotation.z);
+    mix(rigid.rotation.w);
+  }
+
+  return hash;
+}
+
 bool allAsleep(const World& world) {
   return std::ranges::all_of(world.bodies.rigids, [](const RigidBody& rigid) {
     return rigid.asleep || rigid.mass == 0.0;
@@ -428,13 +451,14 @@ TEST_CASE("fill cost of a mesh slab sliding on a box", "[.][fillcost]") {
 
     std::printf(
       "fillcost side %.2f m contacts %.0f step_ms %.3f fill_ms %.4f "
-      "worst_fill_ms %.4f narrowphase_ms %.4f\n",
+      "worst_fill_ms %.4f narrowphase_ms %.4f state %016llx\n",
       side,
       result.contacts,
       result.step,
       result.fill,
       result.worstFill,
-      result.narrowphase
+      result.narrowphase,
+      static_cast<unsigned long long>(stateHash(world))
     );
   }
 }
@@ -546,7 +570,7 @@ TEST_CASE(
       std::printf(
         "meshbodycost parts %s crates %u awake %.1f pairs %u touching %u "
         "contacts %.0f step_ms %.3f fill_ms %.4f worst_fill_ms %.4f "
-        "narrowphase_ms %.4f solver_ms %.4f lowest_mm %.2f\n",
+        "narrowphase_ms %.4f solver_ms %.4f lowest_mm %.2f state %016llx\n",
         meshParts ? "mesh" : "box",
         crates,
         awake / static_cast<double>(measuredSteps),
@@ -558,7 +582,8 @@ TEST_CASE(
         result.worstFill,
         result.narrowphase,
         result.solver,
-        1000.0 * lowest
+        1000.0 * lowest,
+        static_cast<unsigned long long>(stateHash(world))
       );
       CHECK(lowest >= -0.01);
     }
