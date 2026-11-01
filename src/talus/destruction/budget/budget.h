@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -64,13 +65,27 @@ inline constexpr CostModel costModel{
 class RestTracker {
 public:
   void update(const dynamics::World& world, const dynamics::Workers& workers);
+  void updateAwake(
+    const dynamics::World& world,
+    const dynamics::Workers& workers
+  );
   void reset(uint32_t body) noexcept;
 
   [[nodiscard]] bool resting(uint32_t body) const noexcept;
   [[nodiscard]] uint32_t restSteps(uint32_t body) const noexcept;
 
 private:
+  void track(
+    const dynamics::World& world,
+    const dynamics::Workers& workers,
+    std::span<const uint32_t> rigids
+  );
+
   std::vector<uint32_t> m_steps;
+  std::vector<uint32_t> m_counting;
+  std::vector<uint32_t> m_visit;
+  uint64_t m_layout = 0u;
+  bool m_tracked = false;
   double m_dt = 0.0;
 };
 

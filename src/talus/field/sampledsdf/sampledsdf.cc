@@ -369,21 +369,7 @@ SampledSdf bake(
     }
   }
 
-  const glm::uvec3 bricks = brickCounts(field);
-
-  field.brickLipschitz.resize(
-    static_cast<size_t>(bricks.x) * bricks.y * bricks.z
-  );
-
-  field.brickMinimum.resize(
-    static_cast<size_t>(bricks.x) * bricks.y * bricks.z
-  );
-
-  field.brickMaximum.resize(
-    static_cast<size_t>(bricks.x) * bricks.y * bricks.z
-  );
-
-  rebuildBricks(field, glm::uvec3(0u), cellCounts(field) - glm::uvec3(1u));
+  finishBricks(field);
 
   return field;
 }
@@ -495,6 +481,46 @@ template FieldProbeOf<float> probe<float>(
   const glm::vec3& point
 );
 
+double outsideGapBound(const SampledSdf& field, const glm::dvec3& point) {
+  const double unknown = -std::numeric_limits<double>::infinity();
+
+  if (field.resolution.x < 2u || field.resolution.y < 2u
+      || field.resolution.z < 2u) {
+    return unknown;
+  }
+
+  const GridClamp<double> at = clampToGrid(field, point);
+
+  if (!(at.outside > 0.0)) {
+    return unknown;
+  }
+
+  const glm::uvec3 bricks = brickCounts(field);
+  const size_t count = static_cast<size_t>(bricks.x) * bricks.y * bricks.z;
+
+  if (field.brickMinimum.size() != count
+      || field.brickLipschitz.size() != count) {
+    return unknown;
+  }
+
+  const LatticeCell<double> cell = locate(field, at.clamped);
+  const uint32_t brick =
+    brickIndex(bricks, cell.base / glm::uvec3(BRICK_CELLS));
+  const double lowest = field.brickMinimum[brick];
+  const double steepest = field.brickLipschitz[brick];
+  const double farthest = std::max(
+    std::abs(at.clamped.x),
+    std::max(std::abs(at.clamped.y), std::abs(at.clamped.z))
+  );
+  const double reach = lowest + at.outside
+                       - 1.0e-9 * (1.0 + std::abs(lowest) + at.outside)
+                       - 1.0e-6 * steepest * (1.0 + farthest);
+  const double slope =
+    std::sqrt(1.0 + steepest * steepest) * (1.0 + 1.0e-5) + 1.0e-9;
+
+  return reach > 0.0 ? reach / slope : reach;
+}
+
 template FieldProbeOf<double> probe<double>(
   const SampledSdf& field,
   const glm::dvec3& point
@@ -553,6 +579,32 @@ glm::uvec3 brickCounts(const SampledSdf& field) {
 
 bool brickHoldsSurface(const SampledSdf& field, uint32_t brick) {
   return field.brickMinimum[brick] <= 0.0f && field.brickMaximum[brick] >= 0.0f;
+}
+
+void finishBricks(SampledSdf& field) {
+  const glm::uvec3& resolution = field.resolution;
+
+  if (resolution.x < 2u || resolution.y < 2u || resolution.z < 2u) {
+    throw std::invalid_argument(
+      "A sampled field needs at least two lattice points on every axis"
+    );
+  }
+
+  if (field.distances.size()
+      != static_cast<size_t>(resolution.x) * resolution.y * resolution.z) {
+    throw std::invalid_argument(
+      "A sampled field needs one distance per lattice point"
+    );
+  }
+
+  const glm::uvec3 bricks = brickCounts(field);
+  const size_t count = static_cast<size_t>(bricks.x) * bricks.y * bricks.z;
+
+  field.brickLipschitz.resize(count);
+  field.brickMinimum.resize(count);
+  field.brickMaximum.resize(count);
+
+  rebuildBricks(field, glm::uvec3(0u), cellCounts(field) - glm::uvec3(1u));
 }
 
 BrickRange brickRange(const SampledSdf& field, const SampleBox& box) {

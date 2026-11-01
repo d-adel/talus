@@ -99,6 +99,11 @@ extern template FieldProbeOf<double> probe<double>(
   const glm::dvec3& point
 );
 
+[[nodiscard]] double outsideGapBound(
+  const SampledSdf& field,
+  const glm::dvec3& point
+);
+
 float stepBound(
   const SampledSdf& field,
   const glm::vec3& point,
@@ -107,6 +112,8 @@ float stepBound(
 
 glm::uvec3 brickCounts(const SampledSdf& field);
 bool brickHoldsSurface(const SampledSdf& field, uint32_t brick);
+
+void finishBricks(SampledSdf& field);
 
 WriteReport write(
   SampledSdf& field,

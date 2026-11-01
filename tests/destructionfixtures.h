@@ -43,4 +43,8 @@ struct Motion {
 
 [[nodiscard]] bool sameOutcome(const talus::destruction::DestructionReport& a, const talus::destruction::DestructionReport& b);
 
+[[nodiscard]] bool sameReport(
+  const talus::destruction::DestructionReport& a,
+  const talus::destruction::DestructionReport& b
+);
 }

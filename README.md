@@ -160,6 +160,8 @@ the consuming engine.
 - Change bodies only through `<talus/dynamics/edits/edits.h>` (teleports,
   impulses, shape changes, removals). Writing fields such as
   `RigidBody::velocity` directly skips cache updates, waking and joint rules.
+  A direct write to `RigidBody::asleep` is invisible to `world.step()`: wake
+  bodies with `dynamics::wakeBody` or an edit.
 - The world owns its containers. Sampled-field pointers are borrowed: keep
   their storage alive while any body uses them.
 
@@ -176,6 +178,84 @@ the consuming engine.
   finish callbacks in `dynamics::World`.
 - Stepping does not read the wall clock. Results are identical across SIMD widths
   and worker counts on the tested Windows/MSVC and Linux/GCC builds.
+
+### Field bodies from meshes
+
+A mesh body is a rigid body whose shape is a distance field baked from a closed
+triangle mesh. Contact points cover its surface. Build a shape once with
+`meshShape` from `<talus/dynamics/meshbody/meshbody.h>`, then place bodies with
+`addMeshBody`.
+
+```cpp
+using namespace talus::dynamics;
+
+MeshShapeSettings settings;
+settings.mass = 4.0;
+const MeshShape forearm = meshShape(vertices, indices, settings);
+const uint32_t id = addMeshBody(
+  world.dynamics.bodies, forearm, position, rotation, glm::dvec3(0.0)
+);
+const BodyRef ref = *findBody(world.dynamics.bodies, id);
+const MeshFrame pose = meshFrame(world.dynamics.bodies.rigids[ref.index]);
+```
+
+- The mesh must be closed: each edge is shared by two faces in opposite
+  directions. The check uses vertex indices, so weld a mesh that is split at
+  UV or normal seams by position first. Either winding direction works.
+  Shells must not overlap.
+  `meshShape` compares the volume enclosed by the triangles with the volume of
+  the baked field and refuses a difference above area × voxel / 2, which
+  overlapping shells, and shells nested with the same winding, produce. It
+  throws `std::invalid_argument` for that, for an open mesh, a face with no
+  area or an invalid setting.
+- `mass` sets the mass. The inertia is that of a uniform solid.
+- `spacing` is the target distance between contact points, 2 cm by default.
+  Every face gets points, including both faces of a thin plate. On flat faces
+  the largest gap measured is about 1.1 × `spacing` with the face along the
+  mesh axes and 1.2 × with the mesh turned 0.6 rad about (1, 1, 1). Other
+  turns were not measured. A body has about `area / spacing²` points, up to
+  1.3 times that on curved or tilted faces. A small mesh uses a finer spacing
+  and gets at least about 24.
+  `voxel` is the field's lattice spacing. With 0, it is the mesh's thinnest
+  extent / 12, at most 1 cm and at least 4 mm. A part thinner than about one
+  voxel may hold no lattice point and then has no collision. A body holds at
+  most 262,144 contact points (the width of a contact key); `meshShape`
+  refuses more.
+- `addMeshBody` puts the mesh's own frame at the given pose and returns the
+  body ID, not an index. `findBody` in `<talus/dynamics/tiers/tiers.h>` gives
+  the current index. The body's position is its centre of mass. `meshFrame`
+  returns the mesh frame's current pose. `meshPoint` gives a contact point
+  (`RigidBody::samples`) in mesh coordinates, for debug drawing.
+- Bodies borrow the shape's field. Keep the `MeshShape` alive while any body
+  uses it. Many bodies can share one shape.
+- Pass `Workers` from `resolveWorkers` to bake on several threads. The result
+  is identical to a serial bake. Bake at load, not during play. A scheduler
+  runs one caller at a time: to bake while a world steps, give the bake its
+  own scheduler, not the world's.
+- Each touching point is its own contact and its own constraint, so a body's
+  cost grows with its touching points: about 0.8 µs per contact per step on
+  one worker of a Ryzen 7 7840HS laptop (MSVC Release) for a flat body sliding
+  on a box. Two curved field bodies sliding in wide contact add about 0.3 to
+  0.4 µs per contact. Use a coarser `spacing` for large bodies.
+  `[.][fillcost]` and `[.][meshbodycost]` measure these costs.
+- Two field bodies whose bounds overlap probe each other's points near the
+  other's field every step, even when they do not touch. Jointed bodies are not
+  tested unless the joint sets `collideConnected`; a joint used only to
+  exclude a pair costs about 0.7 µs per step.
+- When either of two field bodies touches anything, their pair keeps every
+  point within the contact band (2 cm by default) plus both bodies' whole
+  travel in the step, turning included, so fast parts that move together get
+  many contacts. A character of rounded parts turning half round at up to
+  about 25 rad/s, with arms and hands colliding with legs, stores up to 5,300
+  contacts and almost none of them push (0.1 per step on average). On the
+  same Ryzen 7 7840HS laptop (MSVC Release) its slowest step costs about
+  7.8 ms on one worker and 6.2 ms on eight, and its mean 2.9 ms. With only
+  head against arm and hand collision it stores up to 1,900 and its slowest
+  step costs 3.8 ms (`[.][turncost]`). The solver skips contacts that cannot
+  push in a substep; finding and storing each one still costs about 1 µs.
+- Field bodies meet boxes both ways. The body's points push on boxes and
+  compound children, and the outer edges and corners of a box push on the
+  field.
 
 ### Joints
 
@@ -292,9 +372,16 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
 
 - Only x86-64 builds are qualified.
 - The workload controller's cost constants are unqualified. They underpredict
-  in reference checks, and the large district test missed the 4 ms physics
-  goal. Rubble can stay awake, and thin-sheet glass does not shatter
-  convincingly.
+  in reference checks, but overpredict for sleeping bodies, and the large
+  district test missed the 4 ms physics goal. Rubble can stay awake, and
+  thin-sheet glass does not shatter convincingly.
+- The workload controller still charges every rigid body, asleep or awake:
+  57.6 + 156.2 ns per body (`budget.h`). At the default 3.6 ms target, an idle
+  world above about 16,800 rigid bodies counts as over budget. The controller
+  then caps fractures at 4 chunks per step, refuses extra stress rounds outside
+  a collapse and freezes resting debris early. Above about 4,700 bodies it also
+  removes frozen single-chunk debris; each removal makes the next dynamics step
+  and rest-tracker pass visit every body.
 - One ball/soft-face test and two joint tests are expected failures: 680 cases,
   3 expected failures, Windows/MSVC Release, at `4a5ecf6`.
 - One 20-body humanoid costs 0.225 ms per step (0.148 ms in joints) on a Ryzen 7
@@ -326,9 +413,38 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
   each step and visits every lattice island. Sleeping rigid bodies are not free
   there. In `talus::dynamics::step`, a sleeping rigid body costs almost nothing
   in all other worlds.
-- `talus::World::step` also runs the destruction update, which still visits every
-  rigid body each step: about 0.67 ms among 20,000 sleeping bodies on one worker
-  and 0.26 ms on eight (Ryzen 7 7840HS laptop).
+- In `talus::World::step`, the destruction update also visits only awake
+  bodies. Among 20,000 sleeping bodies it costs below 1 µs per step on one
+  worker of the Ryzen 7 7840HS laptop and 1 to 2 µs on eight, against 0.67 ms
+  and 0.26 ms when it visited every body. It still visits every rigid body:
+  - in the update after an update that threw;
+  - from the point where an update removes a body itself: a scheduled removal
+    of a whole piece, a split that empties an anchored piece, or the removal of
+    frozen debris or of bodies below `discardBelow`;
+  - in its rest tracker and body-id map, in the first update after a body
+    removal, a tier switch, a removed lattice or a moved or removed static body;
+  - in every update while `discardBelow` is finite;
+  - in each impulse, split or removal by body id, which searches every rigid
+    body.
+
+  Frozen debris has mass 0, stays out of islands and never falls asleep. It
+  stays on the awake list and costs more than sleeping debris until it thaws
+  or is removed.
+- A sharp box edge that crosses a field body away from the box's corners and
+  edge midpoints sinks about half the point spacing into the field face: 10 mm
+  measured at the default 2 cm spacing.
+- No body, of any shape, has continuous collision against another moving
+  body. A fast, thin field part can pass through another moving body in one
+  step.
+- Flush seams between boxes can catch a field body sliding across them. At
+  0.3 to 1 m/s without friction, a 0.3 m mesh slab stops at the seam between
+  two box bodies and at the seam between two children of one compound; a
+  10 cm mesh ball hops about 10 mm and slows to 0.14 m/s at the seam between
+  two box bodies at 1 m/s, and stops there at 0.3 m/s.
+- A field body resting on a static field, such as a heightfield, sinks about
+  14 mm into it.
+- Small round field bodies sag 1 to 3 mm between contact points at 2 cm
+  spacing.
 
 ## Repository layout
 

@@ -124,6 +124,10 @@ bool fieldHit(
   double band,
   Hit& hit
 ) {
+  if (field::outsideGapBound(field, point) >= band) {
+    return false;
+  }
+
   const field::FieldProbeOf<double> probed = field::probe<double>(field, point);
   const double slope = glm::length(probed.gradient);
 
@@ -149,23 +153,13 @@ bool movable(const BodySet& bodies, const BodyRef& ref) {
   return ref.side == Side::Rigid && bodies.rigids[ref.index].mass > 0.0;
 }
 
-bool primitiveHit(
-  const RigidBody& target,
+bool boxHit(
+  const glm::dvec3& half,
   const glm::dvec3& local,
   const glm::dvec3& toward,
   double band,
   Hit& hit
 ) {
-  if (target.shape == RigidShape::Sphere) {
-    const double distance = glm::length(local);
-
-    hit.normal = distance > 0.0 ? local / distance : glm::dvec3(0.0, 1.0, 0.0);
-    hit.gap = distance - target.radius;
-
-    return hit.gap < band;
-  }
-
-  const glm::dvec3 half = target.halfExtents;
   const double tie = 0.01 * std::min({half.x, half.y, half.z});
   const glm::dvec3 offset = local - glm::clamp(local, -half, half);
   const double distance = glm::length(offset);
@@ -198,6 +192,25 @@ bool primitiveHit(
   hit.gap = -bestDepth;
 
   return hit.gap < band;
+}
+
+bool primitiveHit(
+  const RigidBody& target,
+  const glm::dvec3& local,
+  const glm::dvec3& toward,
+  double band,
+  Hit& hit
+) {
+  if (target.shape == RigidShape::Sphere) {
+    const double distance = glm::length(local);
+
+    hit.normal = distance > 0.0 ? local / distance : glm::dvec3(0.0, 1.0, 0.0);
+    hit.gap = distance - target.radius;
+
+    return hit.gap < band;
+  }
+
+  return boxHit(target.halfExtents, local, toward, band, hit);
 }
 
 void addContact(
@@ -306,31 +319,47 @@ void pointsAgainst(
 ) {
   const double friction =
     std::sqrt(frictionOf(bodies, points) * frictionOf(bodies, field));
+  thread_local std::vector<glm::dvec3> positions;
   std::vector<std::pair<ContactSide, glm::dvec3>> sources;
+
+  positions.clear();
 
   if (points.side == Side::Lattice) {
     latticeSources(bodies.lattices[points.index], points.index, sources);
+
+    for (const auto& [side, position] : sources) {
+      positions.push_back(position);
+    }
   } else {
     const RigidBody& body = bodies.rigids[points.index];
     const glm::dmat3 turn = glm::mat3_cast(body.rotation);
 
     for (const glm::dvec3& sample : body.samples) {
-      ContactSide side;
-
-      side.side = Side::Rigid;
-      side.body = points.index;
-      side.local = sample;
-      sources.emplace_back(side, body.position + turn * sample);
+      positions.push_back(body.position + turn * sample);
     }
 
     if (body.radius > 0.0) {
-      ContactSide side;
-
-      side.side = Side::Rigid;
-      side.body = points.index;
-      sources.emplace_back(side, body.position);
+      positions.push_back(body.position);
     }
   }
+
+  const auto sideAt = [&](uint32_t index) {
+    if (points.side == Side::Lattice) {
+      return sources[index].first;
+    }
+
+    const RigidBody& body = bodies.rigids[points.index];
+    ContactSide side;
+
+    side.side = Side::Rigid;
+    side.body = points.index;
+
+    if (index < body.samples.size()) {
+      side.local = body.samples[index];
+    }
+
+    return side;
+  };
 
   const double radius =
     points.side == Side::Rigid ? bodies.rigids[points.index].radius : 0.0;
@@ -347,9 +376,17 @@ void pointsAgainst(
       static_cast<double>(std::max<size_t>(lattice.position.size(), 1u));
   }
 
-  for (uint32_t index = 0u; index != sources.size(); ++index) {
-    const glm::dvec3& point = sources[index].second;
-    const bool centre = radius > 0.0 && index + 1u == sources.size();
+  const RigidBody* const target =
+    field.side == Side::Rigid ? &bodies.rigids[field.index] : nullptr;
+  const glm::dmat3 targetTurn =
+    target != nullptr ? glm::mat3_cast(target->rotation) : glm::dmat3(1.0);
+  const glm::dmat3 targetBack = glm::transpose(targetTurn);
+  const glm::dmat3 targetFrame =
+    target != nullptr ? glm::mat3_cast(target->fieldRotation) : glm::dmat3(1.0);
+
+  for (uint32_t index = 0u; index != positions.size(); ++index) {
+    const glm::dvec3& point = positions[index];
+    const bool centre = radius > 0.0 && index + 1u == positions.size();
     const double inflate = centre ? radius : 0.0;
     Hit hit;
     ContactSide other;
@@ -370,53 +407,50 @@ void pointsAgainst(
       other.side = Side::Static;
       other.body = field.index;
     } else {
-      const RigidBody& target = bodies.rigids[field.index];
-      const glm::dmat3 turn = glm::mat3_cast(target.rotation);
-      const glm::dmat3 frame = glm::mat3_cast(target.fieldRotation);
-      const glm::dvec3 local =
-        glm::transpose(turn) * (point - target.position);
+      const glm::dvec3 local = targetBack * (point - target->position);
 
-      const bool exact = points.side == Side::Lattice && primitive(target);
-      const bool found =
-        exact ? primitiveHit(
-                  target,
-                  local,
-                  glm::transpose(turn) * (middle - target.position),
-                  band + inflate,
-                  hit
-                )
-              : fieldHit(
-                  *target.field,
-                  target.fieldOrigin + frame * local,
-                  band + inflate,
-                  hit
-                );
+      const bool exact = points.side == Side::Lattice && primitive(*target);
+      const bool found = exact ? primitiveHit(
+                                   *target,
+                                   local,
+                                   targetBack * (middle - target->position),
+                                   band + inflate,
+                                   hit
+                                 )
+                               : fieldHit(
+                                   *target->field,
+                                   target->fieldOrigin + targetFrame * local,
+                                   band + inflate,
+                                   hit
+                                 );
 
       if (!found) {
         continue;
       }
 
       if (!exact) {
-        hit.normal = glm::transpose(frame) * hit.normal;
+        hit.normal = glm::transpose(targetFrame) * hit.normal;
       }
 
       other.side = Side::Rigid;
       other.body = field.index;
       other.local = local - hit.gap * hit.normal;
-      hit.normal = turn * hit.normal;
+      hit.normal = targetTurn * hit.normal;
     }
+
+    ContactSide side = sideAt(index);
 
     if (centre) {
       const RigidBody& body = bodies.rigids[points.index];
 
       hit.gap -= radius;
-      sources[index].first.local =
+      side.local =
         glm::transpose(glm::mat3_cast(body.rotation)) * (-radius * hit.normal);
     }
 
     addContact(
       contacts,
-      sources[index].first,
+      side,
       other,
       hit.normal,
       hit.gap,
@@ -1014,6 +1048,28 @@ Bounds boundsInBody(const RigidBody& body, const Bounds& world) {
   return boxBoundsIn(back * (middle - body.position), back, half);
 }
 
+bool outerEdge(
+  const CompoundShape& shape,
+  uint32_t index,
+  const glm::dvec3& sample
+) {
+  const CompoundChild& child = shape.children[index];
+  const glm::dvec3 local =
+    glm::conjugate(child.rotation) * (sample - child.centre);
+  int exposed = 0;
+
+  for (int axis = 0; axis != 3; ++axis) {
+    if (std::abs(local[axis]) > 0.5 * child.half[axis]) {
+      const uint32_t face =
+        2u * static_cast<uint32_t>(axis) + (local[axis] > 0.0 ? 1u : 0u);
+
+      exposed += (shape.exposed[index] & (1u << face)) != 0u ? 1 : 0;
+    }
+  }
+
+  return exposed >= 2;
+}
+
 void compoundAgainstField(
   const BodySet& bodies,
   const BodyRef& points,
@@ -1037,6 +1093,11 @@ void compoundAgainstField(
     const std::array<glm::dvec3, childSampleCount> samples = childSamples(child);
 
     for (uint32_t sample = 0u; sample != childSampleCount; ++sample) {
+      if (field.side == Side::Rigid
+          && !outerEdge(shape, index, samples[sample])) {
+        continue;
+      }
+
       const glm::dvec3 point = body.position + turn * samples[sample];
       Hit hit;
       ContactSide side;
@@ -1084,6 +1145,85 @@ void compoundAgainstField(
       );
       contacts.back().restitution = restitution;
     }
+  }
+}
+
+void fieldAgainstCompound(
+  const BodySet& bodies,
+  const BodyRef& points,
+  const BodyRef& boxes,
+  double band,
+  std::vector<uint32_t>& candidates,
+  std::vector<Contact>& contacts
+) {
+  const RigidBody& body = bodies.rigids[points.index];
+  const RigidBody& target = bodies.rigids[boxes.index];
+  const CompoundShape& shape = *target.compound;
+  const glm::dmat3 turn = glm::mat3_cast(body.rotation);
+  const glm::dmat3 targetTurn = glm::mat3_cast(target.rotation);
+  const glm::dmat3 back = glm::transpose(targetTurn);
+  const glm::dvec3 middle = back * (body.position - target.position);
+  const double friction =
+    std::sqrt(frictionOf(bodies, points) * frictionOf(bodies, boxes));
+  const double restitution =
+    std::max(restitutionOf(bodies, points), restitutionOf(bodies, boxes));
+
+  for (uint32_t index = 0u; index != body.samples.size(); ++index) {
+    const glm::dvec3 local =
+      back * (body.position + turn * body.samples[index] - target.position);
+    const Bounds reach = grown(Bounds{local, local}, band);
+    const CompoundChild* nearest = nullptr;
+    Hit best;
+
+    if (!overlaps(shape.bounds, reach)) {
+      continue;
+    }
+
+    overlappingChildren(shape, reach, candidates);
+
+    for (const uint32_t candidate : candidates) {
+      const CompoundChild& child = shape.children[candidate];
+      const glm::dquat inverse = glm::conjugate(child.rotation);
+      Hit hit;
+
+      if (boxHit(
+            child.half,
+            inverse * (local - child.centre),
+            inverse * (middle - child.centre),
+            band,
+            hit
+          )
+          && (nearest == nullptr || hit.gap < best.gap)) {
+        nearest = &child;
+        best = hit;
+      }
+    }
+
+    if (nearest == nullptr) {
+      continue;
+    }
+
+    const glm::dvec3 normal = nearest->rotation * best.normal;
+    ContactSide side;
+    ContactSide other;
+
+    side.side = Side::Rigid;
+    side.body = points.index;
+    side.local = body.samples[index];
+    other.side = Side::Rigid;
+    other.body = boxes.index;
+    other.child = nearest->key;
+    other.local = local - best.gap * normal;
+    addContact(
+      contacts,
+      side,
+      other,
+      targetTurn * normal,
+      best.gap,
+      friction,
+      contactKey(bodies, points, boxes, index)
+    );
+    contacts.back().restitution = restitution;
   }
 }
 
@@ -1328,25 +1468,20 @@ void compoundPair(
 
   if (a.shape == RigidShape::Sampled || b.shape == RigidShape::Sampled) {
     const bool onFirst = compound(a);
+    const BodyRef& boxes = onFirst ? first : second;
+    const BodyRef& points = onFirst ? second : first;
     const CachedPose pose = poseOf(a, b);
 
-    compoundAgainstField(
-      bodies,
-      onFirst ? first : second,
-      onFirst ? second : first,
-      reach,
-      scratch.found,
-      contacts
-    );
+    compoundAgainstField(bodies, boxes, points, reach, scratch.found, contacts);
+    fieldAgainstCompound(bodies, points, boxes, reach, scratch.found, contacts);
 
-    for (Contact& contact : contacts) {
-      contact.cached = pose;
-      contact.cached.separation = contact.gap;
+    for (size_t index = 0u; index != contacts.size(); ++index) {
+      contacts[index].manifold = static_cast<uint32_t>(index);
+      contacts[index].cached = pose;
+      contacts[index].cached.separation = contacts[index].gap;
     }
 
     clock.charge(&PairTicks::narrowphase);
-    (void)groupByNormal(bodies, contacts, 0u, reach, band);
-    clock.charge(&PairTicks::reduce);
 
     return;
   }
