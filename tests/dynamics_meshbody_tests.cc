@@ -449,6 +449,54 @@ TEST_CASE(
   }
 }
 
+TEST_CASE(
+  "contact points on a curved mesh body sit on the field's zero level",
+  "[dynamics][meshbody]"
+) {
+  const float radius = 0.25f;
+  const Mesh ball = meshfixture::icosphere(radius, 4u);
+  const Threads threads;
+  const MeshShape shape =
+    meshShape(ball.vertices, ball.indices, {}, threads.workers);
+  const double voxel = largest(shape.field->voxelSize);
+  double innermost = std::numeric_limits<double>::infinity();
+
+  for (size_t face = 0u; face < ball.indices.size(); face += 3u) {
+    const glm::dvec3 a(ball.vertices[ball.indices[face]]);
+    const glm::dvec3 b(ball.vertices[ball.indices[face + 1u]]);
+    const glm::dvec3 c(ball.vertices[ball.indices[face + 2u]]);
+
+    innermost = std::min(
+      innermost,
+      std::abs(glm::dot(glm::normalize(glm::cross(b - a, c - a)), a))
+    );
+  }
+
+  double farthest = 0.0;
+  double deepest = 0.0;
+  double nearest = std::numeric_limits<double>::infinity();
+  double outermost = 0.0;
+
+  for (const glm::dvec3& sample : shape.body.samples) {
+    const glm::dvec3 point = meshPoint(shape.body, sample);
+    const double distance =
+      talus::field::probe<double>(*shape.field, point).distance;
+
+    farthest = std::max(farthest, std::abs(distance));
+    deepest = std::min(deepest, distance);
+    nearest = std::min(nearest, glm::length(point));
+    outermost = std::max(outermost, glm::length(point));
+  }
+
+  CAPTURE(shape.body.samples.size(), voxel, farthest, deepest, innermost);
+  CAPTURE(nearest, outermost);
+  CHECK(shape.body.samples.size() > 1000u);
+  CHECK(farthest <= voxel);
+  CHECK(deepest >= -0.1 * voxel);
+  CHECK(nearest >= innermost - 0.1 * voxel);
+  CHECK(outermost <= static_cast<double>(radius) + voxel);
+}
+
 TEST_CASE("a long beam keeps its contact spacing", "[dynamics][meshbody]") {
   const glm::vec3 half(2.0f, 0.12f, 0.12f);
   const Mesh beam = meshfixture::box(-half, half);

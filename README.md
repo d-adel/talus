@@ -202,10 +202,12 @@ const MeshFrame pose = meshFrame(world.dynamics.bodies.rigids[ref.index]);
   open mesh, a face with no area or an invalid setting.
 - `mass` sets the mass. The inertia is that of a uniform solid.
 - `spacing` is the target distance between contact points, 2 cm by default.
-  Every face gets points, including both faces of a thin plate. The largest
-  gap measured on flat faces at any angle is about 1.2 × `spacing`. A body has
-  about `area / spacing²` points, up to 1.3 times that on curved or tilted
-  faces. A small mesh uses a finer spacing and gets at least about 24.
+  Every face gets points, including both faces of a thin plate. On flat faces
+  the largest gap measured is about 1.1 × `spacing` with the face along the
+  mesh axes and 1.2 × with the mesh turned 0.6 rad about (1, 1, 1). Other
+  turns were not measured. A body has about `area / spacing²` points, up to
+  1.3 times that on curved or tilted faces. A small mesh uses a finer spacing
+  and gets at least about 24.
   `voxel` is the field's lattice spacing. With 0, it is the mesh's thinnest
   extent / 12, at most 1 cm and at least 4 mm.
 - `addMeshBody` puts the mesh's own frame at the given pose and returns the
