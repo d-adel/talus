@@ -177,6 +177,48 @@ the consuming engine.
 - Stepping does not read the wall clock. Results are identical across SIMD widths
   and worker counts on the tested Windows/MSVC and Linux/GCC builds.
 
+### Field bodies from meshes
+
+A mesh body is a rigid body whose shape is a distance field baked from a closed
+triangle mesh. Contact points cover its surface. Build a shape once with
+`meshShape` from `<talus/dynamics/meshbody/meshbody.h>`, then place bodies with
+`addMeshBody`.
+
+```cpp
+using namespace talus::dynamics;
+
+MeshShapeSettings settings;
+settings.mass = 4.0;
+const MeshShape forearm = meshShape(vertices, indices, settings);
+const uint32_t id = addMeshBody(
+  world.dynamics.bodies, forearm, position, rotation, glm::dvec3(0.0)
+);
+const BodyRef ref = *findBody(world.dynamics.bodies, id);
+const MeshFrame pose = meshFrame(world.dynamics.bodies.rigids[ref.index]);
+```
+
+- The mesh must be closed and wound outward: each edge is shared by two faces
+  in opposite directions. `meshShape` throws `std::invalid_argument` for an
+  open mesh, a face with no area or an invalid setting.
+- `mass` sets the mass. The inertia is that of a uniform solid.
+- `spacing` is the target distance between contact points, 2 cm by default.
+  `voxel` is the field's lattice spacing. With 0, it is the mesh's thinnest
+  extent / 12, at most 1 cm and at least 4 mm.
+- `addMeshBody` puts the mesh's own frame at the given pose and returns the
+  body ID, not an index. `findBody` in `<talus/dynamics/tiers/tiers.h>` gives
+  the current index. The body's position is its centre of mass. `meshFrame`
+  returns the mesh frame's current pose. `meshPoint` gives a contact point
+  (`RigidBody::samples`) in mesh coordinates, for debug drawing.
+- Bodies borrow the shape's field. Keep the `MeshShape` alive while any body
+  uses it. Many bodies can share one shape.
+- Pass `Workers` from `resolveWorkers` to bake on several threads. The result
+  is identical to a serial bake. Bake at load, not during play.
+- Cost grows with contact points: about `area / spacing²` per body. Each
+  touching point is its own contact.
+- Field bodies meet boxes both ways. The body's points push on boxes and
+  compound children, and the outer edges and corners of a box push on the
+  field.
+
 ### Joints
 
 A joint connects two rigid bodies, or a rigid body and the world. Joint types
@@ -324,6 +366,18 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
 - A world that holds any lattice body still copies every rigid body's velocity
   each step and visits every lattice island. Sleeping rigid bodies are not free
   there.
+- A sharp box edge that crosses a field body away from the box's corners and
+  edge midpoints can sink up to about half the point spacing into the field
+  face. Gaps between contact points reach about 2.5 cm at the default 2 cm
+  spacing, so the edge can sink about 13 mm.
+- Field bodies have no continuous collision against other moving bodies. A
+  fast, thin part can pass through another moving body in one step.
+- Flush seams between separate box bodies bump a sliding field body by about
+  3.6 mm.
+- A field body resting on a static field, such as a heightfield, sinks about
+  14 mm into it.
+- Small round field bodies sag 1 to 3 mm between contact points at 2 cm
+  spacing.
 
 ## Repository layout
 

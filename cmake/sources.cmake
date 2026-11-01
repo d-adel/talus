@@ -32,6 +32,7 @@ set(TALUS_SOURCES
     src/talus/dynamics/manifold/boxhull.cc
     src/talus/dynamics/manifold/manifold.cc
     src/talus/dynamics/manifoldcache/manifoldcache.cc
+    src/talus/dynamics/meshbody/meshbody.cc
     src/talus/dynamics/narrowphase/narrowphase.cc
     src/talus/dynamics/neohookean/neohookean.cc
     src/talus/dynamics/pipeline/pipeline.cc
