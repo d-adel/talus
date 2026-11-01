@@ -637,7 +637,20 @@ TEST_CASE("bakeMesh refuses meshes that are not closed", "[field][meshsdf]") {
   CHECK_THROWS_AS(baked(partial, low, high, resolution), std::invalid_argument);
 
   Mesh beyond = closed;
-  beyond.indices[0] = static_cast<uint32_t>(closed.vertices.size());
+  std::replace(
+    beyond.indices.begin(),
+    beyond.indices.end(),
+    static_cast<uint32_t>(closed.vertices.size() - 1u),
+    static_cast<uint32_t>(closed.vertices.size())
+  );
+  REQUIRE(
+    std::count(
+      beyond.indices.begin(),
+      beyond.indices.end(),
+      static_cast<uint32_t>(closed.vertices.size())
+    )
+    > 0
+  );
   CHECK_THROWS_AS(baked(beyond, low, high, resolution), std::invalid_argument);
 
   for (const float bad :
