@@ -219,13 +219,14 @@ const MeshFrame pose = meshFrame(world.dynamics.bodies.rigids[ref.index]);
   uses it. Many bodies can share one shape.
 - Pass `Workers` from `resolveWorkers` to bake on several threads. The result
   is identical to a serial bake. Bake at load, not during play.
-- Each touching point is its own contact point. Against compound boxes, the
-  points that face the same way (within about 8°) share one friction and twist
-  constraint. Between two field bodies, every point has its own. A 1 m flat
-  mesh body sliding on one box at 2 cm spacing has about 2,900 contacts and
-  costs about 1.2 ms per step, 0.04 ms of it contact bookkeeping (Ryzen 7
-  7840HS laptop, MSVC Release, one worker). Use a coarser `spacing` for large
-  flat bodies.
+- Each touching point is its own contact point. Against compound boxes,
+  contacts with the same normal (within about 1°, as on one flat face) share
+  one manifold: one push direction, friction and twist constraint. Against
+  plain box or sphere bodies and against other field bodies, every point is
+  its own manifold. A 1 m flat mesh body sliding on one compound box at 2 cm
+  spacing has about 2,900 contacts and costs about 1.2 ms per step, about
+  0.05 ms of it contact bookkeeping (Ryzen 7 7840HS laptop, MSVC Release, one
+  worker). Use a coarser `spacing` for large flat bodies.
 - Two curved field bodies in wide contact cost more bookkeeping, because each
   contact keeps its own normal: a mesh ball spinning in a field bowl with
   3,700 contacts spends about 1.5 ms per step on it.
@@ -395,6 +396,10 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
   measured at the default 2 cm spacing.
 - Field bodies have no continuous collision against other moving bodies. A
   fast, thin part can pass through another moving body in one step.
+- A slippery field body bridging two compound faces a few degrees apart
+  creeps slowly: a mesh slab across a 6° crease moves 2 to 6 mm in 2 s at
+  friction 0.08 and 2 to 3 mm at 0.15 (a compound box slab moves 36 mm at
+  0.08 and none at 0.15).
 - Flush seams between separate box bodies bump a sliding field body by about
   3.6 mm.
 - A field body resting on a static field, such as a heightfield, sinks about
