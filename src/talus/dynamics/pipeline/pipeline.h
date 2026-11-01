@@ -116,6 +116,10 @@ struct World {
 
 [[nodiscard]] StepReport step(World& world);
 [[nodiscard]] std::span<const uint32_t> awakeRigids(const World& world);
+[[nodiscard]] bool awakeSuperset(
+  const World& world,
+  std::vector<uint32_t>& rigids
+);
 [[nodiscard]] std::unordered_set<uint64_t> recordedPairs(std::span<const Contact> contacts);
 [[nodiscard]] std::vector<Contact> contactRecords(const World& world);
 [[nodiscard]] std::vector<Contact> contactsOf(const World& world, const BodyRef& ref);

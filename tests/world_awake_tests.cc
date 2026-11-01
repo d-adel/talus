@@ -28,6 +28,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <span>
@@ -573,7 +574,8 @@ bool sameRest(const talus::World& a, const talus::World& b) {
 
 struct TwinRun {
   uint64_t digest = 0u;
-  uint32_t sparseReady = 0u;
+  uint32_t listedUpdates = 0u;
+  uint32_t sleepySteps = 0u;
   uint32_t wideAwake = 0u;
   uint32_t jointWakes = 0u;
   uint32_t contactWakes = 0u;
@@ -620,6 +622,7 @@ TwinRun runTwins(uint32_t workers, uint32_t width) {
       REQUIRE(!talus::dynamics::step(stepped->world.dynamics).nonFinite);
     }
 
+    const uint64_t layout = stepped->world.dynamics.bodies.layout;
     const talus::StepReport all = fullScanStep(full->world);
     const talus::StepReport some = stepped->world.step();
     const talus::dynamics::World& dynamics = stepped->world.dynamics;
@@ -652,11 +655,10 @@ TwinRun runTwins(uint32_t workers, uint32_t width) {
     }
 
     run.wideAwake += dynamics.awake.indices.size() > serialLimit ? 1u : 0u;
-    run.sparseReady +=
-      dynamics.awake.layout == dynamics.bodies.layout
-          && 2u * dynamics.awake.indices.size() < dynamics.bodies.rigids.size()
-        ? 1u
-        : 0u;
+    run.listedUpdates += dynamics.bodies.layout == layout ? 1u : 0u;
+    run.sleepySteps +=
+      2u * dynamics.awake.indices.size() < dynamics.bodies.rigids.size() ? 1u
+                                                                         : 0u;
     run.frozen += some.destruction.frozen;
     run.thawed += some.destruction.thawed;
     run.removedFrozen += some.destruction.removedFrozen;
@@ -687,7 +689,8 @@ TEST_CASE(
     const TwinRun run = runTwins(workers, width);
 
     INFO("workers " << workers << " width " << width);
-    CHECK(run.sparseReady > twinSteps / 2u);
+    REQUIRE(run.listedUpdates > twinSteps / 2u);
+    CHECK(run.sleepySteps > twinSteps / 2u);
     CHECK(run.frozen > 0u);
     CHECK(run.thawed > 0u);
     CHECK(run.removedFrozen > 0u);
@@ -704,5 +707,296 @@ TEST_CASE(
     }
 
     digest = run.digest;
+  }
+}
+
+namespace {
+
+Building column() {
+  Building building;
+
+  building.members.push_back(
+    Member{
+      glm::dvec3(0.0, 1.5, 0.0),
+      glm::dvec3(0.25, 1.5, 0.25),
+      0u,
+      Role::Column
+    }
+  );
+
+  return building;
+}
+
+struct Rescan {
+  uint32_t moving = 0u;
+  uint32_t awakeManifolds = 0u;
+  uint32_t scannedMoving = 0u;
+  uint32_t scannedManifolds = 0u;
+};
+
+Rescan rescanAfterACut(bool cutThrows) {
+  talus::World world;
+  const ChunkerSettings exact{false};
+  const std::vector<StructuralMaterial> soilOnly{soil()};
+  const std::vector<StructuralMaterial> concrete{
+    talus::destruction::concrete()
+  };
+
+  static_cast<void>(
+    world.destruction.addBuilding(world.dynamics, ground(), soilOnly)
+  );
+
+  const talus::destruction::BuildingReport cut =
+    world.destruction.addBuilding(world.dynamics, column(), concrete, exact);
+  std::vector<uint32_t> crates;
+
+  for (uint32_t index = 0u; index != 20u; ++index) {
+    crates.push_back(addCrate(
+      world.dynamics,
+      glm::dvec3(2.0 + 0.3 * static_cast<double>(index), crateHalf + 0.001, 0.0)
+    ));
+  }
+
+  const auto settled = [&world] {
+    return std::ranges::all_of(
+      world.dynamics.bodies.rigids,
+      [](const RigidBody& body) { return body.asleep || !(body.mass > 0.0); }
+    );
+  };
+
+  for (uint32_t step = 0u; step != 600u && !settled(); ++step) {
+    REQUIRE(!world.step().dynamics.nonFinite);
+  }
+
+  REQUIRE(settled());
+  REQUIRE(!world.step().dynamics.nonFinite);
+  REQUIRE(
+    world.destruction.removeChunks(
+      world.dynamics,
+      cut.building,
+      std::vector<uint32_t>{5u}
+    )
+    == 1u
+  );
+  world.destruction.prepare(world.dynamics);
+  REQUIRE(!talus::dynamics::step(world.dynamics).nonFinite);
+
+  RigidBody& standing =
+    world.dynamics.bodies.rigids
+      [talus::dynamics::findBody(world.dynamics.bodies, cut.body)->index];
+  const glm::dquat upright = standing.rotation;
+
+  if (cutThrows) {
+    standing.rotation = glm::dquat(std::nan(""), 0.0, 0.0, 0.0);
+    CHECK_THROWS(world.destruction.update(world.dynamics));
+  } else {
+    CHECK_NOTHROW(world.destruction.update(world.dynamics));
+  }
+
+  standing.rotation = upright;
+
+  RigidBody& woken =
+    world.dynamics.bodies.rigids
+      [talus::dynamics::findBody(world.dynamics.bodies, crates[7])->index];
+
+  REQUIRE(woken.asleep);
+  woken.asleep = false;
+  woken.sleepTime = 0.0;
+
+  const talus::StepReport next = world.step();
+
+  REQUIRE(!next.dynamics.nonFinite);
+  REQUIRE(!woken.asleep);
+
+  Rescan rescan{next.destruction.moving, next.destruction.awakeManifolds};
+  const auto awake = [&world](const talus::dynamics::BodyRef& ref) {
+    return ref.side == talus::dynamics::Side::Rigid
+           && world.dynamics.bodies.rigids[ref.index].mass > 0.0
+           && !world.dynamics.bodies.rigids[ref.index].asleep;
+  };
+
+  for (const RigidBody& body : world.dynamics.bodies.rigids) {
+    rescan.scannedMoving += body.mass > 0.0 && !body.asleep
+                                && !world.destruction.rest().resting(body.id)
+                              ? 1u
+                              : 0u;
+  }
+
+  for (uint32_t slot = 0u; slot != world.dynamics.manifolds.size(); ++slot) {
+    if (world.dynamics.manifolds.live(slot)
+        && !world.dynamics.manifolds.at(slot).points.empty()) {
+      const talus::dynamics::CachedBodyPair& pair =
+        world.dynamics.manifolds.at(slot);
+
+      rescan.scannedManifolds +=
+        awake(pair.first) || awake(pair.second) ? 1u : 0u;
+    }
+  }
+
+  return rescan;
+}
+
+}
+
+TEST_CASE(
+  "after a destruction update throws, the next update counts every awake "
+  "body, even one woken behind the awake list",
+  "[destruction][destructionworld][awake]"
+) {
+  const Rescan thrown = rescanAfterACut(true);
+  const Rescan clean = rescanAfterACut(false);
+
+  CHECK(thrown.moving == thrown.scannedMoving);
+  CHECK(thrown.awakeManifolds == thrown.scannedManifolds);
+  CHECK(clean.moving + 1u == clean.scannedMoving);
+  CHECK(clean.awakeManifolds + 1u == clean.scannedManifolds);
+}
+
+namespace {
+
+constexpr uint32_t costWarmup = 30u;
+constexpr uint32_t costSteps = 300u;
+constexpr uint32_t settleLimit = 900u;
+constexpr double sleeperHalf = 0.05;
+constexpr double sleeperMass = 1.5;
+constexpr double worldGrowthLimitUs = 40.0;
+
+struct WorldCost {
+  double world = 0.0;
+  double dynamics = 0.0;
+  double destruction = 0.0;
+  double forcedDestruction = 0.0;
+};
+
+double median(std::vector<double> values) {
+  std::ranges::sort(values);
+
+  return values[values.size() / 2u];
+}
+
+WorldCost worldCost(uint32_t sleepers, uint32_t workers) {
+  static const talus::field::SampledSdf floorField =
+    boxField(glm::dvec3(60.0, 1.0, 60.0), 0.25);
+  static const talus::field::SampledSdf sleeperField =
+    boxField(glm::dvec3(sleeperHalf), 0.05);
+
+  talus::World world;
+
+  world.dynamics.workerCount = workers;
+  static_cast<void>(talus::dynamics::addStatic(
+    world.dynamics.bodies,
+    floorField,
+    0.5,
+    0.0,
+    glm::dvec3(0.0, -1.0, 0.0)
+  ));
+
+  const auto side =
+    static_cast<uint32_t>(std::ceil(std::sqrt(static_cast<double>(sleepers))));
+
+  for (uint32_t index = 0u; index != sleepers; ++index) {
+    static_cast<void>(talus::dynamics::addRigidBox(
+      world.dynamics.bodies,
+      sleeperField,
+      glm::dvec3(sleeperHalf),
+      sleeperMass,
+      glm::dvec3(
+        8.0 + 0.3 * static_cast<double>(index % side),
+        sleeperHalf,
+        0.3
+          * (static_cast<double>(index / side) - 0.5 * static_cast<double>(side))
+      ),
+      glm::dvec3(0.0),
+      0.5,
+      3u
+    ));
+  }
+
+  const auto settled = [&world] {
+    return std::ranges::all_of(
+      world.dynamics.bodies.rigids,
+      [](const RigidBody& body) { return body.asleep; }
+    );
+  };
+
+  for (uint32_t step = 0u; step != settleLimit && !settled(); ++step) {
+    REQUIRE(!world.step().dynamics.nonFinite);
+  }
+
+  REQUIRE(settled());
+
+  std::vector<double> whole;
+  std::vector<double> dynamics;
+  std::vector<double> destruction;
+  std::vector<double> forced;
+
+  for (uint32_t frame = 0u; frame != costWarmup + costSteps; ++frame) {
+    const talus::StepReport report = world.step();
+
+    REQUIRE(!report.dynamics.nonFinite);
+
+    if (frame >= costWarmup) {
+      dynamics.push_back(1000.0 * report.dynamics.profile.total);
+      destruction.push_back(1000.0 * report.destruction.profile.total);
+      whole.push_back(dynamics.back() + destruction.back());
+    }
+  }
+
+  for (uint32_t frame = 0u; frame != costWarmup + costSteps; ++frame) {
+    const talus::StepReport report = fullScanStep(world);
+
+    REQUIRE(!report.dynamics.nonFinite);
+
+    if (frame >= costWarmup) {
+      forced.push_back(1000.0 * report.destruction.profile.total);
+    }
+  }
+
+  return {median(whole), median(dynamics), median(destruction), median(forced)};
+}
+
+}
+
+TEST_CASE(
+  "World::step cost among many sleeping bodies",
+  "[.][worldsleepcost]"
+) {
+  for (const uint32_t workers : {1u, 8u}) {
+    double emptyUs = 0.0;
+
+    for (const uint32_t sleepers : {0u, 5000u, 20000u}) {
+      const WorldCost cost = worldCost(sleepers, workers);
+
+      if (sleepers == 0u) {
+        emptyUs = cost.world;
+      }
+
+      std::printf(
+        "worldsleepcost workers %u bodies %u world_us %.2f dynamics_us %.2f "
+        "destruction_us %.2f forced_full_destruction_us %.2f\n",
+        workers,
+        sleepers,
+        cost.world,
+        cost.dynamics,
+        cost.destruction,
+        cost.forcedDestruction
+      );
+
+      if (sleepers == 20000u) {
+        const double growthUs = cost.world - emptyUs;
+
+        std::printf(
+          "worldsleepcost workers %u growth_us %.2f from 0 to %u sleeping "
+          "bodies\n",
+          workers,
+          growthUs,
+          sleepers
+        );
+
+        if (workers == 1u) {
+          CHECK(growthUs < worldGrowthLimitUs);
+        }
+      }
+    }
   }
 }

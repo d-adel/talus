@@ -326,9 +326,12 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
   each step and visits every lattice island. Sleeping rigid bodies are not free
   there. In `talus::dynamics::step`, a sleeping rigid body costs almost nothing
   in all other worlds.
-- `talus::World::step` also runs the destruction update, which still visits every
-  rigid body each step: about 0.67 ms among 20,000 sleeping bodies on one worker
-  and 0.26 ms on eight (Ryzen 7 7840HS laptop).
+- In `talus::World::step`, the destruction update also visits only awake
+  bodies: 1 to 2 µs per step among 20,000 sleeping bodies on the Ryzen 7 7840HS
+  laptop, against 0.67 ms when it visited every body. It still visits every
+  rigid body in the update after an update that threw, in an update whose
+  scheduled removal takes away a whole piece, and in every update while
+  `discardBelow` is finite.
 
 ## Repository layout
 
