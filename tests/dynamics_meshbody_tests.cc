@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include "meshfixtures.h"
 
@@ -16,6 +17,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -24,6 +26,7 @@
 #include <numbers>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -169,6 +172,39 @@ double faceGap(
   return std::numbers::sqrt2 * farthest + step;
 }
 
+Mesh joined(const Mesh& first, const Mesh& second) {
+  Mesh both = first;
+  const uint32_t offset = static_cast<uint32_t>(first.vertices.size());
+
+  both.vertices.insert(
+    both.vertices.end(),
+    second.vertices.begin(),
+    second.vertices.end()
+  );
+
+  for (const uint32_t index : second.indices) {
+    both.indices.push_back(index + offset);
+  }
+
+  return both;
+}
+
+Mesh inward(Mesh mesh) {
+  for (size_t face = 0u; face < mesh.indices.size(); face += 3u) {
+    std::swap(mesh.indices[face + 1u], mesh.indices[face + 2u]);
+  }
+
+  return mesh;
+}
+
+Mesh shifted(Mesh mesh, const glm::vec3& by) {
+  for (glm::vec3& vertex : mesh.vertices) {
+    vertex += by;
+  }
+
+  return mesh;
+}
+
 constexpr glm::vec3 seamSlabHalf(0.3f, 0.025f, 0.15f);
 constexpr double seamSlabMass = 10.0;
 
@@ -258,7 +294,8 @@ double seamDrift(
   double degrees,
   bool tiltedRight,
   double friction,
-  bool meshSlab
+  bool meshSlab,
+  uint32_t steps
 ) {
   Seam seam;
 
@@ -267,7 +304,7 @@ double seamDrift(
 
   const glm::dvec3 start = bodyOf(seam.world.bodies, seam.slab).position;
 
-  run(seam.world, 120u);
+  run(seam.world, steps);
 
   return bodyOf(seam.world.bodies, seam.slab).position.x - start.x;
 }
@@ -525,6 +562,106 @@ TEST_CASE(
 }
 
 TEST_CASE(
+  "a box edge crossing mesh rails between their points sinks less than half "
+  "the point spacing",
+  "[dynamics][meshbody]"
+) {
+  const Threads threads;
+  const glm::vec3 railHalf(0.02f, 0.02f, 0.3f);
+  const Mesh rail = meshfixture::box(-railHalf, railHalf);
+  MeshShapeSettings settings;
+
+  settings.mass = 5.0;
+
+  const MeshShape shape =
+    meshShape(rail.vertices, rail.indices, settings, threads.workers);
+  World world;
+
+  (void)addFloor(world);
+
+  const std::array<double, 2> railX{-0.25, 0.25};
+  std::array<uint32_t, 2> rails{};
+
+  for (size_t side = 0u; side != rails.size(); ++side) {
+    rails[side] = addMeshBody(
+      world.bodies,
+      shape,
+      glm::dvec3(railX[side], static_cast<double>(railHalf.y), 0.0),
+      noTurn,
+      glm::dvec3(0.0)
+    );
+  }
+
+  const glm::dvec3 barHalf(0.5, 0.02, 0.02);
+  CompoundChild bar;
+
+  bar.half = barHalf;
+  bar.density = 1.0 / (8.0 * barHalf.x * barHalf.y * barHalf.z);
+
+  std::vector<uint32_t> bars;
+
+  for (uint32_t index = 0u; index != 5u; ++index) {
+    bars.push_back(addCompoundBody(
+      world.bodies,
+      std::vector<CompoundChild>{bar},
+      glm::dvec3(
+        0.0,
+        2.0 * static_cast<double>(railHalf.y) + barHalf.y * std::numbers::sqrt2
+          + 0.002,
+        -0.2 + 0.084 * static_cast<double>(index)
+      ),
+      glm::angleAxis(std::numbers::pi / 4.0, glm::dvec3(1.0, 0.0, 0.0)),
+      glm::dvec3(0.0),
+      0.5,
+      0.0,
+      false
+    ));
+  }
+
+  run(world, 240u);
+
+  for (const uint32_t index : bars) {
+    const RigidBody& body = world.bodies.rigids[index];
+    const glm::dquat turn =
+      body.rotation * body.compound->children.front().rotation;
+    std::array<glm::dvec3, 8> corners{};
+
+    for (uint32_t corner = 0u; corner != corners.size(); ++corner) {
+      const glm::dvec3 sign(
+        (corner & 1u) != 0u ? 1.0 : -1.0,
+        (corner & 2u) != 0u ? 1.0 : -1.0,
+        (corner & 4u) != 0u ? 1.0 : -1.0
+      );
+
+      corners[corner] = body.position + turn * (sign * barHalf);
+    }
+
+    std::ranges::sort(corners, [](const glm::dvec3& a, const glm::dvec3& b) {
+      return a.y < b.y;
+    });
+
+    const glm::dvec3 from = corners[0];
+    const glm::dvec3 along = corners[1] - corners[0];
+    double depth = -std::numeric_limits<double>::infinity();
+
+    for (size_t side = 0u; side != rails.size(); ++side) {
+      const MeshFrame top = meshFrame(bodyOf(world.bodies, rails[side]));
+      const glm::dvec3 up = top.rotation * glm::dvec3(0.0, 1.0, 0.0);
+      const glm::dvec3 surface =
+        top.position + top.rotation * glm::dvec3(0.0, railHalf.y, 0.0);
+      const glm::dvec3 over =
+        from + along * ((top.position.x - from.x) / along.x);
+
+      depth = std::max(depth, glm::dot(surface - over, up));
+    }
+
+    CAPTURE(index, depth, glm::length(body.velocity));
+    CHECK(depth <= 0.5 * settings.spacing + 0.002);
+    CHECK(glm::length(body.velocity) < 0.01);
+  }
+}
+
+TEST_CASE(
   "a thin plate gets contact points on both large faces",
   "[dynamics][meshbody]"
 ) {
@@ -694,87 +831,146 @@ TEST_CASE("meshShape refuses bad settings", "[dynamics][meshbody]") {
 }
 
 TEST_CASE(
-  "a slippery mesh body across a shallow compound crease creeps less than a "
-  "box body",
+  "a mesh body resting across a compound crease stays where it is",
   "[dynamics][meshbody]"
 ) {
-  for (const bool tiltedRight : {true, false}) {
-    const double mesh = seamDrift(6.0, tiltedRight, 0.08, true);
-    const double box = seamDrift(6.0, tiltedRight, 0.08, false);
+  for (const double degrees : {6.0, 15.0, 30.0}) {
+    for (const bool tiltedRight : {true, false}) {
+      const double mesh = seamDrift(degrees, tiltedRight, 0.6, true, 300u);
+      const double box = seamDrift(degrees, tiltedRight, 0.6, false, 300u);
 
-    CAPTURE(tiltedRight, mesh, box);
-    CHECK(std::abs(mesh) < std::abs(box));
+      CAPTURE(degrees, tiltedRight, mesh, box);
+      CHECK(std::abs(mesh) < 0.001);
+      CHECK(std::abs(box) < 0.001);
+    }
   }
 }
 
 TEST_CASE(
-  "field contacts on compound faces share a manifold only when their normals "
-  "match",
+  "meshShape refuses overlapping or wrongly nested shells",
   "[dynamics][meshbody]"
 ) {
-  for (const double degrees : {0.5, 2.0}) {
-    Seam seam;
+  const Mesh bar = meshfixture::box(
+    glm::vec3(-0.125f, -0.05f, -0.05f),
+    glm::vec3(0.125f, 0.05f, 0.05f)
+  );
+  const Mesh outer = meshfixture::box(glm::vec3(-0.2f), glm::vec3(0.2f));
+  const Mesh inner = meshfixture::box(glm::vec3(-0.1f), glm::vec3(0.1f));
+  const std::array<Mesh, 2> refused{
+    joined(bar, shifted(bar, glm::vec3(0.15f, 0.0f, 0.0f))),
+    joined(outer, inner)
+  };
 
-    buildSeam(seam, degrees, true, 0.5, true);
-    run(seam.world, 30u);
-
-    const RigidBody& slab = bodyOf(seam.world.bodies, seam.slab);
-    const RigidBody& ground = seam.world.bodies.rigids[seam.ground];
-    uint32_t manifolds = 0u;
-    uint32_t mixed = 0u;
-    std::array<uint32_t, 2> touched{0u, 0u};
-
-    for (uint32_t slot = 0u; slot != seam.world.manifolds.size(); ++slot) {
-      if (!seam.world.manifolds.live(slot)) {
-        continue;
-      }
-
-      const CachedBodyPair& pair = seam.world.manifolds.at(slot);
-      const bool slabFirst =
-        seam.world.bodies.rigids[pair.first.index].id == slab.id;
-
-      if (pair.second.side != Side::Rigid
-          || seam.world.bodies.rigids[pair.second.index].id
-               != (slabFirst ? ground.id : slab.id)) {
-        continue;
-      }
-
-      for (const CachedManifold& manifold : pair.manifolds) {
-        if (manifold.flipped == slabFirst) {
-          continue;
-        }
-
-        std::array<bool, 2> keys{false, false};
-
-        for (uint32_t at = manifold.start;
-             at != manifold.start + manifold.count;
-             ++at) {
-          const CachedManifoldPoint& point = pair.manifoldPoints[at];
-          const uint32_t key = slabFirst ? point.secondChild : point.firstChild;
-
-          REQUIRE(key < 2u);
-          keys[key] = true;
-        }
-
-        manifolds += 1u;
-        mixed += keys[0] && keys[1] ? 1u : 0u;
-        touched[0] += keys[0] ? 1u : 0u;
-        touched[1] += keys[1] ? 1u : 0u;
-      }
-    }
-
-    CAPTURE(degrees, manifolds, mixed, touched[0], touched[1]);
-    REQUIRE(touched[0] > 0u);
-    REQUIRE(touched[1] > 0u);
-
-    if (degrees < 1.0) {
-      CHECK(manifolds == 1u);
-      CHECK(mixed == 1u);
-    } else {
-      CHECK(manifolds == 2u);
-      CHECK(mixed == 0u);
-    }
+  for (const Mesh& mesh : refused) {
+    CHECK_THROWS_AS(
+      (void)meshShape(mesh.vertices, mesh.indices, {}),
+      std::invalid_argument
+    );
   }
+}
+
+TEST_CASE(
+  "meshShape accepts single and separate shells of either winding",
+  "[dynamics][meshbody]"
+) {
+  const Threads threads;
+  const Mesh bar = meshfixture::box(
+    glm::vec3(-0.125f, -0.05f, -0.05f),
+    glm::vec3(0.125f, 0.05f, 0.05f)
+  );
+  const std::vector<Mesh> accepted{
+    meshfixture::box(-boxHalf, boxHalf),
+    meshfixture::icosphere(0.25f, 4u),
+    meshfixture::icosphere(0.05f, 3u),
+    meshfixture::torus(0.2, 0.07, 96u, 32u),
+    meshfixture::prism(
+      {{0.0f, 0.0f},
+       {0.3f, 0.0f},
+       {0.3f, 0.1f},
+       {0.1f, 0.1f},
+       {0.1f, 0.3f},
+       {0.0f, 0.3f}},
+      3u,
+      0.0f,
+      0.08f
+    ),
+    meshfixture::box(glm::vec3(-0.005f), glm::vec3(0.005f)),
+    joined(bar, shifted(bar, glm::vec3(0.4f, 0.0f, 0.0f))),
+    joined(
+      meshfixture::box(glm::vec3(-0.2f), glm::vec3(0.2f)),
+      inward(meshfixture::box(glm::vec3(-0.1f), glm::vec3(0.1f)))
+    )
+  };
+
+  for (size_t index = 0u; index != accepted.size(); ++index) {
+    CAPTURE(index);
+    CHECK_NOTHROW((void)meshShape(
+      accepted[index].vertices,
+      accepted[index].indices,
+      {},
+      threads.workers
+    ));
+  }
+
+  const Mesh box = meshfixture::box(-boxHalf, boxHalf);
+  const Mesh turned = inward(box);
+  const MeshShape outside = meshShape(box.vertices, box.indices, {});
+  const MeshShape inside = meshShape(turned.vertices, turned.indices, {});
+
+  REQUIRE(outside.field->distances.size() == inside.field->distances.size());
+  REQUIRE(outside.body.samples.size() == inside.body.samples.size());
+
+  double distance = 0.0;
+  double sample = 0.0;
+
+  for (size_t index = 0u; index != outside.field->distances.size(); ++index) {
+    distance = std::max(
+      distance,
+      std::abs(
+        static_cast<double>(outside.field->distances[index])
+        - static_cast<double>(inside.field->distances[index])
+      )
+    );
+  }
+
+  for (size_t index = 0u; index != outside.body.samples.size(); ++index) {
+    sample = std::max(
+      sample,
+      glm::length(outside.body.samples[index] - inside.body.samples[index])
+    );
+  }
+
+  const double moment = glm::length(outside.body.moment - inside.body.moment)
+                        / glm::length(outside.body.moment);
+
+  CAPTURE(distance, sample, moment);
+  CHECK(distance <= 1.0e-6);
+  CHECK(sample <= 1.0e-6);
+  CHECK(moment <= 1.0e-6);
+}
+
+TEST_CASE(
+  "meshShape refuses more contact points than contact keys can number",
+  "[dynamics][meshbody]"
+) {
+  const Threads threads;
+  const glm::vec3 half(0.8f, 0.006f, 0.8f);
+  const Mesh plate = meshfixture::box(-half, half);
+  MeshShapeSettings settings;
+
+  settings.spacing = 0.004;
+  settings.voxel = 0.004;
+  CHECK_THROWS_WITH(
+    (void)meshShape(plate.vertices, plate.indices, settings, threads.workers),
+    Catch::Matchers::ContainsSubstring("contact points")
+  );
+
+  settings.spacing = 0.008;
+  CHECK(
+    meshShape(plate.vertices, plate.indices, settings, threads.workers)
+      .body.samples.size()
+    <= size_t{1} << 18u
+  );
 }
 
 TEST_CASE(

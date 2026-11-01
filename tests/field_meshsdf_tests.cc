@@ -27,45 +27,7 @@ using meshfixture::box;
 using meshfixture::icosphere;
 using meshfixture::Mesh;
 using meshfixture::prism;
-
-Mesh torus(double major, double minor, uint32_t around, uint32_t tube) {
-  const double turn = 2.0 * std::numbers::pi;
-
-  Mesh mesh;
-
-  for (uint32_t i = 0u; i != around; ++i) {
-    for (uint32_t j = 0u; j != tube; ++j) {
-      const double u = turn * i / around;
-      const double v = turn * j / tube;
-      const double reach = major + minor * std::cos(v);
-
-      mesh.vertices.push_back(
-        glm::vec3(
-          glm::dvec3(
-            reach * std::cos(u),
-            reach * std::sin(u),
-            minor * std::sin(v)
-          )
-        )
-      );
-    }
-  }
-
-  for (uint32_t i = 0u; i != around; ++i) {
-    for (uint32_t j = 0u; j != tube; ++j) {
-      const uint32_t next = (i + 1u) % around;
-      const uint32_t up = (j + 1u) % tube;
-      const uint32_t a = i * tube + j;
-      const uint32_t b = next * tube + j;
-      const uint32_t c = next * tube + up;
-      const uint32_t d = i * tube + up;
-
-      mesh.indices.insert(mesh.indices.end(), {a, b, c, a, c, d});
-    }
-  }
-
-  return mesh;
-}
+using meshfixture::torus;
 
 double segmentDistanceSquared(
   const glm::dvec3& point,

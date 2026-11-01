@@ -345,9 +345,9 @@ double treeTwist(
   const auto consider = [&](uint32_t index) {
     const CachedManifold& before = old[index];
     const double aligned = glm::dot(before.basis[0], normal);
+    const bool tied = aligned == closest && (pick == noItem || index > pick);
 
-    if (before.flipped == manifold.flipped
-        && (aligned > closest || (aligned == closest && (pick == noItem || index > pick)))) {
+    if (before.flipped == manifold.flipped && (aligned > closest || tied)) {
       closest = aligned;
       pick = index;
     }
