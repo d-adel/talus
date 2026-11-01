@@ -316,8 +316,10 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
 - Stepping 0.4 m up onto 10 kg crates shoves them down with about 5 kN.
 - A character spawned exactly at its rest height misses the ground with its
   first in-air ray.
-- A sleeping body costs about 0.1 µs per step: about 2 ms of step time among
-  20,000 sleeping bodies on the Ryzen 7 7840HS laptop.
+- `world.islands` lists only islands with an awake body or a lattice.
+- A step after a body removal, a tier switch or a contact-band change visits
+  every body: about 1.4 ms among 20,000 sleeping bodies on the Ryzen 7 7840HS
+  laptop.
 
 ## Repository layout
 

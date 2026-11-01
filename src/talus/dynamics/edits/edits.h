@@ -22,6 +22,8 @@ void forgetBody(World& world, Side side, uint32_t index, uint32_t id);
 
 void eraseRigids(BodySet& bodies, std::span<const uint8_t> gone);
 
+void eraseLattice(BodySet& bodies, uint32_t index);
+
 bool removeBody(World& world, uint32_t id);
 
 uint32_t removeBodies(World& world, std::span<const uint32_t> ids);
@@ -55,7 +57,11 @@ bool thawBody(World& world, uint32_t id);
 
 [[nodiscard]] bool isFrozen(const RigidBody& body);
 
-uint32_t thawStruck(World& world, double speed);
+uint32_t thawStruck(
+  World& world,
+  double speed,
+  const std::vector<uint32_t>* live = nullptr
+);
 
 bool replaceRigidShape(World& world, uint32_t id, const RigidBody& shape);
 

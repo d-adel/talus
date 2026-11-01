@@ -209,21 +209,30 @@ bool ManifoldCache::touchedLast(uint32_t id) const {
   return id < m_touched.size() && m_touched[id] != 0u;
 }
 
-void ManifoldCache::keepTouched(const BodySet& bodies, std::span<const uint8_t> touched) {
-  std::fill(m_touched.begin(), m_touched.end(), uint8_t{0u});
+std::span<const uint32_t> ManifoldCache::touchedIndices() const {
+  return m_touchedIndices;
+}
 
-  for (uint32_t index = 0u; index != touched.size(); ++index) {
+void ManifoldCache::keepTouched(
+  const BodySet& bodies,
+  std::span<const uint32_t> indices
+) {
+  for (const uint32_t id : m_touchedIds) {
+    m_touched[id] = 0u;
+  }
+
+  m_touchedIds.clear();
+  m_touchedIndices.assign(indices.begin(), indices.end());
+
+  for (const uint32_t index : indices) {
     const uint32_t id = bodies.rigids[index].id;
-
-    if (touched[index] == 0u) {
-      continue;
-    }
 
     if (id >= m_touched.size()) {
       m_touched.resize(id + 1u, 0u);
     }
 
     m_touched[id] = 1u;
+    m_touchedIds.push_back(id);
   }
 }
 
@@ -387,22 +396,36 @@ void ManifoldCache::recolour(const BodySet& bodies, std::span<const uint32_t> sl
   }
 }
 
-std::vector<uint32_t> ManifoldCache::syncBodies(const BodySet& bodies, const Workers& workers) {
+std::vector<uint32_t> ManifoldCache::syncBodies(
+  const BodySet& bodies,
+  const Workers& workers,
+  const std::vector<uint32_t>* live
+) {
   std::vector<uint32_t> slots;
   const auto stateOf = [](const RigidBody& body) {
     return static_cast<uint8_t>(4u | (body.asleep ? 0u : 1u) | (body.mass > 0.0 ? 2u : 0u));
   };
   std::vector<std::vector<uint32_t>> found(std::max(workers.count, 1u));
+  const uint32_t count = static_cast<uint32_t>(
+    live != nullptr ? live->size() : bodies.rigids.size()
+  );
 
-  parallelFor(workers, static_cast<uint32_t>(bodies.rigids.size()), 1024u, [&](uint32_t begin, uint32_t end, uint32_t worker) {
-    for (uint32_t index = begin; index != end; ++index) {
-      const RigidBody& body = bodies.rigids[index];
+  parallelFor(
+    workers,
+    count,
+    1024u,
+    [&](uint32_t begin, uint32_t end, uint32_t worker) {
+      for (uint32_t entry = begin; entry != end; ++entry) {
+        const uint32_t index = live != nullptr ? (*live)[entry] : entry;
+        const RigidBody& body = bodies.rigids[index];
 
-      if (body.id >= m_bodyState.size() || m_bodyState[body.id] != stateOf(body)) {
-        found[worker].push_back(index);
+        if (body.id >= m_bodyState.size()
+            || m_bodyState[body.id] != stateOf(body)) {
+          found[worker].push_back(index);
+        }
       }
     }
-  });
+  );
 
   std::vector<uint32_t> changed;
 

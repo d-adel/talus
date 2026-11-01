@@ -4,6 +4,7 @@
 #include <talus/dynamics/integrationparameters/integrationparameters.h>
 #include <talus/dynamics/broadphase/broadphase.h>
 #include <talus/dynamics/contact/contact.h>
+#include <talus/dynamics/continuous/continuous.h>
 #include <talus/dynamics/islands/islands.h>
 #include <talus/dynamics/joints/joints.h>
 #include <talus/dynamics/manifoldcache/manifoldcache.h>
@@ -11,6 +12,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <unordered_set>
 #include <vector>
@@ -81,6 +83,12 @@ struct AwakeList {
   double band = 0.0;
 };
 
+struct StepBuffers {
+  std::vector<double> travel;
+  std::vector<RigidPose> start;
+  std::optional<std::vector<uint32_t>> anchors;
+};
+
 struct World {
   BodySet bodies;
   std::vector<Contact> contacts;
@@ -103,6 +111,7 @@ struct World {
   IntegrationParameters parameters;
   double time = 0.0;
   AwakeList awake;
+  StepBuffers buffers;
 };
 
 [[nodiscard]] StepReport step(World& world);

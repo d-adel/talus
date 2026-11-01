@@ -5,6 +5,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace talus::dynamics {
@@ -112,8 +113,9 @@ double sleepSpeed(const RigidBody& body, const RigidPose& start, double dt) {
     + 2.0 * glm::length(glm::dvec3(turn.x, turn.y, turn.z)) * extent;
   const double moving =
     glm::length(body.velocity) + glm::length(body.angularVelocity) * extent;
+  const double drift = 0.5 * moved / dt;
 
-  return std::max(moving, 0.5 * moved / dt);
+  return moving < drift || std::isnan(drift) ? drift : moving;
 }
 
 double sleepSpeed(const LatticeBody& body, double dt) {
@@ -158,7 +160,7 @@ void settleIslands(
           : sleepSpeed(bodies.lattices[ref.index], parameters.dt);
       double& time = sleepTimeOf(bodies, ref);
 
-      time = speed > parameters.sleepThreshold ? 0.0 : time + parameters.dt;
+      time = speed <= parameters.sleepThreshold ? time + parameters.dt : 0.0;
 
       const uint32_t candidate = store.islandOf(idOf(ref));
 

@@ -2040,6 +2040,55 @@ TEST_CASE("visiting only the pieces near motion steps exactly as visiting every 
   CHECK(destructionfixture::mismatch(near->destruction, near->world).empty());
 }
 
+TEST_CASE(
+  "a destruction world whose dynamics steps walk only awake bodies steps "
+  "exactly as one whose every step visits every body",
+  "[destruction][destructionworld][awake]"
+) {
+  const std::unique_ptr<Twin> walked = visitTwin(false);
+  const std::unique_ptr<Twin> full = visitTwin(false);
+  uint32_t sparse = 0u;
+  uint32_t asleepSteps = 0u;
+
+  for (uint64_t step = 1u; step <= 450u; ++step) {
+    visitEvents(*walked, step);
+    visitEvents(*full, step);
+    full->world.bodies.layout += 1u;
+
+    const talus::dynamics::AwakeList& awake = walked->world.awake;
+    const talus::dynamics::IntegrationParameters& parameters =
+      walked->world.parameters;
+
+    sparse +=
+      awake.layout == walked->world.bodies.layout
+          && awake.latticeCount == walked->world.bodies.lattices.size()
+          && awake.rigidCount <= walked->world.bodies.rigids.size()
+          && awake.band == parameters.speculativeDistance + parameters.margin
+        ? 1u
+        : 0u;
+
+    const DestructionReport fromList = visitStep(*walked);
+    const DestructionReport fromAll = visitStep(*full);
+
+    INFO("step " << step);
+    REQUIRE(destructionfixture::sameOutcome(fromList, fromAll));
+    REQUIRE(
+      destructionfixture::stateHash(walked->destruction, walked->world)
+      == destructionfixture::stateHash(full->destruction, full->world)
+    );
+    asleepSteps += rigidOf(
+                     walked->world,
+                     *walked->destruction.bodyOf(walked->built.building, 1u)
+                   )
+                       .asleep
+                     ? 1u
+                     : 0u;
+  }
+
+  CHECK(sparse > 225u);
+  CHECK(asleepSteps > 50u);
+}
+
 TEST_CASE("the destruction update steps the same on 1 and 8 workers, report for report and state for state", "[destruction][destructionworld]") {
   const std::unique_ptr<Twin> serial = visitTwin(false, 1u);
   const std::unique_ptr<Twin> parallel = visitTwin(false, 8u);

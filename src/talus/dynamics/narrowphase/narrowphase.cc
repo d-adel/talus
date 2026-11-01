@@ -1681,13 +1681,16 @@ PairEvents updateCachedPairs(
   const Workers& workers,
   const BroadPhase* broadPhase,
   PairWork* work,
-  const std::vector<uint32_t>* active
+  const std::vector<uint32_t>* active,
+  bool sameIndices
 ) {
   std::vector<std::vector<Contact>> scratch(workers.count);
   std::vector<ChildScratch> childScratch(workers.count);
   std::vector<std::vector<uint32_t>> separated(workers.count);
   std::vector<std::vector<uint32_t>> changed(workers.count);
   std::vector<std::vector<uint32_t>> risen(workers.count);
+  std::vector<std::vector<uint32_t>> marked(workers.count);
+  std::vector<uint32_t> kept;
   std::vector<PairTicks> tallies(work != nullptr ? workers.count : 0u);
   std::vector<uint8_t> touchedBefore(bodies.rigids.size(), 0u);
   std::vector<uint8_t> touched(bodies.rigids.size(), 0u);
@@ -1695,8 +1698,15 @@ PairEvents updateCachedPairs(
   const uint64_t firstTick = work != nullptr ? ticks() : 0u;
   const std::chrono::steady_clock::time_point firstTime = std::chrono::steady_clock::now();
 
-  for (uint32_t index = 0u; index != bodies.rigids.size(); ++index) {
-    touchedBefore[index] = cache.touchedLast(bodies.rigids[index].id) ? 1u : 0u;
+  if (sameIndices) {
+    for (const uint32_t index : cache.touchedIndices()) {
+      touchedBefore[index] = 1u;
+    }
+  } else {
+    for (uint32_t index = 0u; index != bodies.rigids.size(); ++index) {
+      touchedBefore[index] =
+        cache.touchedLast(bodies.rigids[index].id) ? 1u : 0u;
+    }
   }
 
   if (broadPhase != nullptr) {
@@ -1704,7 +1714,11 @@ PairEvents updateCachedPairs(
       for (const BodyRef& ref : std::array<BodyRef, 2>{near.first, near.second}) {
         if (ref.side == Side::Rigid) {
           touchedBefore[ref.index] = 1u;
-          touched[ref.index] = 1u;
+
+          if (touched[ref.index] == 0u) {
+            touched[ref.index] = 1u;
+            kept.push_back(ref.index);
+          }
         }
       }
     }
@@ -1721,7 +1735,13 @@ PairEvents updateCachedPairs(
       return;
     }
 
-    if (mark.exchange(1u, std::memory_order_relaxed) == 0u && touchedBefore[index] == 0u) {
+    if (mark.exchange(1u, std::memory_order_relaxed) != 0u) {
+      return;
+    }
+
+    marked[worker].push_back(index);
+
+    if (touchedBefore[index] == 0u) {
       risen[worker].push_back(index);
     }
   };
@@ -2020,7 +2040,12 @@ PairEvents updateCachedPairs(
     redone.insert(redone.end(), again.begin(), again.end());
   }
 
-  cache.keepTouched(bodies, touched);
+  for (const std::vector<uint32_t>& list : marked) {
+    kept.insert(kept.end(), list.begin(), list.end());
+  }
+
+  std::sort(kept.begin(), kept.end());
+  cache.keepTouched(bodies, kept);
 
   if (work != nullptr) {
     const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - firstTime).count();

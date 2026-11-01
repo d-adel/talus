@@ -56,7 +56,8 @@ public:
     const IntegrationParameters& parameters,
     std::span<const double> travel,
     const Workers& workers,
-    const ManifoldCache* known = nullptr
+    const ManifoldCache* known = nullptr,
+    const std::vector<uint32_t>* live = nullptr
   );
   void markMoved(uint32_t id);
   void rebuildTrees();
@@ -120,6 +121,10 @@ private:
   std::vector<Bounds> m_tight;
   std::vector<uint8_t> m_changedMoving;
   std::vector<uint8_t> m_changedFixed;
+  std::vector<uint32_t> m_markedMoving;
+  std::vector<uint32_t> m_markedFixed;
+  std::vector<uint32_t> m_forced;
+  std::vector<uint32_t> m_visit;
   std::vector<uint32_t> m_pending;
   std::vector<uint8_t> m_action;
   std::vector<Bounds> m_fat;

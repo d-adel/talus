@@ -795,7 +795,7 @@ bool jointEnd(std::span<const uint32_t> ends, uint32_t id) {
     fit.centre = plasticFit.centre;
   }
 
-  world.bodies.lattices.erase(world.bodies.lattices.begin() + ref->index);
+  eraseLattice(world.bodies, ref->index);
   forgetBody(world, Side::Lattice, ref->index, id);
 
   RigidBody rigid = body->rigid;

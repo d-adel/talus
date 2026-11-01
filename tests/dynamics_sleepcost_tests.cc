@@ -35,6 +35,8 @@ constexpr uint32_t measuredSteps = 300u;
 constexpr uint32_t settleLimit = 900u;
 constexpr double crateHalf = 0.05;
 constexpr double crateMass = 1.5;
+constexpr double idleGrowthLimitUs = 20000.0 * 0.002;
+constexpr double charactersGrowthLimitUs = 55.0;
 
 constexpr std::array<const char*, phaseCount> phaseNames{
   "travel",
@@ -211,6 +213,8 @@ SceneRun runScene(Scene scene, uint32_t sleepers) {
   double awakeSum = 0.0;
 
   for (uint32_t frame = 0u; frame != warmupSteps + measuredSteps; ++frame) {
+    bool edited = true;
+
     if (scene == Scene::Characters) {
       const double time = static_cast<double>(frame) / 60.0;
 
@@ -218,15 +222,18 @@ SceneRun runScene(Scene scene, uint32_t sleepers) {
         fixture::MoverStep move;
 
         move.velocity = 2.0 * glm::dvec3(-std::sin(time), 0.0, std::cos(time));
-        (void)fixture::tryMoveCharacter(world, characters[index], move);
+        edited =
+          fixture::tryMoveCharacter(world, characters[index], move).applied
+          && edited;
 
         for (size_t hand = 0u; hand != 2u; ++hand) {
-          (void)fixture::driveGrip(
-            world,
-            grips[index][hand],
-            characters[index].body,
-            offsets[hand]
-          );
+          edited = fixture::driveGrip(
+                     world,
+                     grips[index][hand],
+                     characters[index].body,
+                     offsets[hand]
+                   )
+                   && edited;
         }
       }
     }
@@ -234,6 +241,7 @@ SceneRun runScene(Scene scene, uint32_t sleepers) {
     const StepReport report = step(world);
 
     REQUIRE_FALSE(report.nonFinite);
+    REQUIRE(edited);
 
     if (frame < warmupSteps) {
       continue;
@@ -317,6 +325,25 @@ TEST_CASE("step cost among many sleeping bodies", "[.][sleepcost]") {
         stepUs,
         perSleepingNs
       );
+
+      if (sleepers != 20000u) {
+        continue;
+      }
+
+      const double growthUs = stepUs - emptyStepUs;
+
+      std::printf(
+        "sleepcost scene %s growth_us %.2f from 0 to %u sleeping bodies\n",
+        sceneName(scene),
+        growthUs,
+        sleepers
+      );
+
+      if (scene == Scene::Idle) {
+        CHECK(growthUs < idleGrowthLimitUs);
+      } else if (scene == Scene::Characters) {
+        CHECK(growthUs < charactersGrowthLimitUs);
+      }
     }
   }
 }

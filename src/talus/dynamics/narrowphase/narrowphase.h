@@ -31,7 +31,8 @@ PairEvents updateCachedPairs(
   const Workers& workers = Workers{},
   const BroadPhase* broadPhase = nullptr,
   PairWork* work = nullptr,
-  const std::vector<uint32_t>* active = nullptr
+  const std::vector<uint32_t>* active = nullptr,
+  bool sameIndices = false
 );
 
 [[nodiscard]] glm::dvec3 sidePoint(

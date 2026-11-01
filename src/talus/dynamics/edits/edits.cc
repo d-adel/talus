@@ -79,6 +79,58 @@ bool thawFrom(World& world, std::vector<Frozen> pending) {
   return thawed;
 }
 
+std::vector<uint32_t> frozenNear(
+  const World& world,
+  const std::vector<uint32_t>* live
+) {
+  const BodySet& bodies = world.bodies;
+  std::vector<uint32_t> frozen;
+
+  if (live == nullptr) {
+    for (uint32_t index = 0u; index != bodies.rigids.size(); ++index) {
+      if (isFrozen(bodies.rigids[index])) {
+        frozen.push_back(index);
+      }
+    }
+
+    return frozen;
+  }
+
+  const auto touching = [&](uint32_t id) {
+    for (const uint32_t slot : world.manifolds.pairsOf(id)) {
+      if (!world.manifolds.live(slot)
+          || world.manifolds.at(slot).points.empty()) {
+        continue;
+      }
+
+      const CachedBodyPair& pair = world.manifolds.at(slot);
+
+      for (const BodyRef& end : {pair.first, pair.second}) {
+        if (frozenAt(bodies, end)) {
+          frozen.push_back(end.index);
+        }
+      }
+    }
+  };
+
+  for (const uint32_t index : *live) {
+    const RigidBody& body = bodies.rigids[index];
+
+    if (!body.asleep && body.mass > 0.0) {
+      touching(body.id);
+    }
+  }
+
+  for (const uint32_t id : world.thawOnContact) {
+    touching(id);
+  }
+
+  std::sort(frozen.begin(), frozen.end());
+  frozen.erase(std::unique(frozen.begin(), frozen.end()), frozen.end());
+
+  return frozen;
+}
+
 void thawTouching(World& world, const BodyRef& ref, uint32_t id) {
   std::vector<Frozen> frozen{Frozen{id, ref}};
 
@@ -314,6 +366,7 @@ void resetContacts(World& world) {
   world.manifolds = ManifoldCache{};
   world.broadPhase = BroadPhase{};
   world.islandStore = IslandStore{};
+  world.bodies.layout += 1u;
 }
 
 void forgetBody(World& world, Side side, uint32_t index, uint32_t id) {
@@ -328,6 +381,11 @@ void eraseRigids(BodySet& bodies, std::span<const uint8_t> gone) {
   std::erase_if(bodies.rigids, [&](const RigidBody&) {
     return gone[at++] != 0u;
   });
+  bodies.layout += 1u;
+}
+
+void eraseLattice(BodySet& bodies, uint32_t index) {
+  bodies.lattices.erase(bodies.lattices.begin() + index);
   bodies.layout += 1u;
 }
 
@@ -347,7 +405,7 @@ bool removeBody(World& world, uint32_t id) {
     gone[ref->index] = 1u;
     eraseRigids(world.bodies, gone);
   } else {
-    world.bodies.lattices.erase(world.bodies.lattices.begin() + ref->index);
+    eraseLattice(world.bodies, ref->index);
   }
 
   forgetBody(world, ref->side, ref->index, id);
@@ -687,15 +745,15 @@ bool isFrozen(const RigidBody& body) {
   return body.frozenMass > 0.0;
 }
 
-uint32_t thawStruck(World& world, double speed) {
+uint32_t thawStruck(
+  World& world,
+  double speed,
+  const std::vector<uint32_t>* live
+) {
   std::vector<Frozen> struck;
 
-  for (uint32_t index = 0u; index != world.bodies.rigids.size(); ++index) {
+  for (const uint32_t index : frozenNear(world, live)) {
     const RigidBody& frozen = world.bodies.rigids[index];
-
-    if (!isFrozen(frozen)) {
-      continue;
-    }
 
     const double inverseFrozenMass = 1.0 / frozen.frozenMass;
     const glm::dvec3 inverseMoment{

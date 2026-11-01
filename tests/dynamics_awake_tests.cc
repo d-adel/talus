@@ -18,10 +18,13 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <random>
 #include <span>
@@ -73,6 +76,27 @@ const talus::field::SampledSdf& paddleField() {
 const talus::field::SampledSdf& blockField() {
   static const talus::field::SampledSdf field =
     boxField(glm::dvec3(0.05, 0.025, 0.05), 0.025);
+
+  return field;
+}
+
+constexpr double ballRadius = 0.05;
+
+const talus::field::SampledSdf& ballField() {
+  static const talus::field::SampledSdf field = [] {
+    const double voxel = ballRadius / 5.0;
+    const glm::vec3 reach(static_cast<float>(ballRadius + 2.0 * voxel));
+
+    return talus::field::bake(
+      std::vector<talus::field::Primitive>{
+        fixture::sphere(glm::vec3(0.0f), static_cast<float>(ballRadius))
+      },
+      -reach,
+      reach,
+      glm::uvec3(glm::round(2.0f * reach / static_cast<float>(voxel)))
+        + glm::uvec3(1u)
+    );
+  }();
 
   return field;
 }
@@ -765,6 +789,323 @@ void keepInYard(World& world, Yard& yard) {
   }
 }
 
+std::vector<Edit> rollEdits(Dice& dice, uint32_t frame) {
+  std::vector<Edit> edits;
+
+  if (dice.below(10u) == 0u) {
+    edits.resize(1u + dice.below(2u));
+    std::ranges::generate(edits, [&] {
+      return editDeck[dice.below(editDeck.size())];
+    });
+  }
+
+  if (frame == moveStaticFrame) {
+    edits.push_back(Edit::MoveStatic);
+  }
+
+  if (frame == pauseSleepFrame) {
+    edits.push_back(Edit::PauseSleep);
+  }
+
+  return edits;
+}
+
+void editYard(World& world, Yard& yard, Dice& dice, uint32_t frame) {
+  world.parameters.sleep = true;
+  keepInYard(world, yard);
+
+  for (const Edit edit : rollEdits(dice, frame)) {
+    static_cast<void>(applyEdit(world, yard, dice, edit));
+  }
+}
+
+bool walksAwakeOnly(const World& world) {
+  const AwakeList& awake = world.awake;
+
+  return world.parameters.sleep && awake.layout == world.bodies.layout
+         && awake.latticeCount == world.bodies.lattices.size()
+         && awake.rigidCount <= world.bodies.rigids.size()
+         && awake.band
+              == world.parameters.speculativeDistance + world.parameters.margin;
+}
+
+void forceFullStep(World& world) {
+  world.bodies.layout += 1u;
+}
+
+bool sameBits(double a, double b) {
+  return std::bit_cast<uint64_t>(a) == std::bit_cast<uint64_t>(b);
+}
+
+bool sameBits(const glm::dvec3& a, const glm::dvec3& b) {
+  return sameBits(a.x, b.x) && sameBits(a.y, b.y) && sameBits(a.z, b.z);
+}
+
+bool sameBits(const glm::dquat& a, const glm::dquat& b) {
+  return sameBits(a.x, b.x) && sameBits(a.y, b.y) && sameBits(a.z, b.z)
+         && sameBits(a.w, b.w);
+}
+
+bool sameNodes(std::span<const glm::dvec3> a, std::span<const glm::dvec3> b) {
+  return std::ranges::equal(a, b, [](const glm::dvec3& x, const glm::dvec3& y) {
+    return sameBits(x, y);
+  });
+}
+
+void requireSameReport(const StepReport& walked, const StepReport& full) {
+  REQUIRE(walked.nonFinite == full.nonFinite);
+  REQUIRE(walked.thawed == full.thawed);
+  REQUIRE(walked.contacts == full.contacts);
+  REQUIRE(walked.activeContacts == full.activeContacts);
+  REQUIRE(walked.softstepIslands == full.softstepIslands);
+  REQUIRE(walked.strainstepIslands == full.strainstepIslands);
+  REQUIRE(walked.hits.size() == full.hits.size());
+}
+
+void requireSameContacts(const World& walked, const World& full) {
+  REQUIRE(walked.manifolds.size() == full.manifolds.size());
+
+  for (uint32_t slot = 0u; slot != walked.manifolds.size(); ++slot) {
+    CAPTURE(slot);
+    REQUIRE(walked.manifolds.live(slot) == full.manifolds.live(slot));
+
+    if (!walked.manifolds.live(slot)) {
+      continue;
+    }
+
+    const CachedBodyPair& a = walked.manifolds.at(slot);
+    const CachedBodyPair& b = full.manifolds.at(slot);
+
+    REQUIRE(a.pair == b.pair);
+    REQUIRE(a.colour == b.colour);
+    REQUIRE(a.points.size() == b.points.size());
+  }
+}
+
+void requireSameBodies(const World& walked, const World& full) {
+  requireSameContacts(walked, full);
+  REQUIRE(walked.bodies.rigids.size() == full.bodies.rigids.size());
+  REQUIRE(walked.bodies.lattices.size() == full.bodies.lattices.size());
+
+  for (size_t index = 0u; index != walked.bodies.rigids.size(); ++index) {
+    const RigidBody& a = walked.bodies.rigids[index];
+    const RigidBody& b = full.bodies.rigids[index];
+
+    CAPTURE(index, a.id);
+    REQUIRE(a.id == b.id);
+    REQUIRE(a.asleep == b.asleep);
+    REQUIRE(sameBits(a.sleepTime, b.sleepTime));
+    REQUIRE(sameBits(a.mass, b.mass));
+    REQUIRE(sameBits(a.position, b.position));
+    REQUIRE(sameBits(a.rotation, b.rotation));
+    REQUIRE(sameBits(a.velocity, b.velocity));
+    REQUIRE(sameBits(a.angularVelocity, b.angularVelocity));
+  }
+
+  for (size_t index = 0u; index != walked.bodies.lattices.size(); ++index) {
+    const LatticeBody& a = walked.bodies.lattices[index];
+    const LatticeBody& b = full.bodies.lattices[index];
+
+    CAPTURE(index, a.id);
+    REQUIRE(a.id == b.id);
+    REQUIRE(a.asleep == b.asleep);
+    REQUIRE(sameNodes(a.position, b.position));
+    REQUIRE(sameNodes(a.velocity, b.velocity));
+  }
+}
+
+uint32_t addAnchoredBar(
+  World& world,
+  const glm::dvec3& at,
+  const glm::dquat& turn
+) {
+  const std::array<CompoundChild, 3> children{
+    cube(-0.1, 1u),
+    cube(0.0, 2u),
+    cube(0.1, 3u)
+  };
+  const uint32_t index = addCompoundBody(
+    world.bodies,
+    children,
+    at,
+    turn,
+    glm::dvec3(0.0),
+    0.5,
+    0.0,
+    true
+  );
+
+  return world.bodies.rigids[index].id;
+}
+
+RigidBody anchoredBarShape() {
+  BodySet holder;
+  const std::array<CompoundChild, 3> children{
+    cube(-0.1, 1u),
+    cube(0.0, 2u),
+    cube(0.1, 3u)
+  };
+
+  return holder.rigids[addCompoundBody(
+    holder,
+    children,
+    glm::dvec3(0.0),
+    upright,
+    glm::dvec3(0.0),
+    0.5,
+    0.0,
+    true
+  )];
+}
+
+uint32_t addBlock(World& world, const glm::dvec3& at) {
+  return world.bodies
+    .lattices[addLattice(
+      world.bodies,
+      blockMesh(),
+      rubber(),
+      at,
+      glm::dvec3(0.0),
+      0.5,
+      &blockField()
+    )]
+    .id;
+}
+
+struct Bench {
+  uint32_t lattice = noBody;
+  uint32_t pressed = noBody;
+  uint32_t toucher = noBody;
+  uint32_t post = noBody;
+  uint32_t shot = noBody;
+  uint32_t row = noBody;
+  uint32_t shelf = noBody;
+};
+
+constexpr double wallAt = -10.0;
+constexpr double postAt = 10.0;
+constexpr double shotSpeed = 100.0;
+constexpr double shotRange = 1.5;
+
+Bench buildBench(World& world) {
+  Bench bench;
+
+  addFloor(world);
+  bench.lattice = addBlock(world, glm::dvec3(0.0, 0.03, 0.0));
+  addCrate(world, glm::dvec3(0.0, 0.056 + crateHalf, 0.0));
+
+  for (uint32_t column = 0u; column != 5u; ++column) {
+    const uint32_t id = addCrate(
+      world,
+      glm::dvec3(0.3 * static_cast<double>(column) - 0.6, crateHalf, 0.6)
+    );
+
+    bench.row = column == 1u ? id : bench.row;
+  }
+
+  const uint32_t held = addCrate(world, glm::dvec3(0.6, crateHalf, -0.6));
+
+  REQUIRE(freezeBody(world, held));
+  addCrate(world, glm::dvec3(0.6, 3.0 * crateHalf + 0.001, -0.6));
+  bench.pressed = addCrate(world, glm::dvec3(-0.6, crateHalf, -0.6));
+  bench.toucher =
+    addCrate(world, glm::dvec3(-0.6, 3.0 * crateHalf + 0.001, -0.6));
+  world.thawOnContact.push_back(bench.toucher);
+  addAnchoredBar(
+    world,
+    glm::dvec3(wallAt, crateHalf, 0.0),
+    glm::angleAxis(0.5 * std::numbers::pi, glm::dvec3(0.0, 1.0, 0.0))
+  );
+  bench.post = addBox(
+    world,
+    crateField(),
+    glm::dvec3(crateHalf),
+    0.0,
+    glm::dvec3(postAt, crateHalf, 0.0)
+  );
+  bench.shot = world.bodies
+                 .rigids[addRigidSphere(
+                   world.bodies,
+                   ballField(),
+                   ballRadius,
+                   4.1,
+                   glm::dvec3(-0.9, ballRadius, -1.2),
+                   glm::dvec3(0.0),
+                   0.5,
+                   0.0
+                 )]
+                 .id;
+  bench.shelf = addAnchoredBar(world, glm::dvec3(0.0, 0.25, -0.6), upright);
+  addCrate(world, glm::dvec3(0.1, 0.3 + crateHalf + 0.001, -0.6));
+
+  return bench;
+}
+
+void editBench(World& world, Bench& bench, uint32_t frame) {
+  const auto shoot = [&](double at, double toward) {
+    REQUIRE(setRigidPose(
+      world,
+      bench.shot,
+      glm::dvec3(at - shotRange * toward, crateHalf, 0.0),
+      upright
+    ));
+    REQUIRE(
+      setVelocity(world, bench.shot, glm::dvec3(shotSpeed * toward, 0.0, 0.0))
+    );
+  };
+
+  switch (frame) {
+    case 120u:
+      REQUIRE(freezeBody(world, bench.pressed));
+      break;
+    case 150u:
+      shoot(wallAt, 1.0);
+      break;
+    case 200u:
+      REQUIRE(replaceRigidShape(world, bench.post, anchoredBarShape()));
+      break;
+    case 330u:
+      shoot(postAt, -1.0);
+      break;
+    case 400u:
+      REQUIRE(setVelocity(world, bench.lattice, glm::dvec3(0.0, 0.5, 0.0)));
+      break;
+    case 480u:
+      REQUIRE(removeBody(world, bench.lattice));
+      bench.lattice = addBlock(world, glm::dvec3(0.0, 0.03, -1.2));
+      break;
+    case 540u:
+      addCrate(world, glm::dvec3(-0.3, 0.5, 0.6));
+      break;
+    case 600u:
+      REQUIRE(removeBody(world, bench.row));
+      break;
+    case 640u:
+      shoot(wallAt, 1.0);
+      break;
+    case 660u:
+      REQUIRE(
+        removeCompoundChildren(world, bench.shelf, std::array<uint32_t, 1>{3u})
+      );
+      break;
+    default:
+      break;
+  }
+}
+
+void requireTwinSteps(World& walked, World& full, uint32_t frames) {
+  for (uint32_t frame = 0u; frame != frames; ++frame) {
+    CAPTURE(frame);
+    forceFullStep(full);
+
+    const StepReport fromList = step(walked);
+    const StepReport fromAll = step(full);
+
+    requireSameReport(fromList, fromAll);
+    requireSameBodies(walked, full);
+  }
+}
+
 }
 
 TEST_CASE(
@@ -786,24 +1127,7 @@ TEST_CASE(
     world.parameters.sleep = true;
     keepInYard(world, yard);
 
-    std::vector<Edit> edits;
-
-    if (dice.below(10u) == 0u) {
-      edits.resize(1u + dice.below(2u));
-      std::ranges::generate(edits, [&] {
-        return editDeck[dice.below(editDeck.size())];
-      });
-    }
-
-    if (frame == moveStaticFrame) {
-      edits.push_back(Edit::MoveStatic);
-    }
-
-    if (frame == pauseSleepFrame) {
-      edits.push_back(Edit::PauseSleep);
-    }
-
-    for (const Edit edit : edits) {
+    for (const Edit edit : rollEdits(dice, frame)) {
       const size_t kind = static_cast<size_t>(edit);
       const std::vector<uint32_t> sleeping = idsWhere(world, true);
 
@@ -940,6 +1264,19 @@ TEST_CASE(
     CHECK(listed(world, indexOf(world, woken)));
   }
 
+  SECTION("a lattice removed and another added") {
+    REQUIRE(promote(world, block));
+    REQUIRE_FALSE(step(world).nonFinite);
+    REQUIRE_FALSE(step(world).nonFinite);
+    wakeBehindTheList(woken);
+    REQUIRE(removeBody(world, block));
+    addBlock(world, glm::dvec3(-0.6, 0.03, 0.6));
+    REQUIRE(world.bodies.lattices.size() == 1u);
+    REQUIRE_FALSE(step(world).nonFinite);
+    CHECK(listedAwake(world) == scannedAwake(world));
+    CHECK(listed(world, indexOf(world, woken)));
+  }
+
   SECTION("a contact band change") {
     wakeBehindTheList(woken);
     world.parameters.speculativeDistance += 0.01;
@@ -955,4 +1292,199 @@ TEST_CASE(
     CHECK(listedAwake(world) == scannedAwake(world));
     CHECK(listed(world, indexOf(world, woken)));
   }
+}
+
+TEST_CASE(
+  "a step over the awake list ends bit for bit where a full step ends, "
+  "through every kind of edit",
+  "[dynamics][awake]"
+) {
+  World walked;
+  World full;
+  Yard walkedYard = buildYard(walked);
+  Yard fullYard = buildYard(full);
+  Dice walkedDice;
+  Dice fullDice;
+  uint32_t sparse = 0u;
+  constexpr uint32_t frames = 2000u;
+
+  for (uint32_t frame = 0u; frame != frames; ++frame) {
+    CAPTURE(frame);
+    editYard(walked, walkedYard, walkedDice, frame);
+    editYard(full, fullYard, fullDice, frame);
+    forceFullStep(full);
+    sparse += walksAwakeOnly(walked) ? 1u : 0u;
+
+    const StepReport fromList = step(walked);
+    const StepReport fromAll = step(full);
+
+    requireSameReport(fromList, fromAll);
+    requireSameBodies(walked, full);
+  }
+
+  CAPTURE(sparse);
+  CHECK(2u * sparse > frames);
+}
+
+TEST_CASE(
+  "a step over the awake list ends bit for bit where a full step ends, "
+  "around a lattice, frozen bodies, a body that thaws on contact and "
+  "zero-mass compounds",
+  "[dynamics][awake]"
+) {
+  World walked;
+  World full;
+  Bench walkedBench = buildBench(walked);
+  Bench fullBench = buildBench(full);
+  uint32_t sparse = 0u;
+  uint32_t thawed = 0u;
+  constexpr uint32_t frames = 720u;
+
+  for (uint32_t frame = 0u; frame != frames; ++frame) {
+    CAPTURE(frame);
+    editBench(walked, walkedBench, frame);
+    editBench(full, fullBench, frame);
+    forceFullStep(full);
+    sparse += walksAwakeOnly(walked) ? 1u : 0u;
+
+    const StepReport fromList = step(walked);
+    const StepReport fromAll = step(full);
+
+    REQUIRE_FALSE(fromList.nonFinite);
+    requireSameReport(fromList, fromAll);
+    requireSameBodies(walked, full);
+    thawed += fromList.thawed;
+  }
+
+  CAPTURE(sparse, thawed);
+  CHECK(2u * sparse > frames);
+  CHECK(thawed >= 1u);
+  CHECK_FALSE(
+    isFrozen(walked.bodies.rigids[indexOf(walked, walkedBench.pressed)])
+  );
+}
+
+TEST_CASE(
+  "a body with a non-finite velocity is still reported after the step it "
+  "would have slept",
+  "[dynamics][awake]"
+) {
+  World world;
+
+  world.parameters.gravity = glm::dvec3(0.0);
+
+  const uint32_t lost = addCrate(world, glm::dvec3(0.0, 1.0, 0.0));
+
+  addCrate(world, glm::dvec3(1.0, 1.0, 0.0));
+
+  for (uint32_t frame = 0u; frame != 600u && !allResting(world); ++frame) {
+    REQUIRE_FALSE(step(world).nonFinite);
+  }
+
+  REQUIRE(allResting(world));
+
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+
+  SECTION("in its velocity") {
+    REQUIRE(setVelocity(world, lost, glm::dvec3(nan, 0.0, 0.0)));
+  }
+
+  SECTION("in its position") {
+    REQUIRE(setRigidPose(world, lost, glm::dvec3(nan, 1.0, 0.0), upright));
+  }
+
+  const uint32_t sleepSteps = static_cast<uint32_t>(
+    std::ceil(world.parameters.timeToSleep / world.parameters.dt)
+  );
+
+  for (uint32_t frame = 0u; frame != 3u * sleepSteps; ++frame) {
+    CAPTURE(frame);
+    REQUIRE(step(world).nonFinite);
+  }
+}
+
+TEST_CASE(
+  "a frozen body struck only through sleepers stays frozen, and one struck "
+  "by an awake body thaws",
+  "[dynamics][awake]"
+) {
+  World world;
+
+  addFloor(world);
+
+  const uint32_t held = addCrate(world, glm::dvec3(-0.6, crateHalf, 0.0));
+
+  addCrate(world, glm::dvec3(-0.6, 3.0 * crateHalf + 0.001, 0.0));
+
+  const uint32_t struck = addCrate(world, glm::dvec3(0.6, crateHalf, 0.0));
+  const uint32_t thrown = addCrate(world, glm::dvec3(1.5, crateHalf, 0.6));
+
+  for (uint32_t frame = 0u; frame != 600u && !allResting(world); ++frame) {
+    REQUIRE_FALSE(step(world).nonFinite);
+  }
+
+  REQUIRE(allResting(world));
+  REQUIRE(freezeBody(world, held));
+  REQUIRE(freezeBody(world, struck));
+
+  for (uint32_t frame = 0u; frame != 60u; ++frame) {
+    REQUIRE(step(world).thawed == 0u);
+  }
+
+  REQUIRE(walksAwakeOnly(world));
+  REQUIRE(isFrozen(world.bodies.rigids[indexOf(world, held)]));
+  REQUIRE(setRigidPose(
+    world,
+    thrown,
+    world.bodies.rigids[indexOf(world, struck)].position
+      + glm::dvec3(0.3, 0.002, 0.0),
+    upright
+  ));
+  REQUIRE(setVelocity(world, thrown, glm::dvec3(-strikeSpeed, 0.0, 0.0)));
+
+  uint32_t thawed = 0u;
+
+  for (uint32_t frame = 0u; frame != 30u; ++frame) {
+    thawed += step(world).thawed;
+  }
+
+  CHECK(thawed == 1u);
+  CHECK_FALSE(isFrozen(world.bodies.rigids[indexOf(world, struck)]));
+  CHECK(isFrozen(world.bodies.rigids[indexOf(world, held)]));
+}
+
+TEST_CASE(
+  "a frozen body touched only by a sleeping body that thaws on contact thaws, "
+  "as a full step thaws it",
+  "[dynamics][awake]"
+) {
+  World walked;
+  World full;
+  uint32_t pressed = noBody;
+  uint32_t toucher = noBody;
+
+  for (World* world : {&walked, &full}) {
+    addFloor(*world);
+    pressed = addCrate(*world, glm::dvec3(0.0, crateHalf, 0.0));
+    toucher = addCrate(*world, glm::dvec3(0.0, 3.0 * crateHalf + 0.001, 0.0));
+    addCrate(*world, glm::dvec3(0.6, crateHalf, 0.0));
+    REQUIRE(freezeBody(*world, pressed));
+  }
+
+  requireTwinSteps(walked, full, 90u);
+  REQUIRE(allResting(walked));
+  REQUIRE(isFrozen(walked.bodies.rigids[indexOf(walked, pressed)]));
+  walked.thawOnContact.push_back(toucher);
+  full.thawOnContact.push_back(toucher);
+  REQUIRE(walksAwakeOnly(walked));
+  forceFullStep(full);
+
+  const StepReport fromList = step(walked);
+  const StepReport fromAll = step(full);
+
+  CHECK(fromList.thawed == 1u);
+  requireSameReport(fromList, fromAll);
+  requireSameBodies(walked, full);
+  requireTwinSteps(walked, full, 60u);
+  CHECK_FALSE(isFrozen(walked.bodies.rigids[indexOf(walked, pressed)]));
 }
