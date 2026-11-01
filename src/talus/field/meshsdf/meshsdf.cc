@@ -22,8 +22,12 @@ constexpr uint32_t MINIMUM_ROWS_PER_BLOCK = 4u;
 
 constexpr double RELATIVE_BOX_PADDING = 1e-9;
 
+constexpr double SIGN_CARRY_MARGIN = 1.0 + 1e-6;
+
 struct Triangle {
   std::array<glm::dvec3, 3> corner{};
+  glm::dvec3 minimum{0.0};
+  glm::dvec3 maximum{0.0};
   std::array<uint32_t, 3> vertex{};
 };
 
@@ -243,6 +247,13 @@ Tree buildTree(
       made.corner[corner] = glm::dvec3(vertices[made.vertex[corner]]);
     }
 
+    made.minimum =
+      glm::min(glm::min(made.corner[0], made.corner[1]), made.corner[2])
+      - glm::dvec3(padding);
+    made.maximum =
+      glm::max(glm::max(made.corner[0], made.corner[1]), made.corner[2])
+      + glm::dvec3(padding);
+
     build.centroids[triangle] =
       (made.corner[0] + made.corner[1] + made.corner[2]) / 3.0;
     build.order[triangle] = triangle;
@@ -256,13 +267,19 @@ Tree buildTree(
   return std::move(build.tree);
 }
 
-double boxDistanceSquared(const Node& node, const glm::dvec3& point) {
-  const glm::dvec3 gap = glm::max(
-    glm::max(node.minimum - point, point - node.maximum),
-    glm::dvec3(0.0)
-  );
+double boxDistanceSquared(
+  const glm::dvec3& minimum,
+  const glm::dvec3& maximum,
+  const glm::dvec3& point
+) {
+  const glm::dvec3 gap =
+    glm::max(glm::max(minimum - point, point - maximum), glm::dvec3(0.0));
 
   return glm::dot(gap, gap);
+}
+
+double boxDistanceSquared(const Node& node, const glm::dvec3& point) {
+  return boxDistanceSquared(node.minimum, node.maximum, point);
 }
 
 double triangleDistanceSquared(
@@ -349,41 +366,66 @@ Nearest nearestTriangle(
   }
 
   heap.clear();
-  heap.push_back({boxDistanceSquared(tree.nodes[0], point), 0u});
 
-  while (!heap.empty()) {
-    std::pop_heap(heap.begin(), heap.end(), farther);
-    const Pending next = heap.back();
-    heap.pop_back();
+  Pending next{boxDistanceSquared(tree.nodes[0], point), 0u};
 
-    if (next.distanceSquared >= best) {
-      break;
-    }
-
+  while (next.distanceSquared < best) {
     const Node& node = tree.nodes[next.node];
 
     if (node.count != 0u) {
       for (uint32_t i = node.first; i != node.first + node.count; ++i) {
-        const double candidate =
-          triangleDistanceSquared(tree.triangles[i], point);
+        const Triangle& triangle = tree.triangles[i];
+
+        if (!(boxDistanceSquared(triangle.minimum, triangle.maximum, point)
+              < best)) {
+          continue;
+        }
+
+        const double candidate = triangleDistanceSquared(triangle, point);
 
         if (candidate < best) {
           best = candidate;
           nearest = i;
         }
       }
+    } else {
+      Pending nearer{
+        boxDistanceSquared(tree.nodes[next.node + 1u], point),
+        next.node + 1u
+      };
+      Pending further{
+        boxDistanceSquared(tree.nodes[node.first], point),
+        node.first
+      };
 
-      continue;
-    }
+      if (further.distanceSquared < nearer.distanceSquared) {
+        std::swap(nearer, further);
+      }
 
-    for (const uint32_t child : {next.node + 1u, node.first}) {
-      const double reach = boxDistanceSquared(tree.nodes[child], point);
+      if (further.distanceSquared < best) {
+        heap.push_back(further);
+        std::push_heap(heap.begin(), heap.end(), farther);
+      }
 
-      if (reach < best) {
-        heap.push_back({reach, child});
+      if (nearer.distanceSquared < best) {
+        if (heap.empty()
+            || nearer.distanceSquared <= heap.front().distanceSquared) {
+          next = nearer;
+          continue;
+        }
+
+        heap.push_back(nearer);
         std::push_heap(heap.begin(), heap.end(), farther);
       }
     }
+
+    if (heap.empty()) {
+      break;
+    }
+
+    std::pop_heap(heap.begin(), heap.end(), farther);
+    next = heap.back();
+    heap.pop_back();
   }
 
   return {std::sqrt(best), nearest};
@@ -534,6 +576,13 @@ bool enclosed(
   const std::array<RayFrame, 3>& frames,
   std::vector<uint32_t>& stack
 ) {
+  const Node& root = tree.nodes[0];
+
+  if (glm::any(glm::lessThan(point, root.minimum))
+      || glm::any(glm::greaterThan(point, root.maximum))) {
+    return false;
+  }
+
   const bool first = oddCrossings(tree, point, frames[0], stack);
   const bool second = oddCrossings(tree, point, frames[1], stack);
 
@@ -573,6 +622,9 @@ void bakeRows(
     const uint32_t z = row / field.resolution.y;
 
     size_t index = static_cast<size_t>(row) * field.resolution.x;
+    glm::dvec3 previous(0.0);
+    double previousDistance = 0.0;
+    bool previousInside = false;
 
     for (uint32_t x = 0u; x != field.resolution.x; ++x) {
       const glm::dvec3 point(
@@ -582,11 +634,18 @@ void bakeRows(
       const Nearest nearest = nearestTriangle(tree, point, seed, scratch.heap);
       seed = nearest.triangle;
 
-      field.distances[index] = static_cast<float>(
-        enclosed(tree, point, frames, scratch.stack) ? -nearest.distance
-                                                     : nearest.distance
-      );
+      const double step = SIGN_CARRY_MARGIN * glm::length(point - previous);
+      const bool carried =
+        x != 0u && (nearest.distance > step || previousDistance > step);
+      const bool inside =
+        carried ? previousInside : enclosed(tree, point, frames, scratch.stack);
 
+      field.distances[index] =
+        static_cast<float>(inside ? -nearest.distance : nearest.distance);
+
+      previous = point;
+      previousDistance = nearest.distance;
+      previousInside = inside;
       ++index;
     }
   }
