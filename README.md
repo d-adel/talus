@@ -294,9 +294,16 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
 
 - Only x86-64 builds are qualified.
 - The workload controller's cost constants are unqualified. They underpredict
-  in reference checks, and the large district test missed the 4 ms physics
-  goal. Rubble can stay awake, and thin-sheet glass does not shatter
-  convincingly.
+  in reference checks, but overpredict for sleeping bodies, and the large
+  district test missed the 4 ms physics goal. Rubble can stay awake, and
+  thin-sheet glass does not shatter convincingly.
+- The workload controller still charges every rigid body, asleep or awake:
+  57.6 + 156.2 ns per body (`budget.h`). At the default 3.6 ms target, an idle
+  world above about 16,800 rigid bodies counts as over budget. The controller
+  then caps fractures at 4 chunks per step, refuses extra stress rounds outside
+  a collapse and freezes resting debris early. Above about 4,700 bodies it also
+  removes frozen single-chunk debris; each removal makes the next dynamics step
+  and rest-tracker pass visit every body.
 - One ball/soft-face test and two joint tests are expected failures: 680 cases,
   3 expected failures, Windows/MSVC Release, at `4a5ecf6`.
 - One 20-body humanoid costs 0.225 ms per step (0.148 ms in joints) on a Ryzen 7
@@ -338,7 +345,13 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
     frozen debris or of bodies below `discardBelow`;
   - in its rest tracker and body-id map, in the first update after a body
     removal, a tier switch, a removed lattice or a moved or removed static body;
-  - in every update while `discardBelow` is finite.
+  - in every update while `discardBelow` is finite;
+  - in each impulse, split or removal by body id, which searches every rigid
+    body.
+
+  Frozen debris has mass 0, stays out of islands and never falls asleep. It
+  stays on the awake list and costs more than sleeping debris until it thaws
+  or is removed.
 
 ## Repository layout
 
