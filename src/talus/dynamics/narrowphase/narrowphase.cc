@@ -34,6 +34,7 @@ namespace {
 
 constexpr double recycleDistance = 0.05;
 constexpr double recycleAngle = 0.99240388;
+constexpr double matchingNormal = 0.9998;
 
 uint64_t ticks() {
 #if defined(_M_X64) || defined(__x86_64__)
@@ -625,7 +626,7 @@ uint32_t groupByNormal(
   return static_cast<uint32_t>(normals.size());
 }
 
-void groupByDirection(std::vector<Contact>& contacts) {
+void groupByNormalMatch(std::vector<Contact>& contacts) {
   thread_local std::vector<size_t> leads;
 
   leads.clear();
@@ -638,7 +639,7 @@ void groupByDirection(std::vector<Contact>& contacts) {
       const Contact& lead = contacts[leads[group]];
 
       if (lead.a.side == contact.a.side && lead.a.body == contact.a.body
-          && glm::dot(contact.basis[0], lead.basis[0]) >= sharedNormal) {
+          && glm::dot(contact.basis[0], lead.basis[0]) >= matchingNormal) {
         break;
       }
 
@@ -1503,7 +1504,7 @@ void compoundPair(
     compoundAgainstField(bodies, boxes, points, reach, scratch.found, contacts);
     fieldAgainstCompound(bodies, points, boxes, reach, scratch.found, contacts);
 
-    groupByDirection(contacts);
+    groupByNormalMatch(contacts);
 
     for (Contact& contact : contacts) {
       contact.cached = pose;
