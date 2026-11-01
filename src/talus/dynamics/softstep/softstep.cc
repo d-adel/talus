@@ -26,6 +26,7 @@ constexpr float minFrictionWeight = 1.0e-10f;
 constexpr float singular = 1000.0f * std::numeric_limits<float>::min();
 constexpr uint32_t batchItem = 0x80000000u;
 constexpr uint32_t noLane = 0xFFFFFFFFu;
+constexpr uint32_t noFacing = 0xFFFFFFFFu;
 
 struct Softness {
   float biasRate = 0.0f;
@@ -55,6 +56,8 @@ struct Point {
   float normalMass = 0.0f;
   float relativeVelocity = 0.0f;
   float leverArm = 0.0f;
+  float reach = 0.0f;
+  float slack = 0.0f;
 };
 
 struct Constraint {
@@ -64,6 +67,7 @@ struct Constraint {
   uint32_t manifold = 0u;
   uint32_t start = 0u;
   uint32_t count = 0u;
+  uint32_t facing = noFacing;
   glm::vec3 normal{0.0f};
   glm::vec3 tangent1{0.0f};
   glm::vec3 tangent2{0.0f};
@@ -563,6 +567,156 @@ void restitute(
   }
 }
 
+bool idle(const Constraint& constraint, const std::vector<Point>& points) {
+  if (constraint.frictionImpulse.x != 0.0f
+      || constraint.frictionImpulse.y != 0.0f
+      || constraint.twistImpulse != 0.0f) {
+    return false;
+  }
+
+  for (uint32_t index = 0u; index != constraint.count; ++index) {
+    if (points[constraint.start + index].normalImpulse != 0.0f) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+struct Facing {
+  uint32_t a = 0u;
+  uint32_t b = 0u;
+  glm::vec3 offset{0.0f};
+  float floor = std::numeric_limits<float>::infinity();
+  float reach = 0.0f;
+  float slack = 0.0f;
+  float base = 0.0f;
+};
+
+struct Calm {
+  std::array<Facing, 2> facings;
+  uint32_t count = 0u;
+  bool idle = false;
+  bool mixed = false;
+};
+
+struct Drift {
+  bool placed = false;
+  bool paced = false;
+  glm::vec3 shift{0.0f};
+  float turn = 0.0f;
+  float stretch = 0.0f;
+  float span = 0.0f;
+  glm::vec3 closing{0.0f};
+  float spin = 0.0f;
+  float spinB = 0.0f;
+  float pace = 0.0f;
+  float spins = 0.0f;
+};
+
+constexpr float driftMargin = 1.0e-5f;
+constexpr float driftRate = 1.0f - driftMargin;
+
+const Drift& driftOf(
+  const std::vector<State>& states,
+  const Facing& facing,
+  Drift& drift
+) {
+  const State& stateA = states[facing.a];
+  const State& stateB = states[facing.b];
+
+  if (!drift.placed) {
+    const glm::quat turned = glm::conjugate(stateA.dq) * stateB.dq;
+
+    drift.shift = stateB.dp - stateA.dp + stateB.dq * facing.offset;
+    drift.turn = 2.0f * glm::length(glm::vec3(turned.x, turned.y, turned.z));
+    drift.stretch = glm::length(facing.offset);
+    drift.span = 1.0f + glm::length(stateA.dp) + glm::length(stateB.dp)
+                 + 2.0f * drift.stretch;
+    drift.placed = true;
+  }
+
+  if (!drift.paced) {
+    drift.closing = stateB.v - stateA.v + glm::cross(stateB.w, facing.offset);
+    drift.spin = glm::length(stateB.w - stateA.w);
+    drift.spinB = glm::length(stateB.w);
+    drift.pace = 1.0f + glm::length(stateA.v) + glm::length(stateB.v);
+    drift.spins = glm::length(stateA.w) + glm::length(stateB.w);
+    drift.paced = true;
+  }
+
+  return drift;
+}
+
+bool dormant(
+  const Constraint& constraint,
+  const std::vector<Point>& points,
+  const Drift& drift,
+  float invH
+) {
+  const float approach = glm::dot(constraint.normal, drift.closing);
+  const float shift = glm::dot(constraint.normal, drift.shift);
+
+  for (uint32_t index = 0u; index != constraint.count; ++index) {
+    const Point& cp = points[constraint.start + index];
+    const float gap =
+      cp.baseSeparation + shift - cp.slack - drift.turn * cp.reach
+      - driftMargin
+          * (drift.span + 2.0f * cp.reach + std::abs(cp.baseSeparation));
+
+    if (!(gap > 0.0f)) {
+      return false;
+    }
+
+    const float speed =
+      approach - drift.spinB * cp.slack - drift.spin * cp.reach
+      - driftMargin
+          * (drift.pace + drift.spins * (cp.reach + drift.stretch + cp.slack));
+
+    if (!(speed + driftRate * gap * invH > 0.0f)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool calmPair(
+  const std::vector<State>& states,
+  const Calm& calm,
+  std::array<Drift, 2>& drifts,
+  float invH
+) {
+  if (!calm.idle || calm.mixed) {
+    return false;
+  }
+
+  for (uint32_t index = 0u; index != calm.count; ++index) {
+    const Facing& facing = calm.facings[index];
+    const Drift& drift = driftOf(states, facing, drifts[index]);
+    const float gap =
+      facing.floor - glm::length(drift.shift - facing.offset)
+      - drift.turn * facing.reach
+      - driftMargin * (drift.span + 2.0f * facing.reach + facing.base);
+
+    if (!(gap > 0.0f)) {
+      return false;
+    }
+
+    const float speed =
+      -glm::length(drift.closing) - drift.spinB * facing.slack
+      - drift.spin * facing.reach
+      - driftMargin
+          * (drift.pace + drift.spins * (facing.reach + drift.stretch + facing.slack));
+
+    if (!(speed + driftRate * gap * invH > 0.0f)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 uint32_t floatOffset(const State& state, const void* member) {
   return static_cast<uint32_t>(
     (static_cast<const char*>(member) - reinterpret_cast<const char*>(&state))
@@ -578,6 +732,7 @@ struct SoftstepArena {
   std::vector<uint32_t> ordered;
   std::vector<Constraint> constraints;
   std::vector<Point> points;
+  std::vector<Calm> calms;
   std::vector<uint32_t> pairFirst;
   std::vector<uint32_t> pointFirst;
   std::vector<uint32_t> colourItems;
@@ -756,6 +911,7 @@ SoftstepResult solveSoftstep(
 
   std::vector<Constraint>& constraints = scratch.constraints;
   std::vector<Point>& points = scratch.points;
+  std::vector<Calm>& calms = scratch.calms;
   std::vector<uint32_t>& pairFirst = scratch.pairFirst;
   std::vector<uint32_t>& pointFirst = scratch.pointFirst;
   std::array<uint32_t, colourCount + 1u> constraintStart{};
@@ -789,6 +945,7 @@ SoftstepResult solveSoftstep(
 
   constraints.resize(constraintTotal);
   points.resize(pointTotal);
+  calms.resize(pairCount);
 
   std::vector<uint32_t>& laneSlot = scratch.laneSlot;
   std::array<uint32_t, colourCount + 1u> batchStart{};
@@ -1008,6 +1165,63 @@ SoftstepResult solveSoftstep(
 
       prepareConstraint(constraint, points);
       nextConstraint += 1u;
+    }
+
+    Calm& calm = calms[pairIndex];
+
+    calm = Calm{};
+    calm.idle = true;
+
+    for (uint32_t index = pairFirst[pairIndex]; index != nextConstraint;
+         ++index) {
+      Constraint& constraint = constraints[index];
+
+      calm.idle = calm.idle && idle(constraint, points);
+
+      if (constraint.count == 0u) {
+        continue;
+      }
+
+      for (uint32_t known = 0u; known != calm.count; ++known) {
+        if (calm.facings[known].a == constraint.a
+            && calm.facings[known].b == constraint.b) {
+          constraint.facing = known;
+        }
+      }
+
+      if (constraint.facing == noFacing && calm.count != calm.facings.size()) {
+        const Point& first = points[constraint.start];
+        Facing& facing = calm.facings[calm.count];
+
+        facing.a = constraint.a;
+        facing.b = constraint.b;
+        facing.offset = first.rB - first.rA;
+        constraint.facing = calm.count;
+        calm.count += 1u;
+      }
+
+      if (constraint.facing == noFacing) {
+        calm.mixed = true;
+        continue;
+      }
+
+      Facing& facing = calm.facings[constraint.facing];
+
+      for (uint32_t point = 0u; point != constraint.count; ++point) {
+        Point& cp = points[constraint.start + point];
+        const glm::vec3 apart = cp.rB - cp.rA;
+
+        cp.reach = glm::length(cp.rA);
+        cp.slack = glm::length(apart - facing.offset);
+        facing.floor = std::min(
+          facing.floor,
+          cp.baseSeparation + glm::dot(apart, constraint.normal)
+            - 2.0f * cp.slack
+        );
+        facing.reach = std::max(facing.reach, cp.reach);
+        facing.slack = std::max(facing.slack, cp.slack);
+        facing.base = std::max(facing.base, std::abs(cp.baseSeparation));
+      }
     }
   };
 
@@ -1348,23 +1562,63 @@ SoftstepResult solveSoftstep(
       return;
     }
 
+    Calm& calm = calms[item];
+    const bool solving = kind == Kind::Push || kind == Kind::Relax;
+    std::array<Drift, 2> drifts{};
+
+    if ((kind == Kind::WarmStart && calm.idle)
+        || (solving && calmPair(states, calm, drifts, invH))) {
+      return;
+    }
+
+    bool quiet = true;
+
     for (uint32_t entry = pairFirst[item]; entry != pairFirst[item + 1u]; ++entry) {
+      Constraint& constraint = constraints[entry];
+      const bool still = idle(constraint, points);
+
+      if (solving && still && constraint.facing != noFacing
+          && dormant(
+            constraint,
+            points,
+            driftOf(
+              states,
+              calm.facings[constraint.facing],
+              drifts[constraint.facing]
+            ),
+            invH
+          )) {
+        continue;
+      }
+
       switch (kind) {
         case Kind::WarmStart:
-          warmStart(states, constraints[entry], points);
+          if (!still) {
+            warmStart(states, constraint, points);
+          }
           break;
         case Kind::Push:
-          push(states, constraints[entry], points, invH, contactSpeed);
+          push(states, constraint, points, invH, contactSpeed);
           break;
         case Kind::Relax:
-          relax(states, constraints[entry], points, invH);
+          relax(states, constraint, points, invH);
           break;
         case Kind::Restitute:
-          restitute(states, constraints[entry], points, invH, threshold);
+          restitute(states, constraint, points, invH, threshold);
           break;
         default:
           break;
       }
+
+      if (kind != Kind::WarmStart) {
+        drifts[0].paced = false;
+        drifts[1].paced = false;
+        quiet = quiet && idle(constraint, points);
+      }
+    }
+
+    if (kind != Kind::WarmStart) {
+      calm.idle = quiet;
     }
   };
 

@@ -5,6 +5,7 @@
 
 #include <talus/dynamics/bodyset/bodyset.h>
 #include <talus/dynamics/compound/compound.h>
+#include <talus/dynamics/joints/jointedits.h>
 #include <talus/dynamics/meshbody/meshbody.h>
 #include <talus/dynamics/pipeline/pipeline.h>
 #include <talus/dynamics/scheduler/scheduler.h>
@@ -774,4 +775,116 @@ TEST_CASE(
       CHECK(mixed == 0u);
     }
   }
+}
+
+TEST_CASE(
+  "a spinning mesh bar that reaches a block within the step stops on it",
+  "[dynamics][meshbody]"
+) {
+  const bool jointed = GENERATE(false, true);
+  const bool meshBlock = GENERATE(false, true);
+  const glm::vec3 barHalf(0.25f, 0.025f, 0.025f);
+  const Mesh bar = meshfixture::box(-barHalf, barHalf);
+  const glm::dvec3 blockHalf(0.14, 0.1475, 0.15);
+  const glm::dvec3 blockCentre(0.26, blockHalf.y, 0.0);
+  const double blockTop = blockCentre.y + blockHalf.y;
+  const glm::dvec3 hub(0.0, blockTop + 0.08 + barHalf.y, 0.0);
+  const Threads threads;
+  MeshShapeSettings settings;
+
+  settings.mass = 2.0;
+
+  const MeshShape barShape =
+    meshShape(bar.vertices, bar.indices, settings, threads.workers);
+  const glm::vec3 blockMeshHalf(blockHalf);
+  const Mesh blockMesh = meshfixture::box(-blockMeshHalf, blockMeshHalf);
+  MeshShapeSettings blockSettings;
+
+  blockSettings.mass = 400.0;
+  blockSettings.spacing = 0.03;
+
+  const MeshShape blockShape = meshShape(
+    blockMesh.vertices,
+    blockMesh.indices,
+    blockSettings,
+    threads.workers
+  );
+  World world;
+
+  (void)addFloor(world);
+
+  if (meshBlock) {
+    (void)addMeshBody(
+      world.bodies,
+      blockShape,
+      blockCentre,
+      noTurn,
+      glm::dvec3(0.0)
+    );
+  } else {
+    CompoundChild block;
+
+    block.half = blockHalf;
+    block.density = 1000.0;
+    (void)addCompoundBody(
+      world.bodies,
+      std::vector<CompoundChild>{block},
+      blockCentre,
+      noTurn,
+      glm::dvec3(0.0),
+      0.5,
+      0.0,
+      true
+    );
+  }
+
+  const uint32_t id =
+    addMeshBody(world.bodies, barShape, hub, noTurn, glm::dvec3(0.0));
+
+  bodyOf(world.bodies, id).angularVelocity = glm::dvec3(0.0, 0.0, -40.0);
+
+  if (jointed) {
+    JointDef pin;
+
+    pin.kind = JointKind::Ball;
+    pin.bodyB = id;
+    pin.frameA.position = hub;
+    REQUIRE(addJoint(world, pin) != 0u);
+  }
+
+  double deepest = 0.0;
+  double lowest = std::numeric_limits<double>::infinity();
+  double spin = 0.0;
+
+  for (uint32_t frame = 0u; frame != 6u; ++frame) {
+    const StepReport report = step(world);
+
+    REQUIRE_FALSE(report.nonFinite);
+
+    if (jointed) {
+      CHECK(report.jointSubsteps == world.parameters.jointSubsteps);
+    }
+
+    const RigidBody& body = bodyOf(world.bodies, id);
+
+    if (frame == 0u) {
+      spin = body.angularVelocity.z;
+    }
+
+    for (const glm::dvec3& sample : body.samples) {
+      const glm::dvec3 point =
+        body.position + glm::mat3_cast(body.rotation) * sample;
+
+      if (std::abs(point.x - blockCentre.x) < blockHalf.x
+          && std::abs(point.z - blockCentre.z) < blockHalf.z) {
+        deepest = std::max(deepest, blockTop - point.y);
+        lowest = std::min(lowest, point.y - blockTop);
+      }
+    }
+  }
+
+  CAPTURE(jointed, meshBlock, deepest, lowest, spin);
+  CHECK(lowest < 0.02);
+  CHECK(spin > -30.0);
+  CHECK(deepest < 0.01);
 }
