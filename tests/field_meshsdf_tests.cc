@@ -15,6 +15,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <numbers>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -149,6 +150,92 @@ Mesh box(const glm::vec3& low, const glm::vec3& high) {
   );
 }
 
+Mesh torus(double major, double minor, uint32_t around, uint32_t tube) {
+  const double turn = 2.0 * std::numbers::pi;
+
+  Mesh mesh;
+
+  for (uint32_t i = 0u; i != around; ++i) {
+    for (uint32_t j = 0u; j != tube; ++j) {
+      const double u = turn * i / around;
+      const double v = turn * j / tube;
+      const double reach = major + minor * std::cos(v);
+
+      mesh.vertices.push_back(
+        glm::vec3(
+          glm::dvec3(
+            reach * std::cos(u),
+            reach * std::sin(u),
+            minor * std::sin(v)
+          )
+        )
+      );
+    }
+  }
+
+  for (uint32_t i = 0u; i != around; ++i) {
+    for (uint32_t j = 0u; j != tube; ++j) {
+      const uint32_t next = (i + 1u) % around;
+      const uint32_t up = (j + 1u) % tube;
+      const uint32_t a = i * tube + j;
+      const uint32_t b = next * tube + j;
+      const uint32_t c = next * tube + up;
+      const uint32_t d = i * tube + up;
+
+      mesh.indices.insert(mesh.indices.end(), {a, b, c, a, c, d});
+    }
+  }
+
+  return mesh;
+}
+
+double segmentDistanceSquared(
+  const glm::dvec3& point,
+  const glm::dvec3& from,
+  const glm::dvec3& to
+) {
+  const glm::dvec3 along = to - from;
+  const double t = std::clamp(
+    glm::dot(point - from, along) / glm::dot(along, along),
+    0.0,
+    1.0
+  );
+  const glm::dvec3 gap = point - (from + along * t);
+
+  return glm::dot(gap, gap);
+}
+
+double nearestByBruteForce(const Mesh& mesh, const glm::vec3& at) {
+  const glm::dvec3 point(at);
+
+  double best = std::numeric_limits<double>::infinity();
+
+  for (size_t face = 0u; face < mesh.indices.size(); face += 3u) {
+    const glm::dvec3 a(mesh.vertices[mesh.indices[face]]);
+    const glm::dvec3 b(mesh.vertices[mesh.indices[face + 1u]]);
+    const glm::dvec3 c(mesh.vertices[mesh.indices[face + 2u]]);
+    const glm::dvec3 normal = glm::cross(b - a, c - a);
+    const glm::dvec3 foot =
+      point - normal * (glm::dot(point - a, normal) / glm::dot(normal, normal));
+
+    const bool over = glm::dot(glm::cross(b - a, foot - a), normal) >= 0.0
+                      && glm::dot(glm::cross(c - b, foot - b), normal) >= 0.0
+                      && glm::dot(glm::cross(a - c, foot - c), normal) >= 0.0;
+
+    const double distanceSquared = over
+                                     ? glm::dot(point - foot, point - foot)
+                                     : std::min(
+                                         {segmentDistanceSquared(point, a, b),
+                                          segmentDistanceSquared(point, b, c),
+                                          segmentDistanceSquared(point, c, a)}
+                                       );
+
+    best = std::min(best, distanceSquared);
+  }
+
+  return std::sqrt(best);
+}
+
 double boxDistance(
   const glm::vec3& low,
   const glm::vec3& high,
@@ -269,6 +356,43 @@ TEST_CASE("bakeMesh matches the analytic sphere", "[field][meshsdf]") {
   });
 
   CHECK(worst <= 3.0e-4);
+}
+
+TEST_CASE(
+  "bakeMesh stores the distance a search of every triangle finds",
+  "[field][meshsdf]"
+) {
+  const auto mismatches =
+    [](const Mesh& mesh, const talus::field::SampledSdf& field) {
+      uint32_t count = 0u;
+
+      eachPoint(field, [&](const glm::vec3& point, float value) {
+        const float expected =
+          static_cast<float>(nearestByBruteForce(mesh, point));
+
+        count += std::abs(value) == expected ? 0u : 1u;
+      });
+
+      return count;
+    };
+
+  const talus::field::SampledSdf sphere = baked(
+    sphereMesh(),
+    glm::vec3(-0.31f, -0.33f, -0.32f),
+    glm::vec3(0.35f, 0.34f, 0.33f),
+    glm::uvec3(15u)
+  );
+
+  const Mesh ring = torus(0.2, 0.07, 96u, 32u);
+  const talus::field::SampledSdf around = baked(
+    ring,
+    glm::vec3(-0.31f, -0.3f, -0.11f),
+    glm::vec3(0.29f, 0.31f, 0.1f),
+    glm::uvec3(15u, 15u, 7u)
+  );
+
+  CHECK(mismatches(sphereMesh(), sphere) == 0u);
+  CHECK(mismatches(ring, around) == 0u);
 }
 
 TEST_CASE("bakeMesh matches the analytic box exactly", "[field][meshsdf]") {
