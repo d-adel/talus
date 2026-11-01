@@ -50,7 +50,7 @@ inline constexpr CostModel costModel{
   {0.00013000681595005446, 0.0017382431390538483, 2.5306361988446604e-05, 0.16659290381227379, 0.0032315477604960411,
    0.00015620148616340832},
   {8.6437416596044472e-05, 8.1221456376982999e-06, 0.00069774740458902068, 0.0},
-  "docs/physics-status.md: 2026-10-19 fit; model remains unqualified"
+  "2026-10-19 fit; model remains unqualified"
 };
 
 [[nodiscard]] double rigidCost(const StepCounts& counts, const CostModel& model = costModel);
