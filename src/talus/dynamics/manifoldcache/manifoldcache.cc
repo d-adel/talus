@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <ranges>
 #include <utility>
 #include <vector>
 
@@ -13,7 +14,7 @@ namespace talus::dynamics {
 
 namespace {
 
-constexpr size_t scanLimit = 16u;
+constexpr size_t scanLimit = 32u;
 
 uint64_t mixed(uint64_t value) {
   value += 0x9E3779B97F4A7C15ull;
@@ -132,6 +133,7 @@ struct FillScratch {
   std::vector<uint32_t> starts;
   std::vector<uint32_t> next;
   std::vector<uint32_t> order;
+  std::vector<uint32_t> runEnds;
   std::vector<uint32_t> distinctNormals;
 };
 
@@ -141,37 +143,27 @@ FillScratch& fillScratch() {
   return scratch;
 }
 
-void groupRecords(
-  std::span<const Contact> records,
-  bool indexed,
-  FillScratch& scratch
-) {
-  scratch.order.clear();
+void groupRecords(std::span<const Contact> records, FillScratch& scratch) {
   scratch.starts.clear();
+  scratch.order.resize(records.size());
 
-  if (!indexed) {
-    for (size_t first = 0u; first != records.size(); ++first) {
-      const uint32_t group = records[first].manifold;
-      bool seen = false;
+  const bool sorted = std::is_sorted(
+    records.begin(),
+    records.end(),
+    [](const Contact& a, const Contact& b) { return a.manifold < b.manifold; }
+  );
 
-      for (size_t earlier = 0u; earlier != first && !seen; ++earlier) {
-        seen = records[earlier].manifold == group;
+  if (sorted) {
+    for (size_t index = 0u; index != records.size(); ++index) {
+      if (index == 0u
+          || records[index].manifold != records[index - 1u].manifold) {
+        scratch.starts.push_back(static_cast<uint32_t>(index));
       }
 
-      if (seen) {
-        continue;
-      }
-
-      scratch.starts.push_back(static_cast<uint32_t>(scratch.order.size()));
-
-      for (size_t index = first; index != records.size(); ++index) {
-        if (records[index].manifold == group) {
-          scratch.order.push_back(static_cast<uint32_t>(index));
-        }
-      }
+      scratch.order[index] = static_cast<uint32_t>(index);
     }
 
-    scratch.starts.push_back(static_cast<uint32_t>(scratch.order.size()));
+    scratch.starts.push_back(static_cast<uint32_t>(records.size()));
 
     return;
   }
@@ -200,12 +192,75 @@ void groupRecords(
   }
 
   scratch.next.assign(scratch.starts.begin(), scratch.starts.end() - 1);
-  scratch.order.resize(records.size());
 
   for (size_t index = 0u; index != records.size(); ++index) {
     scratch.order[scratch.next[scratch.groupOf[index]]++] =
       static_cast<uint32_t>(index);
   }
+}
+
+void indexOld(const CachedBodyPair& pair, FillScratch& scratch) {
+  const std::vector<CachedManifold>& old = pair.spareManifolds;
+  bool added = false;
+
+  scratch.points.reset(pair.spare.size());
+
+  for (uint32_t index = 0u; index != pair.spare.size(); ++index) {
+    std::array<uint32_t, 2>& found = scratch.points.insert(
+      pointKey(pair.spareManifoldPoints[index]),
+      {index, 0u},
+      added
+    );
+
+    found[1] += 1u;
+  }
+
+  scratch.runEnds.clear();
+
+  for (uint32_t index = 0u; index != old.size(); ++index) {
+    if (index + 1u == old.size()
+        || !(normalKey(old[index + 1u]) == normalKey(old[index]))) {
+      scratch.runEnds.push_back(index);
+    }
+  }
+
+  scratch.normals.reset(scratch.runEnds.size());
+
+  for (const uint32_t index : scratch.runEnds) {
+    scratch.normals.insert(normalKey(old[index]), index, added) = index;
+  }
+
+  scratch.distinctNormals.clear();
+
+  for (const uint32_t index : scratch.runEnds) {
+    if (*scratch.normals.find(normalKey(old[index])) == index) {
+      scratch.distinctNormals.push_back(index);
+    }
+  }
+
+  scratch.twists.reset(scratch.starts.size());
+}
+
+template<typename Indices>
+double alignedTwist(
+  const std::vector<CachedManifold>& old,
+  const Indices& indices,
+  const CachedManifold& manifold
+) {
+  double closest = sharedNormal;
+  double twist = 0.0;
+
+  for (const uint32_t index : indices) {
+    const CachedManifold& before = old[index];
+    const double aligned = glm::dot(before.basis[0], manifold.basis[0]);
+
+    if (before.flipped == manifold.flipped && aligned >= closest) {
+      closest = aligned;
+      twist = before.twist;
+    }
+  }
+
+  return twist;
 }
 
 }
@@ -945,53 +1000,22 @@ void ManifoldCache::fill(
   pair.manifoldPoints.clear();
   pair.manifolds.clear();
 
-  FillScratch& scratch = fillScratch();
-  const bool indexed =
-    records.size() > scanLimit || pair.spare.size() > scanLimit;
+  const bool scanned =
+    records.size() <= scanLimit && pair.spare.size() <= scanLimit;
+  FillScratch* scratch = scanned ? nullptr : &fillScratch();
 
-  groupRecords(records, indexed, scratch);
+  if (!scanned) {
+    groupRecords(records, *scratch);
 
-  if (indexed && carry) {
-    bool added = false;
-
-    scratch.points.reset(pair.spare.size());
-
-    for (uint32_t index = 0u; index != pair.spare.size(); ++index) {
-      std::array<uint32_t, 2>& found = scratch.points.insert(
-        pointKey(pair.spareManifoldPoints[index]),
-        {index, 0u},
-        added
-      );
-
-      found[1] += 1u;
+    if (carry) {
+      indexOld(pair, *scratch);
     }
-
-    scratch.normals.reset(pair.spareManifolds.size());
-
-    for (uint32_t index = 0u; index != pair.spareManifolds.size(); ++index) {
-      scratch.normals.insert(
-        normalKey(pair.spareManifolds[index]),
-        index,
-        added
-      ) = index;
-    }
-
-    scratch.distinctNormals.clear();
-
-    for (uint32_t index = 0u; index != pair.spareManifolds.size(); ++index) {
-      if (*scratch.normals.find(normalKey(pair.spareManifolds[index]))
-          == index) {
-        scratch.distinctNormals.push_back(index);
-      }
-    }
-
-    scratch.twists.reset(scratch.starts.size());
   }
 
   const auto carried = [&](const CachedManifoldPoint& point) {
-    if (indexed) {
+    if (!scanned) {
       const std::array<uint32_t, 2>* found =
-        scratch.points.find(pointKey(point));
+        scratch->points.find(pointKey(point));
 
       return found != nullptr && (*found)[1] == 1u
                ? pair.spare[(*found)[0]].memory
@@ -1013,42 +1037,29 @@ void ManifoldCache::fill(
 
     return matches == 1u ? memory : ContactMemory{};
   };
-  const auto twistOf = [&](const CachedManifold& manifold) {
-    double closest = sharedNormal;
-    double twist = 0.0;
-    const auto consider = [&](const CachedManifold& old) {
-      const double aligned = glm::dot(old.basis[0], manifold.basis[0]);
+  NormalKey lastKey;
+  double lastTwist = 0.0;
+  const size_t groups = scanned ? records.size() : scratch->starts.size() - 1u;
 
-      if (old.flipped == manifold.flipped && aligned >= closest) {
-        closest = aligned;
-        twist = old.twist;
-      }
-    };
+  for (size_t group = 0u; group != groups; ++group) {
+    if (scanned) {
+      const uint32_t id = records[group].manifold;
+      bool seen = false;
 
-    if (!indexed) {
-      for (const CachedManifold& old : pair.spareManifolds) {
-        consider(old);
+      for (size_t earlier = 0u; earlier != group && !seen; ++earlier) {
+        seen = records[earlier].manifold == id;
       }
 
-      return twist;
+      if (seen) {
+        continue;
+      }
     }
 
-    bool added = false;
-    double& known = scratch.twists.insert(normalKey(manifold), 0.0, added);
-
-    if (added) {
-      for (const uint32_t index : scratch.distinctNormals) {
-        consider(pair.spareManifolds[index]);
-      }
-
-      known = twist;
-    }
-
-    return known;
-  };
-
-  for (size_t group = 0u; group + 1u < scratch.starts.size(); ++group) {
-    const Contact& lead = records[scratch.order[scratch.starts[group]]];
+    const uint32_t begin =
+      scanned ? static_cast<uint32_t>(group) : scratch->starts[group];
+    const uint32_t end = scanned ? static_cast<uint32_t>(records.size())
+                                 : scratch->starts[group + 1u];
+    const Contact& lead = records[scanned ? begin : scratch->order[begin]];
     CachedManifold manifold;
 
     manifold.start = static_cast<uint32_t>(pair.points.size());
@@ -1056,9 +1067,13 @@ void ManifoldCache::fill(
     manifold.flipped =
       !(lead.a.side == pair.first.side && lead.a.body == pair.first.index);
 
-    for (uint32_t at = scratch.starts[group]; at != scratch.starts[group + 1u];
-         ++at) {
-      const Contact& record = records[scratch.order[at]];
+    for (uint32_t at = begin; at != end; ++at) {
+      const Contact& record = records[scanned ? at : scratch->order[at]];
+
+      if (record.manifold != lead.manifold) {
+        continue;
+      }
+
       CachedContactPoint point;
       CachedManifoldPoint built;
 
@@ -1076,8 +1091,32 @@ void ManifoldCache::fill(
 
     manifold.count = static_cast<uint32_t>(pair.points.size()) - manifold.start;
 
-    if (carry) {
-      manifold.twist = twistOf(manifold);
+    if (carry && scanned) {
+      manifold.twist = alignedTwist(
+        pair.spareManifolds,
+        std::views::iota(0u, static_cast<uint32_t>(pair.spareManifolds.size())),
+        manifold
+      );
+    } else if (carry) {
+      const NormalKey key = normalKey(manifold);
+
+      if (group == 0u || !(key == lastKey)) {
+        bool added = false;
+        double& known = scratch->twists.insert(key, 0.0, added);
+
+        if (added) {
+          known = alignedTwist(
+            pair.spareManifolds,
+            scratch->distinctNormals,
+            manifold
+          );
+        }
+
+        lastKey = key;
+        lastTwist = known;
+      }
+
+      manifold.twist = lastTwist;
     }
 
     pair.manifolds.push_back(manifold);
