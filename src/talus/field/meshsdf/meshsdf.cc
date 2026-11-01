@@ -1,5 +1,7 @@
 #include "meshsdf.h"
 
+#include <talus/dynamics/scheduler/scheduler.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -15,6 +17,8 @@ namespace talus::field {
 namespace {
 
 constexpr uint32_t LEAF_TRIANGLES = 4u;
+
+constexpr uint32_t MINIMUM_ROWS_PER_BLOCK = 4u;
 
 constexpr double RELATIVE_BOX_PADDING = 1e-9;
 
@@ -51,6 +55,11 @@ struct Pending {
 struct Nearest {
   double distance = 0.0;
   uint32_t triangle = 0u;
+};
+
+struct Scratch {
+  std::vector<Pending> heap;
+  std::vector<uint32_t> stack;
 };
 
 struct RayFrame {
@@ -549,6 +558,39 @@ double coordinateScale(
   return static_cast<double>(std::max({largest.x, largest.y, largest.z}));
 }
 
+void bakeRows(
+  const Tree& tree,
+  const std::array<RayFrame, 3>& frames,
+  SampledSdf& field,
+  uint32_t begin,
+  uint32_t end,
+  Scratch& scratch
+) {
+  uint32_t seed = 0u;
+
+  for (uint32_t row = begin; row != end; ++row) {
+    const uint32_t y = row % field.resolution.y;
+    const uint32_t z = row / field.resolution.y;
+
+    size_t index = static_cast<size_t>(row) * field.resolution.x;
+
+    for (uint32_t x = 0u; x != field.resolution.x; ++x) {
+      const glm::dvec3 point(
+        field.origin + field.voxelSize * glm::vec3(x, y, z)
+      );
+
+      const Nearest nearest = nearestTriangle(tree, point, seed, scratch.heap);
+      seed = nearest.triangle;
+
+      field.distances[index] = static_cast<float>(
+        enclosed(tree, point, frames, scratch.stack) ? -nearest.distance
+                                                     : nearest.distance
+      );
+
+      ++index;
+    }
+  }
+}
 }
 
 SampledSdf bakeMesh(
@@ -558,6 +600,26 @@ SampledSdf bakeMesh(
   const glm::vec3& maximum,
   const glm::uvec3& resolution,
   uint8_t material
+) {
+  return bakeMesh(
+    vertices,
+    indices,
+    minimum,
+    maximum,
+    resolution,
+    material,
+    dynamics::Workers{}
+  );
+}
+
+SampledSdf bakeMesh(
+  std::span<const glm::vec3> vertices,
+  std::span<const uint32_t> indices,
+  const glm::vec3& minimum,
+  const glm::vec3& maximum,
+  const glm::uvec3& resolution,
+  uint8_t material,
+  const dynamics::Workers& workers
 ) {
   validate(vertices, indices, resolution);
 
@@ -584,34 +646,19 @@ SampledSdf bakeMesh(
   field.distances.resize(count);
   field.materials.assign(count, material);
 
-  std::vector<Pending> heap;
-  std::vector<uint32_t> stack;
-  size_t index = 0u;
-  uint32_t seed = 0u;
+  std::vector<Scratch> scratch(std::max(workers.count, 1u));
 
-  for (uint32_t z = 0; z < resolution.z; ++z) {
-    for (uint32_t y = 0; y < resolution.y; ++y) {
-      for (uint32_t x = 0; x < resolution.x; ++x) {
-        const glm::dvec3 point(
-          field.origin + field.voxelSize * glm::vec3(x, y, z)
-        );
-
-        const Nearest nearest = nearestTriangle(tree, point, seed, heap);
-        seed = nearest.triangle;
-
-        field.distances[index] = static_cast<float>(
-          enclosed(tree, point, frames, stack) ? -nearest.distance
-                                               : nearest.distance
-        );
-
-        ++index;
-      }
+  dynamics::parallelFor(
+    workers,
+    resolution.y * resolution.z,
+    MINIMUM_ROWS_PER_BLOCK,
+    [&](uint32_t begin, uint32_t end, uint32_t worker) {
+      bakeRows(tree, frames, field, begin, end, scratch[worker]);
     }
-  }
+  );
 
   finishBricks(field);
 
   return field;
 }
-
 }

@@ -7,6 +7,12 @@
 #include <cstdint>
 #include <span>
 
+namespace talus::dynamics {
+
+struct Workers;
+
+}
+
 namespace talus::field {
 
 SampledSdf bakeMesh(
@@ -18,4 +24,13 @@ SampledSdf bakeMesh(
   uint8_t material = 0u
 );
 
+SampledSdf bakeMesh(
+  std::span<const glm::vec3> vertices,
+  std::span<const uint32_t> indices,
+  const glm::vec3& minimum,
+  const glm::vec3& maximum,
+  const glm::uvec3& resolution,
+  uint8_t material,
+  const dynamics::Workers& workers
+);
 }

@@ -2,6 +2,7 @@
 
 #include "fieldprimitives.h"
 
+#include <talus/dynamics/scheduler/scheduler.h>
 #include <talus/field/meshsdf/meshsdf.h>
 #include <talus/field/sampledsdf/sampledsdf.h>
 
@@ -15,6 +16,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <memory>
 #include <numbers>
 #include <stdexcept>
 #include <utility>
@@ -326,6 +328,33 @@ double angleBetween(const glm::vec3& first, const glm::vec3& second) {
   return std::acos(std::clamp(cosine, -1.0, 1.0));
 }
 
+bool sameFloats(
+  const std::vector<float>& first,
+  const std::vector<float>& second
+) {
+  return first.size() == second.size()
+         && std::memcmp(
+              first.data(),
+              second.data(),
+              first.size() * sizeof(float)
+            ) == 0;
+}
+
+void checkIdentical(
+  const talus::field::SampledSdf& first,
+  const talus::field::SampledSdf& second
+) {
+  CHECK(sameFloats(first.distances, second.distances));
+  CHECK(sameFloats(first.brickLipschitz, second.brickLipschitz));
+  CHECK(sameFloats(first.brickMinimum, second.brickMinimum));
+  CHECK(sameFloats(first.brickMaximum, second.brickMaximum));
+  CHECK(
+    std::memcmp(&first.globalLipschitz, &second.globalLipschitz, sizeof(float))
+    == 0
+  );
+  CHECK(first.materials == second.materials);
+}
+
 const Mesh& sphereMesh() {
   static const Mesh mesh = icosphere(0.25f, 4u);
 
@@ -489,25 +518,34 @@ TEST_CASE(
 }
 
 TEST_CASE("bakeMesh is deterministic", "[field][meshsdf]") {
-  const talus::field::SampledSdf& first = sphereField();
-  const talus::field::SampledSdf second =
-    baked(sphereMesh(), glm::vec3(-0.35f), glm::vec3(0.35f), glm::uvec3(71u));
-
-  const auto same =
-    [](const std::vector<float>& a, const std::vector<float>& b) {
-      return a.size() == b.size()
-             && std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
-    };
-
-  CHECK(same(first.distances, second.distances));
-  CHECK(same(first.brickLipschitz, second.brickLipschitz));
-  CHECK(same(first.brickMinimum, second.brickMinimum));
-  CHECK(same(first.brickMaximum, second.brickMaximum));
-  CHECK(
-    std::memcmp(&first.globalLipschitz, &second.globalLipschitz, sizeof(float))
-    == 0
+  checkIdentical(
+    sphereField(),
+    baked(sphereMesh(), glm::vec3(-0.35f), glm::vec3(0.35f), glm::uvec3(71u))
   );
-  CHECK(first.materials == second.materials);
+}
+
+TEST_CASE(
+  "a bake on eight workers matches a serial bake byte for byte",
+  "[field][meshsdf]"
+) {
+  std::shared_ptr<talus::dynamics::Scheduler> scheduler;
+  const talus::dynamics::Workers workers =
+    talus::dynamics::resolveWorkers(8u, nullptr, nullptr, nullptr, scheduler);
+
+  REQUIRE(workers.count == 8u);
+
+  checkIdentical(
+    sphereField(),
+    talus::field::bakeMesh(
+      sphereMesh().vertices,
+      sphereMesh().indices,
+      glm::vec3(-0.35f),
+      glm::vec3(0.35f),
+      glm::uvec3(71u),
+      0u,
+      workers
+    )
+  );
 }
 
 TEST_CASE("a baked field supports probes and rays", "[field][meshsdf]") {
@@ -622,19 +660,39 @@ TEST_CASE("bakeMesh refuses meshes that are not closed", "[field][meshsdf]") {
 
 TEST_CASE("mesh bake cost", "[.][meshsdfcost]") {
   const Mesh& mesh = sphereMesh();
+  std::shared_ptr<talus::dynamics::Scheduler> scheduler;
 
-  for (const uint32_t points : {71u, 117u}) {
-    const auto start = std::chrono::steady_clock::now();
-    const talus::field::SampledSdf field =
-      baked(mesh, glm::vec3(-0.35f), glm::vec3(0.35f), glm::uvec3(points));
-    const auto stop = std::chrono::steady_clock::now();
-
-    std::printf(
-      "meshsdfcost triangles %zu points %u voxel_mm %.2f ms %.1f\n",
-      mesh.indices.size() / 3u,
-      points,
-      1000.0 * field.voxelSize.x,
-      std::chrono::duration<double, std::milli>(stop - start).count()
+  for (const uint32_t workerCount : {1u, 8u}) {
+    const talus::dynamics::Workers workers = talus::dynamics::resolveWorkers(
+      workerCount,
+      nullptr,
+      nullptr,
+      nullptr,
+      scheduler
     );
+
+    for (const uint32_t points : {71u, 117u}) {
+      const auto start = std::chrono::steady_clock::now();
+      const talus::field::SampledSdf field = talus::field::bakeMesh(
+        mesh.vertices,
+        mesh.indices,
+        glm::vec3(-0.35f),
+        glm::vec3(0.35f),
+        glm::uvec3(points),
+        0u,
+        workers
+      );
+      const auto stop = std::chrono::steady_clock::now();
+
+      std::printf(
+        "meshsdfcost triangles %zu points %u voxel_mm %.2f workers %u ms "
+        "%.1f\n",
+        mesh.indices.size() / 3u,
+        points,
+        1000.0 * field.voxelSize.x,
+        workers.count,
+        std::chrono::duration<double, std::milli>(stop - start).count()
+      );
+    }
   }
 }
