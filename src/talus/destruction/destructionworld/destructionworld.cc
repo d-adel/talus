@@ -430,7 +430,7 @@ void DestructionWorld::countBodies(const dynamics::World& world, const dynamics:
   const bool listed = listAwake(world);
 
   if (updateRest && listed) {
-    m_rest.update(world, workers, m_awake);
+    m_rest.updateAwake(world, workers);
   } else if (updateRest) {
     m_rest.update(world, workers);
   }

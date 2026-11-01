@@ -65,10 +65,9 @@ inline constexpr CostModel costModel{
 class RestTracker {
 public:
   void update(const dynamics::World& world, const dynamics::Workers& workers);
-  void update(
+  void updateAwake(
     const dynamics::World& world,
-    const dynamics::Workers& workers,
-    std::span<const uint32_t> awake
+    const dynamics::Workers& workers
   );
   void reset(uint32_t body) noexcept;
 

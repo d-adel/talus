@@ -1221,7 +1221,8 @@ TEST_CASE("a lever hit thaws a frozen beam when rotation can move its tip above 
 }
 
 TEST_CASE(
-  "a rest tracker fed the awake list counts as one that scans every body, "
+  "a rest tracker that walks the awake list counts as one that scans every "
+  "body, "
   "through a removal that shifts indices and a body that falls asleep between "
   "two updates",
   "[destruction][budget][awake]"
@@ -1238,14 +1239,8 @@ TEST_CASE(
   const talus::dynamics::Workers workers;
   talus::destruction::RestTracker listed;
   talus::destruction::RestTracker scanned;
-  std::vector<uint32_t> awake;
   const auto track = [&] {
-    if (talus::dynamics::awakeSuperset(world, awake)) {
-      listed.update(world, workers, awake);
-    } else {
-      listed.update(world, workers);
-    }
-
+    listed.updateAwake(world, workers);
     scanned.update(world, workers);
 
     for (uint32_t id = 0u; id != world.bodies.nextId; ++id) {

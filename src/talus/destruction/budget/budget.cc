@@ -57,18 +57,16 @@ void RestTracker::update(const dynamics::World& world, const dynamics::Workers& 
   track(world, workers, m_visit);
 }
 
-void RestTracker::update(
+void RestTracker::updateAwake(
   const dynamics::World& world,
-  const dynamics::Workers& workers,
-  std::span<const uint32_t> awake
+  const dynamics::Workers& workers
 ) {
   if (!m_tracked || m_layout != world.bodies.layout
-      || (!m_counting.empty() && m_counting.back() >= world.bodies.rigids.size())) {
+      || (!m_counting.empty() && m_counting.back() >= world.bodies.rigids.size())
+      || !dynamics::awakeSuperset(world, m_visit)) {
     update(world, workers);
     return;
   }
-
-  m_visit.assign(awake.begin(), awake.end());
 
   const auto middle = static_cast<std::ptrdiff_t>(m_visit.size());
 
