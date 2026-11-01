@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include "meshfixtures.h"
 
@@ -845,4 +846,28 @@ TEST_CASE(
   CHECK(distance <= 1.0e-6);
   CHECK(sample <= 1.0e-6);
   CHECK(moment <= 1.0e-6);
+}
+
+TEST_CASE(
+  "meshShape refuses more contact points than contact keys can number",
+  "[dynamics][meshbody]"
+) {
+  const Threads threads;
+  const glm::vec3 half(0.8f, 0.006f, 0.8f);
+  const Mesh plate = meshfixture::box(-half, half);
+  MeshShapeSettings settings;
+
+  settings.spacing = 0.004;
+  settings.voxel = 0.004;
+  CHECK_THROWS_WITH(
+    (void)meshShape(plate.vertices, plate.indices, settings, threads.workers),
+    Catch::Matchers::ContainsSubstring("contact points")
+  );
+
+  settings.spacing = 0.008;
+  CHECK(
+    meshShape(plate.vertices, plate.indices, settings, threads.workers)
+      .body.samples.size()
+    <= size_t{1} << 18u
+  );
 }

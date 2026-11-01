@@ -24,6 +24,7 @@ constexpr double voxelsAcrossThinnest = 12.0;
 constexpr double paddingVoxels = 3.0;
 constexpr double fewestSamples = 32.0;
 constexpr uint32_t projections = 2u;
+constexpr size_t maximumSamples = size_t{1} << 18u;
 
 void check(const MeshShapeSettings& settings) {
   if (!(settings.mass > 0.0) || !std::isfinite(settings.mass)) {
@@ -238,6 +239,13 @@ MeshShape meshShape(
   if (!(body.mass > 0.0) || body.samples.empty()) {
     throw std::invalid_argument(
       "A mesh body needs a mesh that encloses lattice points at its voxel size"
+    );
+  }
+
+  if (body.samples.size() > maximumSamples) {
+    throw std::invalid_argument(
+      "A mesh body can hold at most 262,144 contact points; use a coarser "
+      "spacing"
     );
   }
 
