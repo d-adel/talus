@@ -5,19 +5,213 @@
 #include <talus/dynamics/sleep/sleep.h>
 
 #include <algorithm>
+#include <bit>
 #include <utility>
 #include <vector>
 
 namespace talus::dynamics {
 
+namespace {
+
+constexpr size_t scanLimit = 16u;
+
+uint64_t mixed(uint64_t value) {
+  value += 0x9E3779B97F4A7C15ull;
+  value = (value ^ (value >> 30u)) * 0xBF58476D1CE4E5B9ull;
+  value = (value ^ (value >> 27u)) * 0x94D049BB133111EBull;
+
+  return value ^ (value >> 31u);
+}
+
+struct PointKey {
+  uint64_t key = 0u;
+  uint32_t firstChild = noChild;
+  uint32_t secondChild = noChild;
+
+  bool operator==(const PointKey&) const = default;
+};
+
+struct NormalKey {
+  std::array<uint64_t, 3> bits{};
+  bool flipped = false;
+
+  bool operator==(const NormalKey&) const = default;
+};
+
+PointKey pointKey(const CachedManifoldPoint& point) {
+  return {point.key, point.firstChild, point.secondChild};
+}
+
+NormalKey normalKey(const CachedManifold& manifold) {
+  const glm::dvec3& normal = manifold.basis[0];
+
+  return {
+    {std::bit_cast<uint64_t>(normal.x),
+     std::bit_cast<uint64_t>(normal.y),
+     std::bit_cast<uint64_t>(normal.z)},
+    manifold.flipped
+  };
+}
+
+uint64_t hashOf(uint32_t key) {
+  return mixed(key);
+}
+
+uint64_t hashOf(const PointKey& key) {
+  return mixed(
+    key.key
+    ^ mixed((static_cast<uint64_t>(key.firstChild) << 32u) | key.secondChild)
+  );
+}
+
+uint64_t hashOf(const NormalKey& key) {
+  return mixed(
+    key.bits[0]
+    ^ mixed(key.bits[1] ^ mixed(key.bits[2] + (key.flipped ? 1u : 0u)))
+  );
+}
+
+template<typename Key, typename Value>
+class FlatTable {
+public:
+  void reset(size_t count) {
+    size_t size = 32u;
+
+    while (size < 2u * count) {
+      size *= 2u;
+    }
+
+    m_used.assign(size, 0u);
+    m_keys.resize(size);
+    m_values.resize(size);
+  }
+
+  [[nodiscard]] const Value* find(const Key& key) const {
+    const size_t at = slotOf(key);
+
+    return m_used[at] != 0u ? &m_values[at] : nullptr;
+  }
+
+  Value& insert(const Key& key, const Value& value, bool& added) {
+    const size_t at = slotOf(key);
+
+    added = m_used[at] == 0u;
+
+    if (added) {
+      m_used[at] = 1u;
+      m_keys[at] = key;
+      m_values[at] = value;
+    }
+
+    return m_values[at];
+  }
+
+private:
+  [[nodiscard]] size_t slotOf(const Key& key) const {
+    const size_t mask = m_used.size() - 1u;
+    size_t at = static_cast<size_t>(hashOf(key)) & mask;
+
+    while (m_used[at] != 0u && !(m_keys[at] == key)) {
+      at = (at + 1u) & mask;
+    }
+
+    return at;
+  }
+
+  std::vector<uint8_t> m_used;
+  std::vector<Key> m_keys;
+  std::vector<Value> m_values;
+};
+
+struct FillScratch {
+  FlatTable<uint32_t, uint32_t> groups;
+  FlatTable<PointKey, std::array<uint32_t, 2>> points;
+  FlatTable<NormalKey, uint32_t> normals;
+  FlatTable<NormalKey, double> twists;
+  std::vector<uint32_t> groupOf;
+  std::vector<uint32_t> starts;
+  std::vector<uint32_t> next;
+  std::vector<uint32_t> order;
+  std::vector<uint32_t> distinctNormals;
+};
+
+FillScratch& fillScratch() {
+  thread_local FillScratch scratch;
+
+  return scratch;
+}
+
+void groupRecords(
+  std::span<const Contact> records,
+  bool indexed,
+  FillScratch& scratch
+) {
+  scratch.order.clear();
+  scratch.starts.clear();
+
+  if (!indexed) {
+    for (size_t first = 0u; first != records.size(); ++first) {
+      const uint32_t group = records[first].manifold;
+      bool seen = false;
+
+      for (size_t earlier = 0u; earlier != first && !seen; ++earlier) {
+        seen = records[earlier].manifold == group;
+      }
+
+      if (seen) {
+        continue;
+      }
+
+      scratch.starts.push_back(static_cast<uint32_t>(scratch.order.size()));
+
+      for (size_t index = first; index != records.size(); ++index) {
+        if (records[index].manifold == group) {
+          scratch.order.push_back(static_cast<uint32_t>(index));
+        }
+      }
+    }
+
+    scratch.starts.push_back(static_cast<uint32_t>(scratch.order.size()));
+
+    return;
+  }
+
+  uint32_t count = 0u;
+
+  scratch.groups.reset(records.size());
+  scratch.groupOf.resize(records.size());
+
+  for (size_t index = 0u; index != records.size(); ++index) {
+    bool added = false;
+
+    scratch.groupOf[index] =
+      scratch.groups.insert(records[index].manifold, count, added);
+    count += added ? 1u : 0u;
+  }
+
+  scratch.starts.assign(count + 1u, 0u);
+
+  for (const uint32_t group : scratch.groupOf) {
+    scratch.starts[group + 1u] += 1u;
+  }
+
+  for (uint32_t group = 0u; group != count; ++group) {
+    scratch.starts[group + 1u] += scratch.starts[group];
+  }
+
+  scratch.next.assign(scratch.starts.begin(), scratch.starts.end() - 1);
+  scratch.order.resize(records.size());
+
+  for (size_t index = 0u; index != records.size(); ++index) {
+    scratch.order[scratch.next[scratch.groupOf[index]]++] =
+      static_cast<uint32_t>(index);
+  }
+}
+
+}
+
 size_t PairSlots::home(uint64_t key) const {
-  uint64_t mixed = key + 0x9E3779B97F4A7C15ull;
-
-  mixed = (mixed ^ (mixed >> 30u)) * 0xBF58476D1CE4E5B9ull;
-  mixed = (mixed ^ (mixed >> 27u)) * 0x94D049BB133111EBull;
-  mixed ^= mixed >> 31u;
-
-  return static_cast<size_t>(mixed) & (m_keys.size() - 1u);
+  return static_cast<size_t>(mixed(key)) & (m_keys.size() - 1u);
 }
 
 uint32_t PairSlots::find(uint64_t key) const {
@@ -751,7 +945,59 @@ void ManifoldCache::fill(
   pair.manifoldPoints.clear();
   pair.manifolds.clear();
 
+  FillScratch& scratch = fillScratch();
+  const bool indexed =
+    records.size() > scanLimit || pair.spare.size() > scanLimit;
+
+  groupRecords(records, indexed, scratch);
+
+  if (indexed && carry) {
+    bool added = false;
+
+    scratch.points.reset(pair.spare.size());
+
+    for (uint32_t index = 0u; index != pair.spare.size(); ++index) {
+      std::array<uint32_t, 2>& found = scratch.points.insert(
+        pointKey(pair.spareManifoldPoints[index]),
+        {index, 0u},
+        added
+      );
+
+      found[1] += 1u;
+    }
+
+    scratch.normals.reset(pair.spareManifolds.size());
+
+    for (uint32_t index = 0u; index != pair.spareManifolds.size(); ++index) {
+      scratch.normals.insert(
+        normalKey(pair.spareManifolds[index]),
+        index,
+        added
+      ) = index;
+    }
+
+    scratch.distinctNormals.clear();
+
+    for (uint32_t index = 0u; index != pair.spareManifolds.size(); ++index) {
+      if (*scratch.normals.find(normalKey(pair.spareManifolds[index]))
+          == index) {
+        scratch.distinctNormals.push_back(index);
+      }
+    }
+
+    scratch.twists.reset(scratch.starts.size());
+  }
+
   const auto carried = [&](const CachedManifoldPoint& point) {
+    if (indexed) {
+      const std::array<uint32_t, 2>* found =
+        scratch.points.find(pointKey(point));
+
+      return found != nullptr && (*found)[1] == 1u
+               ? pair.spare[(*found)[0]].memory
+               : ContactMemory{};
+    }
+
     ContactMemory memory;
     uint32_t matches = 0u;
 
@@ -767,33 +1013,52 @@ void ManifoldCache::fill(
 
     return matches == 1u ? memory : ContactMemory{};
   };
+  const auto twistOf = [&](const CachedManifold& manifold) {
+    double closest = sharedNormal;
+    double twist = 0.0;
+    const auto consider = [&](const CachedManifold& old) {
+      const double aligned = glm::dot(old.basis[0], manifold.basis[0]);
 
-  for (size_t first = 0u; first != records.size(); ++first) {
-    const uint32_t group = records[first].manifold;
-    bool seen = false;
+      if (old.flipped == manifold.flipped && aligned >= closest) {
+        closest = aligned;
+        twist = old.twist;
+      }
+    };
 
-    for (size_t earlier = 0u; earlier != first && !seen; ++earlier) {
-      seen = records[earlier].manifold == group;
+    if (!indexed) {
+      for (const CachedManifold& old : pair.spareManifolds) {
+        consider(old);
+      }
+
+      return twist;
     }
 
-    if (seen) {
-      continue;
+    bool added = false;
+    double& known = scratch.twists.insert(normalKey(manifold), 0.0, added);
+
+    if (added) {
+      for (const uint32_t index : scratch.distinctNormals) {
+        consider(pair.spareManifolds[index]);
+      }
+
+      known = twist;
     }
 
+    return known;
+  };
+
+  for (size_t group = 0u; group + 1u < scratch.starts.size(); ++group) {
+    const Contact& lead = records[scratch.order[scratch.starts[group]]];
     CachedManifold manifold;
 
     manifold.start = static_cast<uint32_t>(pair.points.size());
-    manifold.basis = records[first].basis;
-    manifold.flipped = !(records[first].a.side == pair.first.side
-                         && records[first].a.body == pair.first.index);
+    manifold.basis = lead.basis;
+    manifold.flipped =
+      !(lead.a.side == pair.first.side && lead.a.body == pair.first.index);
 
-    for (size_t index = first; index != records.size(); ++index) {
-      const Contact& record = records[index];
-
-      if (record.manifold != group) {
-        continue;
-      }
-
+    for (uint32_t at = scratch.starts[group]; at != scratch.starts[group + 1u];
+         ++at) {
+      const Contact& record = records[scratch.order[at]];
       CachedContactPoint point;
       CachedManifoldPoint built;
 
@@ -812,16 +1077,7 @@ void ManifoldCache::fill(
     manifold.count = static_cast<uint32_t>(pair.points.size()) - manifold.start;
 
     if (carry) {
-      double closest = sharedNormal;
-
-      for (const CachedManifold& old : pair.spareManifolds) {
-        const double aligned = glm::dot(old.basis[0], manifold.basis[0]);
-
-        if (old.flipped == manifold.flipped && aligned >= closest) {
-          closest = aligned;
-          manifold.twist = old.twist;
-        }
-      }
+      manifold.twist = twistOf(manifold);
     }
 
     pair.manifolds.push_back(manifold);

@@ -217,13 +217,17 @@ const MeshFrame pose = meshFrame(world.dynamics.bodies.rigids[ref.index]);
   uses it. Many bodies can share one shape.
 - Pass `Workers` from `resolveWorkers` to bake on several threads. The result
   is identical to a serial bake. Bake at load, not during play.
-- Each touching point is its own contact. While two touching bodies slide or
-  push each other, contact bookkeeping for that pair grows with the square of
-  its contacts. A 1 m flat mesh body sliding on one box at 2 cm spacing has
-  about 2,900 contacts and costs 7.5 ms per step, 5.4 ms of it bookkeeping
-  (Ryzen 7 7840HS laptop, MSVC Release). At 30 to 90 contacts the bookkeeping
-  is a few microseconds, and at rest it is zero. Use a coarser `spacing` for
-  large flat bodies.
+- Each touching point is its own contact. A 1 m flat mesh body sliding on one
+  box at 2 cm spacing has about 2,900 contacts and costs about 2.2 ms per step,
+  0.11 ms of it contact bookkeeping (Ryzen 7 7840HS laptop, MSVC Release). Use
+  a coarser `spacing` for large flat bodies.
+- Two field bodies whose bounds overlap test every contact point of both
+  bodies against the other's field each step, even when they do not touch.
+  Bodies joined by a joint are not tested. Four standing characters of 12 mesh
+  boxes each, about 430 contacts each, cost about 4.7 ms per step on the same
+  laptop when every part pair that does not touch is joined, and 7 to 11 ms
+  with 4 such pairs per character left unjoined. Built from box compounds they
+  cost about 0.25 ms.
 - Field bodies meet boxes both ways. The body's points push on boxes and
   compound children, and the outer edges and corners of a box push on the
   field.
