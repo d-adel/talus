@@ -29,6 +29,7 @@
 #include <optional>
 #include <random>
 #include <span>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -1519,4 +1520,99 @@ TEST_CASE(
   requireSameBodies(walked, full);
   requireTwinSteps(walked, full, 60u);
   CHECK_FALSE(isFrozen(walked.bodies.rigids[indexOf(walked, pressed)]));
+}
+
+namespace {
+
+struct ThrowOnce {
+  bool armed = false;
+  uint32_t calls = 0u;
+};
+
+void* throwingEnqueue(
+  TaskCallback* task,
+  void* taskContext,
+  void* userContext,
+  const char*
+) {
+  ThrowOnce& host = *static_cast<ThrowOnce*>(userContext);
+
+  if (host.armed) {
+    host.armed = false;
+    ++host.calls;
+
+    throw std::runtime_error("host task failure");
+  }
+
+  task(taskContext);
+
+  return nullptr;
+}
+
+void finishInline(void*, void*) {}
+
+}
+
+TEST_CASE("a step that throws leaves the next step full", "[dynamics][awake]") {
+  ThrowOnce host;
+  World world;
+
+  world.workerCount = 4u;
+  world.enqueueTask = throwingEnqueue;
+  world.finishTask = finishInline;
+  world.userTaskContext = &host;
+  addFloor(world);
+
+  std::vector<uint32_t> crates;
+
+  for (uint32_t row = 0u; row != 20u; ++row) {
+    for (uint32_t column = 0u; column != 20u; ++column) {
+      crates.push_back(addCrate(
+        world,
+        glm::dvec3(
+          0.3 * static_cast<double>(column) - 2.85,
+          crateHalf,
+          0.3 * static_cast<double>(row) - 2.85
+        )
+      ));
+    }
+  }
+
+  for (uint32_t frame = 0u; frame != 600u && !allResting(world); ++frame) {
+    REQUIRE_FALSE(step(world).nonFinite);
+  }
+
+  REQUIRE(allResting(world));
+  REQUIRE_FALSE(step(world).nonFinite);
+  REQUIRE(walksAwakeOnly(world));
+
+  const uint32_t lifted = crates[0];
+
+  for (uint32_t index = 0u; index != 300u; ++index) {
+    const RigidBody& body = world.bodies.rigids[indexOf(world, crates[index])];
+
+    REQUIRE(setRigidPose(
+      world,
+      crates[index],
+      body.position + glm::dvec3(0.0, 0.5, 0.0),
+      upright
+    ));
+  }
+
+  host.armed = true;
+
+  REQUIRE_THROWS_AS(step(world), std::runtime_error);
+  REQUIRE(host.calls == 1u);
+
+  const double before = world.bodies.rigids[indexOf(world, lifted)].position.y;
+  const bool listed = walksAwakeOnly(world);
+
+  CHECK_FALSE(listed);
+
+  uint32_t sparse = 0u;
+
+  REQUIRE_FALSE(stepCounting(world, sparse).nonFinite);
+  CHECK(sparse == 0u);
+  CHECK(world.bodies.rigids[indexOf(world, lifted)].position.y < before);
+  CHECK(listedAwake(world) == scannedAwake(world));
 }

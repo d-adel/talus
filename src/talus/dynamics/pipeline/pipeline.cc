@@ -554,6 +554,7 @@ StepReport step(World& world) {
   };
 
   bodies.stirred.clear();
+  world.awake.layout = bodies.layout - 1u;
 
   std::vector<uint32_t> movers;
 

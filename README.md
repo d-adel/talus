@@ -316,14 +316,19 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
 - Stepping 0.4 m up onto 10 kg crates shoves them down with about 5 kN.
 - A character spawned exactly at its rest height misses the ground with its
   first in-air ray.
-- `world.islands` lists only islands with an awake body or a lattice.
+- `world.islands` can omit islands whose bodies all sleep.
 - A step after a body removal, a lattice added or removed, a tier switch, a
-  contact reset (`resetContacts`) or a contact-band change visits every body.
+  moved or removed static body (`setStaticPose`, `removeStatic`; both also wake
+  every body) or a contact-band change visits every body.
   That step costs about 1.4 ms among 20,000 sleeping bodies on the Ryzen 7
   7840HS laptop.
 - A world that holds any lattice body still copies every rigid body's velocity
   each step and visits every lattice island. Sleeping rigid bodies are not free
-  there.
+  there. In `talus::dynamics::step`, a sleeping rigid body costs almost nothing
+  in all other worlds.
+- `talus::World::step` also runs the destruction update, which still visits every
+  rigid body each step: about 0.67 ms among 20,000 sleeping bodies on one worker
+  and 0.26 ms on eight (Ryzen 7 7840HS laptop).
 
 ## Repository layout
 
