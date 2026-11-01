@@ -727,8 +727,10 @@ bool jointEnd(std::span<const uint32_t> ends, uint32_t id) {
     glm::mat3_cast(rigid.rotation) * glm::transpose(glm::mat3_cast(rigid.fieldRotation));
   LatticeBody lattice = body->lattice;
   const talus::PreparedMesh& mesh = *lattice.mesh;
+  std::vector<uint8_t> gone(world.bodies.rigids.size(), 0u);
 
-  world.bodies.rigids.erase(world.bodies.rigids.begin() + ref->index);
+  gone[ref->index] = 1u;
+  eraseRigids(world.bodies, gone);
   forgetBody(world, Side::Rigid, ref->index, id);
 
   for (size_t node = 0u; node != lattice.position.size(); ++node) {
@@ -793,7 +795,7 @@ bool jointEnd(std::span<const uint32_t> ends, uint32_t id) {
     fit.centre = plasticFit.centre;
   }
 
-  world.bodies.lattices.erase(world.bodies.lattices.begin() + ref->index);
+  eraseLattice(world.bodies, ref->index);
   forgetBody(world, Side::Lattice, ref->index, id);
 
   RigidBody rigid = body->rigid;

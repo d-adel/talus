@@ -191,7 +191,11 @@ uint32_t IslandStore::create() {
   return static_cast<uint32_t>(m_members.size() - 1u);
 }
 
-void IslandStore::sync(const BodySet& bodies, const Workers& workers) {
+void IslandStore::sync(
+  const BodySet& bodies,
+  const Workers& workers,
+  const std::vector<uint32_t>* live
+) {
   const uint32_t limit = bodies.nextId;
 
   if (m_islandOf.size() < limit) {
@@ -233,18 +237,27 @@ void IslandStore::sync(const BodySet& bodies, const Workers& workers) {
     return static_cast<uint8_t>(1u | (body.asleep ? 2u : 0u) | (body.mass > 0.0 ? 4u : 0u));
   };
   std::vector<std::vector<uint32_t>> found(std::max(workers.count, 1u));
+  const uint32_t count = static_cast<uint32_t>(
+    live != nullptr ? live->size() : bodies.rigids.size()
+  );
 
-  parallelFor(workers, static_cast<uint32_t>(bodies.rigids.size()), 1024u, [&](uint32_t begin, uint32_t end, uint32_t worker) {
-    for (uint32_t index = begin; index != end; ++index) {
-      const RigidBody& body = bodies.rigids[index];
-      const BodyRef& known = m_ref[body.id];
+  parallelFor(
+    workers,
+    count,
+    1024u,
+    [&](uint32_t begin, uint32_t end, uint32_t worker) {
+      for (uint32_t entry = begin; entry != end; ++entry) {
+        const uint32_t index = live != nullptr ? (*live)[entry] : entry;
+        const RigidBody& body = bodies.rigids[index];
+        const BodyRef& known = m_ref[body.id];
 
-      if (m_islandOf[body.id] == noIsland || known.side != Side::Rigid || known.index != index
-          || m_state[body.id] != stateOf(body)) {
-        found[worker].push_back(index);
+        if (m_islandOf[body.id] == noIsland || known.side != Side::Rigid
+            || known.index != index || m_state[body.id] != stateOf(body)) {
+          found[worker].push_back(index);
+        }
       }
     }
-  });
+  );
 
   std::vector<uint32_t> changed;
 
@@ -472,6 +485,49 @@ std::vector<uint32_t> IslandStore::split(
   return pieces;
 }
 
+void IslandStore::pickAwake(
+  const BodySet& bodies,
+  const std::vector<uint32_t>& live
+) {
+  const uint32_t lattices = static_cast<uint32_t>(bodies.lattices.size());
+
+  if (m_pickStamp.size() < m_members.size()) {
+    m_pickStamp.resize(m_members.size(), 0u);
+  }
+
+  m_picked.clear();
+
+  const auto pick = [&](uint32_t id) {
+    const uint32_t island = m_islandOf[id];
+
+    if (m_pickStamp[island] == m_stamp) {
+      return;
+    }
+
+    m_pickStamp[island] = m_stamp;
+
+    for (const uint32_t member : m_members[island]) {
+      const BodyRef& ref = m_ref[member];
+
+      m_picked.push_back(
+        ref.side == Side::Lattice ? ref.index : lattices + ref.index
+      );
+    }
+  };
+
+  for (const LatticeBody& lattice : bodies.lattices) {
+    pick(lattice.id);
+  }
+
+  for (const uint32_t index : live) {
+    if (!bodies.rigids[index].asleep) {
+      pick(bodies.rigids[index].id);
+    }
+  }
+
+  std::sort(m_picked.begin(), m_picked.end());
+}
+
 void IslandStore::build(
   BodySet& bodies,
   const ManifoldCache& cache,
@@ -479,7 +535,8 @@ void IslandStore::build(
   bool separated,
   std::span<const Contact> contacts,
   std::vector<Island>& islands,
-  const JointSet& joints
+  const JointSet& joints,
+  const std::vector<uint32_t>* live
 ) {
   m_splits = 0u;
 
@@ -581,18 +638,46 @@ void IslandStore::build(
     return found;
   };
 
-  for (uint32_t index = 0u; index != bodies.lattices.size(); ++index) {
-    Island& island = entry(bodies.lattices[index].id, BodyRef{Side::Lattice, index});
+  const uint32_t lattices = static_cast<uint32_t>(bodies.lattices.size());
+  const auto enter = [&](uint32_t key) {
+    if (key < lattices) {
+      Island& island =
+        entry(bodies.lattices[key].id, BodyRef{Side::Lattice, key});
 
-    island.owner = Owner::Strainstep;
-    island.external = island.external || hasAnchor(bodies.lattices[index]);
+      island.owner = Owner::Strainstep;
+      island.external = island.external || hasAnchor(bodies.lattices[key]);
+    } else {
+      const uint32_t index = key - lattices;
+      Island& island =
+        entry(bodies.rigids[index].id, BodyRef{Side::Rigid, index});
+
+      island.external = island.external || !(bodies.rigids[index].mass > 0.0);
+    }
+  };
+
+  if (live != nullptr) {
+    pickAwake(bodies, *live);
+
+    for (const uint32_t key : m_picked) {
+      enter(key);
+    }
+  } else {
+    for (uint32_t key = 0u; key != lattices + bodies.rigids.size(); ++key) {
+      enter(key);
+    }
   }
 
-  for (uint32_t index = 0u; index != bodies.rigids.size(); ++index) {
-    Island& island = entry(bodies.rigids[index].id, BodyRef{Side::Rigid, index});
+  const auto outputOf = [&](uint32_t id) -> Island* {
+    const uint32_t island = m_islandOf[id];
 
-    island.external = island.external || !(bodies.rigids[index].mass > 0.0);
-  }
+    return m_outputStamp[island] == m_stamp ? &islands[m_output[island]]
+                                            : nullptr;
+  };
+  const auto markExternal = [&](uint32_t id) {
+    if (Island* island = outputOf(id)) {
+      island->external = true;
+    }
+  };
 
   for (uint32_t output = 0u; output != count; ++output) {
     Island& island = islands[output];
@@ -614,10 +699,10 @@ void IslandStore::build(
         const CachedBodyPair& pair = cache.at(slot);
 
         if (pair.second.side == Side::Static) {
-          islands[m_output[m_islandOf[pair.firstId]]].external = true;
+          markExternal(pair.firstId);
         } else if (!heavy(bodies, pair.first) || !heavy(bodies, pair.second)) {
-          islands[m_output[m_islandOf[pair.firstId]]].external = true;
-          islands[m_output[m_islandOf[pair.secondId]]].external = true;
+          markExternal(pair.firstId);
+          markExternal(pair.secondId);
         }
       }
     }
@@ -632,11 +717,11 @@ void IslandStore::build(
     }
 
     if (a == noBody) {
-      islands[m_output[m_islandOf[b]]].external = true;
+      markExternal(b);
     } else if (a < m_islandOf.size() && m_islandOf[a] != noIsland
                && (!heavyId(bodies, a) || !heavyId(bodies, b))) {
-      islands[m_output[m_islandOf[a]]].external = true;
-      islands[m_output[m_islandOf[b]]].external = true;
+      markExternal(a);
+      markExternal(b);
     }
   }
 
@@ -650,12 +735,16 @@ void IslandStore::build(
 
     const uint32_t id = side.side == Side::Rigid ? bodies.rigids[side.body].id
                                                  : bodies.lattices[side.body].id;
-    Island& island = islands[m_output[m_islandOf[id]]];
+    Island* island = outputOf(id);
 
-    island.contacts.push_back(index);
+    if (island == nullptr) {
+      continue;
+    }
+
+    island->contacts.push_back(index);
 
     if (contact.a.side == Side::Static || contact.b.side == Side::Static) {
-      island.external = true;
+      island->external = true;
     }
   }
 }

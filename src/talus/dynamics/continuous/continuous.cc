@@ -60,6 +60,11 @@ double smallestExtentOf(const RigidBody& body) {
   return std::min({extent.x, extent.y, extent.z});
 }
 
+bool sweepAnchor(const RigidBody& body) {
+  return body.shape == RigidShape::Compound && body.compound != nullptr
+         && !(body.mass > 0.0);
+}
+
 RigidPose poseAt(const RigidPose& start, const RigidPose& end, double t) {
   const glm::dquat target =
     glm::dot(start.rotation, end.rotation) < 0.0 ? -end.rotation : end.rotation;
@@ -280,9 +285,7 @@ std::vector<uint32_t> sweepAnchors(const BodySet& bodies, const Workers& workers
 
   parallelFor(workers, static_cast<uint32_t>(bodies.rigids.size()), 1024u, [&](uint32_t begin, uint32_t end, uint32_t worker) {
     for (uint32_t index = begin; index != end; ++index) {
-      const RigidBody& body = bodies.rigids[index];
-
-      if (body.shape == RigidShape::Compound && body.compound != nullptr && !(body.mass > 0.0)) {
+      if (sweepAnchor(bodies.rigids[index])) {
         found[worker].push_back(index);
       }
     }
@@ -299,6 +302,54 @@ std::vector<uint32_t> sweepAnchors(const BodySet& bodies, const Workers& workers
   return anchors;
 }
 
+void refreshAnchors(
+  std::vector<uint32_t>& anchors,
+  const BodySet& bodies,
+  std::span<const uint32_t> rigids
+) {
+  for (const uint32_t index : rigids) {
+    const auto at = std::lower_bound(anchors.begin(), anchors.end(), index);
+    const bool listed = at != anchors.end() && *at == index;
+
+    if (sweepAnchor(bodies.rigids[index]) == listed) {
+      continue;
+    }
+
+    if (listed) {
+      anchors.erase(at);
+    } else {
+      anchors.insert(at, index);
+    }
+  }
+}
+
+bool needsSweep(
+  const BodySet& bodies,
+  std::span<const RigidPose> start,
+  uint32_t rigid
+) {
+  const RigidBody& body = bodies.rigids[rigid];
+
+  if (!(body.mass > 0.0)) {
+    return false;
+  }
+
+  const RigidPose& from = start[rigid];
+  const RigidPose to{body.position, body.rotation};
+  const double reach = reachOf(body);
+  const double travel = glm::length(to.position - from.position);
+  const double limit = safetyFactor * smallestExtentOf(body);
+  const glm::dquat relative = glm::conjugate(from.rotation) * to.rotation;
+  const double sine =
+    glm::length(glm::dvec3(relative.x, relative.y, relative.z));
+
+  if (travel + 2.0 * std::numbers::pi * sine * reach <= limit) {
+    return false;
+  }
+
+  return travel + turnBound(from.rotation, to.rotation) * reach > limit;
+}
+
 void solveContinuousBody(
   BodySet& bodies,
   std::span<const RigidPose> start,
@@ -307,30 +358,14 @@ void solveContinuousBody(
   std::span<const uint32_t> anchors
 ) {
   {
-    RigidBody& body = bodies.rigids[rigid];
-
-    if (!(body.mass > 0.0)) {
+    if (!needsSweep(bodies, start, rigid)) {
       return;
     }
 
+    RigidBody& body = bodies.rigids[rigid];
     const RigidPose& from = start[rigid];
     const RigidPose to{body.position, body.rotation};
     const double reach = reachOf(body);
-    const double travel = glm::length(to.position - from.position);
-    const double limit = safetyFactor * smallestExtentOf(body);
-    const glm::dquat relative = glm::conjugate(from.rotation) * to.rotation;
-    const double sine = glm::length(glm::dvec3(relative.x, relative.y, relative.z));
-
-    if (travel + 2.0 * std::numbers::pi * sine * reach <= limit) {
-      return;
-    }
-
-    const double motion = travel + turnBound(from.rotation, to.rotation) * reach;
-
-    if (motion <= limit) {
-      return;
-    }
-
     const glm::dvec3 low =
       glm::min(from.position, to.position) - glm::dvec3(reach);
     const glm::dvec3 high =

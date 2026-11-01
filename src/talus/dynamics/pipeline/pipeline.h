@@ -4,6 +4,7 @@
 #include <talus/dynamics/integrationparameters/integrationparameters.h>
 #include <talus/dynamics/broadphase/broadphase.h>
 #include <talus/dynamics/contact/contact.h>
+#include <talus/dynamics/continuous/continuous.h>
 #include <talus/dynamics/islands/islands.h>
 #include <talus/dynamics/joints/joints.h>
 #include <talus/dynamics/manifoldcache/manifoldcache.h>
@@ -11,6 +12,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <unordered_set>
 #include <vector>
@@ -73,6 +75,20 @@ struct StepReport {
   std::vector<ContactHitEvent> hits;
 };
 
+struct AwakeList {
+  std::vector<uint32_t> indices;
+  size_t rigidCount = 0u;
+  size_t latticeCount = 0u;
+  uint64_t layout = 0u;
+  double band = 0.0;
+};
+
+struct StepBuffers {
+  std::vector<double> travel;
+  std::vector<RigidPose> start;
+  std::optional<std::vector<uint32_t>> anchors;
+};
+
 struct World {
   BodySet bodies;
   std::vector<Contact> contacts;
@@ -94,9 +110,12 @@ struct World {
   std::vector<uint32_t> thawOnContact;
   IntegrationParameters parameters;
   double time = 0.0;
+  AwakeList awake;
+  StepBuffers buffers;
 };
 
 [[nodiscard]] StepReport step(World& world);
+[[nodiscard]] std::span<const uint32_t> awakeRigids(const World& world);
 [[nodiscard]] std::unordered_set<uint64_t> recordedPairs(std::span<const Contact> contacts);
 [[nodiscard]] std::vector<Contact> contactRecords(const World& world);
 [[nodiscard]] std::vector<Contact> contactsOf(const World& world, const BodyRef& ref);

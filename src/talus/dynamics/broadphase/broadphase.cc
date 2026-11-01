@@ -241,7 +241,8 @@ void BroadPhase::update(
   const IntegrationParameters& parameters,
   std::span<const double> travel,
   const Workers& workers,
-  const ManifoldCache* known
+  const ManifoldCache* known,
+  const std::vector<uint32_t>* live
 ) {
   m_stamp += 1u;
   m_created.clear();
@@ -271,66 +272,114 @@ void BroadPhase::update(
     m_fixed.resize(bodies.nextStaticId);
   }
 
-  parallelFor(workers, total, 64u, [&](uint32_t begin, uint32_t end, uint32_t) {
-    for (uint32_t index = begin; index != end; ++index) {
-      const bool movable = index < moving;
-      const BodyRef ref = movable ? refOf(index) : BodyRef{Side::Static, index - moving};
-      const uint32_t id = movable ? movingId(bodies, ref) : bodies.statics[ref.index].id;
-      const DynamicTree& tree = movable ? m_movingTree : m_fixedTree;
-      Proxy& proxy = movable ? m_moving[id] : m_fixed[id];
-      const double grow = movable ? band + travelOf(bodies, travel, ref) : band;
+  m_visit.clear();
 
-      if (ref.side == Side::Rigid && proxy.kept && !proxy.forced && proxy.node != noNode
-          && proxy.ref.side == ref.side && proxy.ref.index == ref.index && proxy.grow == grow
-          && proxy.position == bodies.rigids[ref.index].position
-          && proxy.rotation == bodies.rigids[ref.index].rotation) {
-        m_tight[index] = proxy.tight;
-        m_ids[index] = id;
-        proxy.seen = m_stamp;
-        continue;
+  if (live != nullptr) {
+    for (uint32_t index = 0u; index != lattices; ++index) {
+      m_visit.push_back(index);
+    }
+
+    for (const uint32_t index : *live) {
+      m_visit.push_back(lattices + index);
+    }
+
+    for (const uint32_t id : m_forced) {
+      const Proxy& proxy = m_moving[id];
+
+      if (proxy.node != noNode && proxy.ref.side == Side::Rigid
+          && proxy.ref.index < bodies.rigids.size()) {
+        m_visit.push_back(lattices + proxy.ref.index);
       }
+    }
 
-      const Bounds tight = boundsOf(bodies, ref, grow);
-      const bool posed = ref.side == Side::Rigid
-                         && (!proxy.kept || proxy.position != bodies.rigids[ref.index].position
-                             || proxy.rotation != bodies.rigids[ref.index].rotation);
+    std::sort(m_visit.begin() + lattices, m_visit.end());
+    m_visit.erase(
+      std::unique(m_visit.begin() + lattices, m_visit.end()),
+      m_visit.end()
+    );
+  }
 
-      if (ref.side == Side::Rigid) {
-        proxy.position = bodies.rigids[ref.index].position;
-        proxy.rotation = bodies.rigids[ref.index].rotation;
-        proxy.grow = grow;
-        proxy.kept = true;
-      }
+  m_forced.clear();
 
-      m_tight[index] = tight;
-      m_ids[index] = id;
-      proxy.ref = ref;
-      proxy.tight = tight;
-      proxy.seen = m_stamp;
+  const uint32_t visited = static_cast<uint32_t>(m_visit.size());
+  const uint32_t visits = live != nullptr ? visited + fixed : total;
 
-      if (proxy.node == noNode) {
-        m_action[index] = 3u;
-        continue;
-      }
+  parallelFor(
+    workers,
+    visits,
+    64u,
+    [&](uint32_t begin, uint32_t end, uint32_t) {
+      for (uint32_t entry = begin; entry != end; ++entry) {
+        const uint32_t index = live == nullptr   ? entry
+                               : entry < visited ? m_visit[entry]
+                                                 : moving + (entry - visited);
+        const bool movable = index < moving;
+        const BodyRef ref =
+          movable ? refOf(index) : BodyRef{Side::Static, index - moving};
+        const uint32_t id =
+          movable ? movingId(bodies, ref) : bodies.statics[ref.index].id;
+        const DynamicTree& tree = movable ? m_movingTree : m_fixedTree;
+        Proxy& proxy = movable ? m_moving[id] : m_fixed[id];
+        const double grow =
+          movable ? band + travelOf(bodies, travel, ref) : band;
 
-      if (proxy.forced || !contains(tree.box(proxy.node), tight)) {
-        if (proxy.forced || ref.side == Side::Lattice) {
-          proxy.margin = ref.side == Side::Static ? parameters.speculativeDistance
-                                                  : marginOf(bodies, ref, tight);
+        if (ref.side == Side::Rigid && proxy.kept && !proxy.forced
+            && proxy.node != noNode && proxy.ref.side == ref.side
+            && proxy.ref.index == ref.index && proxy.grow == grow
+            && proxy.position == bodies.rigids[ref.index].position
+            && proxy.rotation == bodies.rigids[ref.index].rotation) {
+          m_tight[index] = proxy.tight;
+          m_ids[index] = id;
+          proxy.seen = m_stamp;
+          continue;
         }
 
-        m_fat[index] = grown(tight, proxy.margin);
-        m_action[index] = 1u;
-      } else if (!contains(grown(tight, 2.0 * proxy.margin), tree.box(proxy.node))) {
-        m_fat[index] = grown(tight, proxy.margin);
-        m_action[index] = 2u;
-      } else if (posed) {
-        m_action[index] = 4u;
-      }
+        const Bounds tight = boundsOf(bodies, ref, grow);
+        const bool posed = ref.side == Side::Rigid
+                           && (!proxy.kept || proxy.position != bodies.rigids[ref.index].position
+                               || proxy.rotation != bodies.rigids[ref.index].rotation);
 
-      proxy.forced = false;
+        if (ref.side == Side::Rigid) {
+          proxy.position = bodies.rigids[ref.index].position;
+          proxy.rotation = bodies.rigids[ref.index].rotation;
+          proxy.grow = grow;
+          proxy.kept = true;
+        }
+
+        m_tight[index] = tight;
+        m_ids[index] = id;
+        proxy.ref = ref;
+        proxy.tight = tight;
+        proxy.seen = m_stamp;
+
+        if (proxy.node == noNode) {
+          m_action[index] = 3u;
+          continue;
+        }
+
+        if (proxy.forced || !contains(tree.box(proxy.node), tight)) {
+          if (proxy.forced || ref.side == Side::Lattice) {
+            proxy.margin = ref.side == Side::Static
+                             ? parameters.speculativeDistance
+                             : marginOf(bodies, ref, tight);
+          }
+
+          m_fat[index] = grown(tight, proxy.margin);
+          m_action[index] = 1u;
+        } else if (!contains(
+                     grown(tight, 2.0 * proxy.margin),
+                     tree.box(proxy.node)
+                   )) {
+          m_fat[index] = grown(tight, proxy.margin);
+          m_action[index] = 2u;
+        } else if (posed) {
+          m_action[index] = 4u;
+        }
+
+        proxy.forced = false;
+      }
     }
-  });
+  );
 
   const auto refresh = [&](
     DynamicTree& tree,
@@ -344,10 +393,27 @@ void BroadPhase::update(
   ) {
     moved.clear();
     refreshed.clear();
-    changed.assign(count, 0u);
+
+    const bool movingTree = &tree == &m_movingTree;
+    std::vector<uint32_t>& marked = movingTree ? m_markedMoving : m_markedFixed;
+    const std::vector<uint32_t>* walk =
+      movingTree && live != nullptr ? &m_visit : nullptr;
+
+    for (const uint32_t index : marked) {
+      if (index < changed.size()) {
+        changed[index] = 0u;
+      }
+    }
+
+    marked.clear();
+    changed.resize(count, 0u);
     m_pending.clear();
 
-    for (uint32_t index = 0u; index != count; ++index) {
+    const uint32_t steps =
+      walk != nullptr ? static_cast<uint32_t>(walk->size()) : count;
+
+    for (uint32_t step = 0u; step != steps; ++step) {
+      const uint32_t index = walk != nullptr ? (*walk)[step] : step;
       const uint8_t action = m_action[first + index];
 
       if (action == 0u) {
@@ -370,6 +436,7 @@ void BroadPhase::update(
 
       tree.resize(proxy.node, m_fat[first + index]);
       changed[index] = 1u;
+      marked.push_back(index);
 
       if (action == 1u) {
         proxy.moved = m_stamp;
@@ -404,6 +471,7 @@ void BroadPhase::update(
       proxy.moved = m_stamp;
       proxy.forced = false;
       changed[index] = 1u;
+      marked.push_back(index);
       moved.push_back(id);
     }
   };
@@ -546,6 +614,7 @@ uint32_t BroadPhase::seenStatics() const {
 void BroadPhase::markMoved(uint32_t id) {
   if (id < m_moving.size()) {
     m_moving[id].forced = true;
+    m_forced.push_back(id);
   }
 }
 

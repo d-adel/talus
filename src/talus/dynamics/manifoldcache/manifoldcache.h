@@ -121,7 +121,8 @@ public:
   [[nodiscard]] const CachedBodyPair& at(uint32_t slot) const;
   [[nodiscard]] std::span<const uint32_t> pairsOf(uint32_t id) const;
   [[nodiscard]] bool touchedLast(uint32_t id) const;
-  void keepTouched(const BodySet& bodies, std::span<const uint8_t> touched);
+  [[nodiscard]] std::span<const uint32_t> touchedIndices() const;
+  void keepTouched(const BodySet& bodies, std::span<const uint32_t> indices);
   [[nodiscard]] uint32_t pointCount() const;
 
   [[nodiscard]] std::vector<Contact> records(uint32_t slot) const;
@@ -142,7 +143,11 @@ public:
   void writeMemory(uint32_t slot, std::span<const Contact> records);
   void refreshColour(const BodySet& bodies, uint32_t slot);
   void recolour(const BodySet& bodies, std::span<const uint32_t> slots);
-  [[nodiscard]] std::vector<uint32_t> syncBodies(const BodySet& bodies, const Workers& workers = Workers{});
+  [[nodiscard]] std::vector<uint32_t> syncBodies(
+    const BodySet& bodies,
+    const Workers& workers = Workers{},
+    const std::vector<uint32_t>* live = nullptr
+  );
   void sleepBody(const BodySet& bodies, uint32_t id);
   [[nodiscard]] std::span<const uint32_t> widePairs(uint32_t colour) const;
   [[nodiscard]] std::span<const uint32_t> otherPairs(uint32_t colour) const;
@@ -187,6 +192,8 @@ private:
   std::vector<uint8_t> m_bodyState;
   std::vector<uint8_t> m_seen;
   std::vector<uint8_t> m_touched;
+  std::vector<uint32_t> m_touchedIds;
+  std::vector<uint32_t> m_touchedIndices;
 };
 
 template <typename Visit>

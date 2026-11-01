@@ -5,6 +5,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace talus::dynamics {
@@ -33,6 +34,10 @@ double& sleepTimeOf(BodySet& bodies, const BodyRef& ref) {
 void putToSleep(BodySet& bodies, const BodyRef& ref) {
   if (ref.side == Side::Rigid) {
     RigidBody& body = bodies.rigids[ref.index];
+
+    if (!body.asleep) {
+      bodies.stirred.push_back(ref.index);
+    }
 
     body.asleep = true;
     body.velocity = glm::dvec3(0.0);
@@ -75,8 +80,14 @@ bool islandAsleep(const BodySet& bodies, const Island& island) {
 
 void wakeBody(BodySet& bodies, const BodyRef& ref) {
   if (ref.side == Side::Rigid) {
-    bodies.rigids[ref.index].asleep = false;
-    bodies.rigids[ref.index].sleepTime = 0.0;
+    RigidBody& body = bodies.rigids[ref.index];
+
+    if (body.asleep) {
+      bodies.stirred.push_back(ref.index);
+    }
+
+    body.asleep = false;
+    body.sleepTime = 0.0;
   } else if (ref.side == Side::Lattice) {
     bodies.lattices[ref.index].asleep = false;
     bodies.lattices[ref.index].sleepTime = 0.0;
@@ -84,9 +95,8 @@ void wakeBody(BodySet& bodies, const BodyRef& ref) {
 }
 
 void wakeAll(BodySet& bodies) {
-  for (RigidBody& body : bodies.rigids) {
-    body.asleep = false;
-    body.sleepTime = 0.0;
+  for (uint32_t index = 0u; index != bodies.rigids.size(); ++index) {
+    wakeBody(bodies, BodyRef{Side::Rigid, index});
   }
 
   for (LatticeBody& body : bodies.lattices) {
@@ -103,8 +113,9 @@ double sleepSpeed(const RigidBody& body, const RigidPose& start, double dt) {
     + 2.0 * glm::length(glm::dvec3(turn.x, turn.y, turn.z)) * extent;
   const double moving =
     glm::length(body.velocity) + glm::length(body.angularVelocity) * extent;
+  const double drift = 0.5 * moved / dt;
 
-  return std::max(moving, 0.5 * moved / dt);
+  return moving < drift || std::isnan(drift) ? drift : moving;
 }
 
 double sleepSpeed(const LatticeBody& body, double dt) {
@@ -149,7 +160,7 @@ void settleIslands(
           : sleepSpeed(bodies.lattices[ref.index], parameters.dt);
       double& time = sleepTimeOf(bodies, ref);
 
-      time = speed > parameters.sleepThreshold ? 0.0 : time + parameters.dt;
+      time = speed <= parameters.sleepThreshold ? time + parameters.dt : 0.0;
 
       const uint32_t candidate = store.islandOf(idOf(ref));
 

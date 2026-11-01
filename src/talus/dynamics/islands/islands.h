@@ -40,7 +40,11 @@ inline constexpr uint32_t noIsland = 0xFFFFFFFFu;
 
 class IslandStore {
 public:
-  void sync(const BodySet& bodies, const Workers& workers = Workers{});
+  void sync(
+    const BodySet& bodies,
+    const Workers& workers = Workers{},
+    const std::vector<uint32_t>* live = nullptr
+  );
   void link(uint32_t a, uint32_t b);
   void markRemoved(uint32_t id);
   void linkPairs(const BodySet& bodies, const ManifoldCache& cache);
@@ -53,7 +57,8 @@ public:
     bool separated,
     std::span<const Contact> contacts,
     std::vector<Island>& islands,
-    const JointSet& joints
+    const JointSet& joints,
+    const std::vector<uint32_t>* live = nullptr
   );
   [[nodiscard]] std::vector<uint32_t> split(
     const BodySet& bodies,
@@ -77,6 +82,7 @@ public:
 private:
   uint32_t create();
   [[nodiscard]] bool heavyId(const BodySet& bodies, uint32_t id) const;
+  void pickAwake(const BodySet& bodies, const std::vector<uint32_t>& live);
 
   std::vector<uint32_t> m_islandOf;
   std::vector<BodyRef> m_ref;
@@ -92,6 +98,8 @@ private:
   std::vector<uint32_t> m_localStamp;
   std::vector<uint32_t> m_parent;
   std::vector<uint32_t> m_visited;
+  std::vector<uint32_t> m_pickStamp;
+  std::vector<uint32_t> m_picked;
   uint32_t m_stamp = 0u;
   uint32_t m_splits = 0u;
   uint32_t m_splitBody = noBody;

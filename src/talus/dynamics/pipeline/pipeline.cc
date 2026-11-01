@@ -29,43 +29,62 @@ namespace talus::dynamics {
 
 namespace {
 
-std::vector<double> frameTravel(
+void frameTravel(
   const BodySet& bodies,
   double dt,
   const Workers& workers,
+  const std::vector<uint32_t>* live,
+  std::vector<double>& travel,
   std::vector<uint32_t>& movers
 ) {
   const uint32_t lattices = static_cast<uint32_t>(bodies.lattices.size());
-  std::vector<double> travel(bodies.lattices.size() + bodies.rigids.size(), 0.0);
+  const size_t size = bodies.lattices.size() + bodies.rigids.size();
   std::vector<std::vector<uint32_t>> found(std::max(workers.count, 1u));
 
-  parallelFor(workers, static_cast<uint32_t>(travel.size()), 1024u, [&](uint32_t begin, uint32_t end, uint32_t worker) {
-    for (uint32_t index = begin; index != end; ++index) {
-      if (index < lattices) {
-        travel[index] = speedOf(bodies, BodyRef{Side::Lattice, index}) * dt;
-        continue;
-      }
+  if (live != nullptr) {
+    travel.resize(size, 0.0);
+  } else {
+    travel.assign(size, 0.0);
+  }
 
-      const RigidBody& body = bodies.rigids[index - lattices];
-      const bool still = body.velocity == glm::dvec3(0.0) && body.angularVelocity == glm::dvec3(0.0);
+  const uint32_t count =
+    static_cast<uint32_t>(live != nullptr ? lattices + live->size() : size);
 
-      if (!body.asleep && (body.mass > 0.0 || !still)) {
-        found[worker].push_back(body.id);
-      }
+  parallelFor(
+    workers,
+    count,
+    1024u,
+    [&](uint32_t begin, uint32_t end, uint32_t worker) {
+      for (uint32_t entry = begin; entry != end; ++entry) {
+        const uint32_t index = live != nullptr && entry >= lattices
+                                 ? lattices + (*live)[entry - lattices]
+                                 : entry;
 
-      if (!still) {
-        travel[index] = speedOf(bodies, BodyRef{Side::Rigid, index - lattices}) * dt;
+        if (index < lattices) {
+          travel[index] = speedOf(bodies, BodyRef{Side::Lattice, index}) * dt;
+          continue;
+        }
+
+        const RigidBody& body = bodies.rigids[index - lattices];
+        const bool still = body.velocity == glm::dvec3(0.0)
+                           && body.angularVelocity == glm::dvec3(0.0);
+
+        if (!body.asleep && (body.mass > 0.0 || !still)) {
+          found[worker].push_back(body.id);
+        }
+
+        travel[index] =
+          still ? 0.0
+                : speedOf(bodies, BodyRef{Side::Rigid, index - lattices}) * dt;
       }
     }
-  });
+  );
 
   movers.clear();
 
   for (const std::vector<uint32_t>& list : found) {
     movers.insert(movers.end(), list.begin(), list.end());
   }
-
-  return travel;
 }
 
 std::optional<std::vector<uint32_t>> activeSlots(
@@ -131,7 +150,11 @@ void shareStoredForces(World& world) {
   }
 }
 
-bool finite(const BodySet& bodies, const Workers& workers) {
+bool finite(
+  const BodySet& bodies,
+  const Workers& workers,
+  const std::vector<uint32_t>* live
+) {
   for (const LatticeBody& body : bodies.lattices) {
     for (const glm::dvec3& position : body.position) {
       if (!std::isfinite(position.x + position.y + position.z)) {
@@ -141,17 +164,29 @@ bool finite(const BodySet& bodies, const Workers& workers) {
   }
 
   std::atomic<bool> bad{false};
+  const uint32_t count = static_cast<uint32_t>(
+    live != nullptr ? live->size() : bodies.rigids.size()
+  );
 
-  parallelFor(workers, static_cast<uint32_t>(bodies.rigids.size()), 4096u, [&](uint32_t begin, uint32_t end, uint32_t) {
-    for (uint32_t index = begin; index != end; ++index) {
-      const RigidBody& body = bodies.rigids[index];
+  parallelFor(
+    workers,
+    count,
+    4096u,
+    [&](uint32_t begin, uint32_t end, uint32_t) {
+      for (uint32_t entry = begin; entry != end; ++entry) {
+        const RigidBody& body =
+          bodies.rigids[live != nullptr ? (*live)[entry] : entry];
 
-      if (!std::isfinite(body.position.x + body.position.y + body.position.z + body.rotation.w)) {
-        bad.store(true, std::memory_order_relaxed);
-        return;
+        if (!std::isfinite(
+              body.position.x + body.position.y + body.position.z
+              + body.rotation.w
+            )) {
+          bad.store(true, std::memory_order_relaxed);
+          return;
+        }
       }
     }
-  });
+  );
 
   return !bad.load(std::memory_order_relaxed);
 }
@@ -343,6 +378,77 @@ void addTouching(SoftstepTouching& total, const SoftstepTouching& part) {
     total.hits.end()
   );
 }
+
+bool listFits(const AwakeList& awake, const BodySet& bodies, double band) {
+  return awake.layout == bodies.layout
+         && awake.latticeCount == bodies.lattices.size()
+         && awake.rigidCount <= bodies.rigids.size() && awake.band == band;
+}
+
+void mergeIndices(
+  std::vector<uint32_t>& sorted,
+  std::span<const uint32_t> more
+) {
+  if (more.empty()) {
+    return;
+  }
+
+  const auto middle = sorted.insert(sorted.end(), more.begin(), more.end());
+
+  std::sort(middle, sorted.end());
+  std::inplace_merge(sorted.begin(), middle, sorted.end());
+  sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+}
+
+std::vector<uint32_t> liveRigids(
+  const AwakeList& awake,
+  const BodySet& bodies
+) {
+  std::vector<uint32_t> live = awake.indices;
+
+  for (size_t index = awake.rigidCount; index != bodies.rigids.size();
+       ++index) {
+    live.push_back(static_cast<uint32_t>(index));
+  }
+
+  mergeIndices(live, bodies.stirred);
+
+  return live;
+}
+
+void rebuildAwake(
+  AwakeList& awake,
+  const BodySet& bodies,
+  const std::vector<uint32_t>* live,
+  double band
+) {
+  const auto keep = [&](uint32_t index) {
+    if (!bodies.rigids[index].asleep) {
+      awake.indices.push_back(index);
+    }
+  };
+
+  awake.indices.clear();
+
+  if (live != nullptr) {
+    for (const uint32_t index : *live) {
+      keep(index);
+    }
+  } else {
+    for (uint32_t index = 0u; index != bodies.rigids.size(); ++index) {
+      keep(index);
+    }
+  }
+
+  awake.rigidCount = bodies.rigids.size();
+  awake.latticeCount = bodies.lattices.size();
+  awake.layout = bodies.layout;
+  awake.band = band;
+}
+}
+
+std::span<const uint32_t> awakeRigids(const World& world) {
+  return world.awake.indices;
 }
 
 std::unordered_set<uint64_t> recordedPairs(std::span<const Contact> contacts) {
@@ -430,12 +536,42 @@ StepReport step(World& world) {
   );
   const uint32_t simdWidth = resolveSimdWidth(world.simdWidth);
   const double band = parameters.speculativeDistance + parameters.margin;
+  const bool full = !parameters.sleep || !listFits(world.awake, bodies, band);
+  std::vector<uint32_t> live =
+    full ? std::vector<uint32_t>{} : liveRigids(world.awake, bodies);
+  const std::vector<uint32_t>* walk = full ? nullptr : &live;
+  StepBuffers& buffers = world.buffers;
+  size_t absorbed = 0u;
+  const auto absorbStirred = [&] {
+    if (!full) {
+      mergeIndices(
+        live,
+        std::span<const uint32_t>(bodies.stirred).subspan(absorbed)
+      );
+    }
+
+    absorbed = bodies.stirred.size();
+  };
+
+  bodies.stirred.clear();
+  world.awake.layout = bodies.layout - 1u;
+
   std::vector<uint32_t> movers;
-  const std::vector<double> travel = frameTravel(bodies, parameters.dt, workers, movers);
+
+  frameTravel(bodies, parameters.dt, workers, walk, buffers.travel, movers);
+
+  const std::span<const double> travel = buffers.travel;
 
   report.profile.travel = clock.lap();
 
-  world.broadPhase.update(bodies, parameters, travel, workers, &world.manifolds);
+  world.broadPhase.update(
+    bodies,
+    parameters,
+    travel,
+    workers,
+    &world.manifolds,
+    walk
+  );
   world.manifolds.createPairs(
     bodies,
     world.broadPhase.created(),
@@ -465,7 +601,8 @@ StepReport step(World& world) {
     workers,
     &world.broadPhase,
     parameters.timePairs ? &report.profile.pairs : nullptr,
-    walked ? &*walked : nullptr
+    walked ? &*walked : nullptr,
+    !full
   );
   report.profile.storeUpdate = clock.lap();
 
@@ -476,11 +613,13 @@ StepReport step(World& world) {
   (void)shareCarriedForces(world.carried, contacts, bodies);
   shareStoredForces(world);
   contacts.insert(contacts.end(), sleeping.begin(), sleeping.end());
-  report.thawed = thawStruck(world, parameters.thawSpeed);
+  report.thawed = thawStruck(world, parameters.thawSpeed, walk);
+  absorbStirred();
   report.profile.lattice = clock.lap();
 
-  world.islandStore.sync(bodies, workers);
+  world.islandStore.sync(bodies, workers, walk);
   wakeTouchedSleepers(world, world.movers);
+  absorbStirred();
 
   for (const uint32_t id : events.lost) {
     world.islandStore.markRemoved(id);
@@ -494,26 +633,43 @@ StepReport step(World& world) {
     !events.separated.empty(),
     contacts,
     world.islands,
-    world.joints
+    world.joints,
+    walk
   );
-  world.manifolds.recolour(bodies, world.manifolds.syncBodies(bodies, workers));
+  absorbStirred();
+  world.manifolds.recolour(
+    bodies,
+    world.manifolds.syncBodies(bodies, workers, walk)
+  );
 
   std::vector<Island>& islands = world.islands;
-  std::vector<RigidPose> start;
+  std::vector<RigidPose>& start = buffers.start;
   std::vector<uint32_t> stateOf(bodies.rigids.size(), 0u);
   uint32_t points = 0u;
   uint32_t active = 0u;
+  const uint32_t posed =
+    static_cast<uint32_t>(full ? bodies.rigids.size() : live.size());
 
   start.resize(bodies.rigids.size());
-  parallelFor(workers, static_cast<uint32_t>(bodies.rigids.size()), 1024u, [&](uint32_t begin, uint32_t end, uint32_t) {
-    for (uint32_t index = begin; index != end; ++index) {
-      start[index] = {bodies.rigids[index].position, bodies.rigids[index].rotation};
+  parallelFor(
+    workers,
+    posed,
+    1024u,
+    [&](uint32_t begin, uint32_t end, uint32_t) {
+      for (uint32_t entry = begin; entry != end; ++entry) {
+        const uint32_t index = full ? entry : live[entry];
+
+        start[index] = {
+          bodies.rigids[index].position,
+          bodies.rigids[index].rotation
+        };
+      }
     }
-  });
+  );
 
   std::vector<const Island*> rigidIslands;
   std::vector<const Island*> strainIslands;
-  std::vector<uint8_t> latticeOwned(bodies.rigids.size(), 0u);
+  std::vector<uint8_t> latticeOwned;
 
   for (const Island& island : islands) {
     if (island.asleep) {
@@ -528,6 +684,7 @@ StepReport step(World& world) {
 
     strainIslands.push_back(&island);
     report.strainstepIslands += 1u;
+    latticeOwned.resize(bodies.rigids.size(), 0u);
 
     for (const BodyRef& ref : island.bodies) {
       if (ref.side == Side::Rigid) {
@@ -543,22 +700,18 @@ StepReport step(World& world) {
     world.softstepArena = makeSoftstepArena();
   }
 
-  std::vector<uint8_t> softstep(bodies.rigids.size(), 0u);
   std::vector<uint32_t> rigids;
 
   for (const Island* island : rigidIslands) {
     for (const BodyRef& ref : island->bodies) {
       if (ref.side == Side::Rigid) {
-        softstep[ref.index] = 1u;
+        rigids.push_back(ref.index);
       }
     }
   }
 
-  for (uint32_t index = 0u; index != softstep.size(); ++index) {
-    if (softstep[index] != 0u) {
-      rigids.push_back(index);
-    }
-  }
+  std::sort(rigids.begin(), rigids.end());
+  rigids.erase(std::unique(rigids.begin(), rigids.end()), rigids.end());
   report.profile.islands = clock.lap();
   SoftstepTouching softstepTouching;
 
@@ -665,8 +818,25 @@ StepReport step(World& world) {
   report.profile.solverSetup = solve - report.profile.gather - report.profile.prepare
                                - report.profile.substeps - report.profile.storeBack;
 
+  if (full) {
+    buffers.anchors.reset();
+  } else if (buffers.anchors) {
+    refreshAnchors(*buffers.anchors, bodies, live);
+  }
+
   if (parameters.continuous) {
-    const std::vector<uint32_t> anchors = sweepAnchors(bodies, workers);
+    const bool sweeps =
+      std::any_of(rigids.begin(), rigids.end(), [&](uint32_t index) {
+        return needsSweep(bodies, start, index);
+      });
+
+    if (sweeps && !buffers.anchors) {
+      buffers.anchors = sweepAnchors(bodies, workers);
+    }
+
+    const std::span<const uint32_t> anchors =
+      sweeps ? std::span<const uint32_t>(*buffers.anchors)
+             : std::span<const uint32_t>{};
 
     parallelFor(workers, static_cast<uint32_t>(rigids.size()), 64u, [&](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t index = begin; index != end; ++index) {
@@ -731,7 +901,7 @@ StepReport step(World& world) {
   active = softstepTouching.active;
   report.contacts = points + static_cast<uint32_t>(world.contacts.size());
   report.activeContacts += active;
-  report.nonFinite = report.nonFinite || !finite(bodies, workers);
+  report.nonFinite = report.nonFinite || !finite(bodies, workers, walk);
   report.profile.events += clock.lap();
 
   if (parameters.sleep) {
@@ -741,6 +911,8 @@ StepReport step(World& world) {
   }
 
   world.carried.clear();
+  absorbStirred();
+  rebuildAwake(world.awake, bodies, full ? nullptr : &live, band);
   report.profile.sleep = clock.lap();
   report.profile.total = clock.total();
 
