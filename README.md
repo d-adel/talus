@@ -197,9 +197,13 @@ const BodyRef ref = *findBody(world.dynamics.bodies, id);
 const MeshFrame pose = meshFrame(world.dynamics.bodies.rigids[ref.index]);
 ```
 
-- The mesh must be closed and wound outward: each edge is shared by two faces
-  in opposite directions. `meshShape` throws `std::invalid_argument` for an
-  open mesh, a face with no area or an invalid setting.
+- The mesh must be closed: each edge is shared by two faces in opposite
+  directions. Either winding direction works. Shells must not overlap.
+  `meshShape` compares the volume enclosed by the triangles with the volume of
+  the baked field and refuses a difference above area × voxel / 2, which
+  overlapping shells, and shells nested with the same winding, produce. It
+  throws `std::invalid_argument` for that, for an open mesh, a face with no
+  area or an invalid setting.
 - `mass` sets the mass. The inertia is that of a uniform solid.
 - `spacing` is the target distance between contact points, 2 cm by default.
   Every face gets points, including both faces of a thin plate. On flat faces

@@ -68,6 +68,24 @@ double surfaceArea(
   return area;
 }
 
+double enclosedVolume(
+  std::span<const glm::vec3> vertices,
+  std::span<const uint32_t> indices
+) {
+  const glm::dvec3 origin(vertices[indices.front()]);
+  double volume = 0.0;
+
+  for (size_t face = 0u; face < indices.size(); face += 3u) {
+    const glm::dvec3 a = glm::dvec3(vertices[indices[face]]) - origin;
+    const glm::dvec3 b = glm::dvec3(vertices[indices[face + 1u]]) - origin;
+    const glm::dvec3 c = glm::dvec3(vertices[indices[face + 2u]]) - origin;
+
+    volume += glm::dot(a, glm::cross(b, c));
+  }
+
+  return std::abs(volume) / 6.0;
+}
+
 uint32_t sideOf(const glm::dvec3& normal) {
   const glm::dvec3 size = glm::abs(normal);
   const uint32_t axis = size.x >= size.y && size.x >= size.z ? 0u
@@ -220,6 +238,13 @@ MeshShape meshShape(
   if (!(body.mass > 0.0) || body.samples.empty()) {
     throw std::invalid_argument(
       "A mesh body needs a mesh that encloses lattice points at its voxel size"
+    );
+  }
+
+  if (!(std::abs(body.mass - enclosedVolume(vertices, indices))
+        <= 0.5 * area * voxel)) {
+    throw std::invalid_argument(
+      "A mesh body's shells must not overlap or nest with the same winding"
     );
   }
 

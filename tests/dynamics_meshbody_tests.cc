@@ -15,6 +15,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -23,6 +24,7 @@
 #include <numbers>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -166,6 +168,39 @@ double faceGap(
   }
 
   return std::numbers::sqrt2 * farthest + step;
+}
+
+Mesh joined(const Mesh& first, const Mesh& second) {
+  Mesh both = first;
+  const uint32_t offset = static_cast<uint32_t>(first.vertices.size());
+
+  both.vertices.insert(
+    both.vertices.end(),
+    second.vertices.begin(),
+    second.vertices.end()
+  );
+
+  for (const uint32_t index : second.indices) {
+    both.indices.push_back(index + offset);
+  }
+
+  return both;
+}
+
+Mesh inward(Mesh mesh) {
+  for (size_t face = 0u; face < mesh.indices.size(); face += 3u) {
+    std::swap(mesh.indices[face + 1u], mesh.indices[face + 2u]);
+  }
+
+  return mesh;
+}
+
+Mesh shifted(Mesh mesh, const glm::vec3& by) {
+  for (glm::vec3& vertex : mesh.vertices) {
+    vertex += by;
+  }
+
+  return mesh;
 }
 
 constexpr glm::vec3 seamSlabHalf(0.3f, 0.025f, 0.15f);
@@ -707,4 +742,107 @@ TEST_CASE(
       CHECK(std::abs(box) < 0.001);
     }
   }
+}
+
+TEST_CASE(
+  "meshShape refuses overlapping or wrongly nested shells",
+  "[dynamics][meshbody]"
+) {
+  const Mesh bar = meshfixture::box(
+    glm::vec3(-0.125f, -0.05f, -0.05f),
+    glm::vec3(0.125f, 0.05f, 0.05f)
+  );
+  const Mesh outer = meshfixture::box(glm::vec3(-0.2f), glm::vec3(0.2f));
+  const Mesh inner = meshfixture::box(glm::vec3(-0.1f), glm::vec3(0.1f));
+  const std::array<Mesh, 2> refused{
+    joined(bar, shifted(bar, glm::vec3(0.15f, 0.0f, 0.0f))),
+    joined(outer, inner)
+  };
+
+  for (const Mesh& mesh : refused) {
+    CHECK_THROWS_AS(
+      (void)meshShape(mesh.vertices, mesh.indices, {}),
+      std::invalid_argument
+    );
+  }
+}
+
+TEST_CASE(
+  "meshShape accepts single and separate shells of either winding",
+  "[dynamics][meshbody]"
+) {
+  const Threads threads;
+  const Mesh bar = meshfixture::box(
+    glm::vec3(-0.125f, -0.05f, -0.05f),
+    glm::vec3(0.125f, 0.05f, 0.05f)
+  );
+  const std::vector<Mesh> accepted{
+    meshfixture::box(-boxHalf, boxHalf),
+    meshfixture::icosphere(0.25f, 4u),
+    meshfixture::icosphere(0.05f, 3u),
+    meshfixture::torus(0.2, 0.07, 96u, 32u),
+    meshfixture::prism(
+      {{0.0f, 0.0f},
+       {0.3f, 0.0f},
+       {0.3f, 0.1f},
+       {0.1f, 0.1f},
+       {0.1f, 0.3f},
+       {0.0f, 0.3f}},
+      3u,
+      0.0f,
+      0.08f
+    ),
+    meshfixture::box(glm::vec3(-0.005f), glm::vec3(0.005f)),
+    joined(bar, shifted(bar, glm::vec3(0.4f, 0.0f, 0.0f))),
+    joined(
+      meshfixture::box(glm::vec3(-0.2f), glm::vec3(0.2f)),
+      inward(meshfixture::box(glm::vec3(-0.1f), glm::vec3(0.1f)))
+    )
+  };
+
+  for (size_t index = 0u; index != accepted.size(); ++index) {
+    CAPTURE(index);
+    CHECK_NOTHROW((void)meshShape(
+      accepted[index].vertices,
+      accepted[index].indices,
+      {},
+      threads.workers
+    ));
+  }
+
+  const Mesh box = meshfixture::box(-boxHalf, boxHalf);
+  const Mesh turned = inward(box);
+  const MeshShape outside = meshShape(box.vertices, box.indices, {});
+  const MeshShape inside = meshShape(turned.vertices, turned.indices, {});
+
+  REQUIRE(outside.field->distances.size() == inside.field->distances.size());
+  REQUIRE(outside.body.samples.size() == inside.body.samples.size());
+
+  double distance = 0.0;
+  double sample = 0.0;
+
+  for (size_t index = 0u; index != outside.field->distances.size(); ++index) {
+    distance = std::max(
+      distance,
+      std::abs(
+        static_cast<double>(outside.field->distances[index])
+        - static_cast<double>(inside.field->distances[index])
+      )
+    );
+  }
+
+  for (size_t index = 0u; index != outside.body.samples.size(); ++index) {
+    sample = std::max(
+      sample,
+      glm::length(outside.body.samples[index] - inside.body.samples[index])
+    );
+  }
+
+  const double moment = glm::length(outside.body.moment - inside.body.moment)
+                        / glm::length(outside.body.moment);
+
+  CAPTURE(distance, sample, moment);
+  CHECK(distance <= 1.0e-6);
+  CHECK(sample <= 1.0e-6);
+  CHECK(moment <= 1.0e-6);
 }
