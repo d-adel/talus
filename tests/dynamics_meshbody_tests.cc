@@ -561,6 +561,106 @@ TEST_CASE(
 }
 
 TEST_CASE(
+  "a box edge crossing mesh rails between their points sinks less than half "
+  "the point spacing",
+  "[dynamics][meshbody]"
+) {
+  const Threads threads;
+  const glm::vec3 railHalf(0.02f, 0.02f, 0.3f);
+  const Mesh rail = meshfixture::box(-railHalf, railHalf);
+  MeshShapeSettings settings;
+
+  settings.mass = 5.0;
+
+  const MeshShape shape =
+    meshShape(rail.vertices, rail.indices, settings, threads.workers);
+  World world;
+
+  (void)addFloor(world);
+
+  const std::array<double, 2> railX{-0.25, 0.25};
+  std::array<uint32_t, 2> rails{};
+
+  for (size_t side = 0u; side != rails.size(); ++side) {
+    rails[side] = addMeshBody(
+      world.bodies,
+      shape,
+      glm::dvec3(railX[side], static_cast<double>(railHalf.y), 0.0),
+      noTurn,
+      glm::dvec3(0.0)
+    );
+  }
+
+  const glm::dvec3 barHalf(0.5, 0.02, 0.02);
+  CompoundChild bar;
+
+  bar.half = barHalf;
+  bar.density = 1.0 / (8.0 * barHalf.x * barHalf.y * barHalf.z);
+
+  std::vector<uint32_t> bars;
+
+  for (uint32_t index = 0u; index != 5u; ++index) {
+    bars.push_back(addCompoundBody(
+      world.bodies,
+      std::vector<CompoundChild>{bar},
+      glm::dvec3(
+        0.0,
+        2.0 * static_cast<double>(railHalf.y) + barHalf.y * std::numbers::sqrt2
+          + 0.002,
+        -0.2 + 0.084 * static_cast<double>(index)
+      ),
+      glm::angleAxis(std::numbers::pi / 4.0, glm::dvec3(1.0, 0.0, 0.0)),
+      glm::dvec3(0.0),
+      0.5,
+      0.0,
+      false
+    ));
+  }
+
+  run(world, 240u);
+
+  for (const uint32_t index : bars) {
+    const RigidBody& body = world.bodies.rigids[index];
+    const glm::dquat turn =
+      body.rotation * body.compound->children.front().rotation;
+    std::array<glm::dvec3, 8> corners{};
+
+    for (uint32_t corner = 0u; corner != corners.size(); ++corner) {
+      const glm::dvec3 sign(
+        (corner & 1u) != 0u ? 1.0 : -1.0,
+        (corner & 2u) != 0u ? 1.0 : -1.0,
+        (corner & 4u) != 0u ? 1.0 : -1.0
+      );
+
+      corners[corner] = body.position + turn * (sign * barHalf);
+    }
+
+    std::ranges::sort(corners, [](const glm::dvec3& a, const glm::dvec3& b) {
+      return a.y < b.y;
+    });
+
+    const glm::dvec3 from = corners[0];
+    const glm::dvec3 along = corners[1] - corners[0];
+    double depth = -std::numeric_limits<double>::infinity();
+
+    for (size_t side = 0u; side != rails.size(); ++side) {
+      const MeshFrame top = meshFrame(bodyOf(world.bodies, rails[side]));
+      const glm::dvec3 up = top.rotation * glm::dvec3(0.0, 1.0, 0.0);
+      const glm::dvec3 surface =
+        top.position + top.rotation * glm::dvec3(0.0, railHalf.y, 0.0);
+      const glm::dvec3 over =
+        from + along * ((top.position.x - from.x) / along.x);
+
+      depth = std::max(depth, glm::dot(surface - over, up));
+    }
+
+    CAPTURE(index, depth, glm::length(body.velocity));
+    CHECK(depth <= 0.5 * settings.spacing + 0.002);
+    CHECK(glm::length(body.velocity) < 0.01);
+  }
+}
+
+TEST_CASE(
   "a thin plate gets contact points on both large faces",
   "[dynamics][meshbody]"
 ) {
