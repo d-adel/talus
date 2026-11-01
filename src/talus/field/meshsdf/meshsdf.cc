@@ -48,6 +48,11 @@ struct Pending {
   uint32_t node = 0u;
 };
 
+struct Nearest {
+  double distance = 0.0;
+  uint32_t triangle = 0u;
+};
+
 struct RayFrame {
   glm::dvec3 inverse{0.0};
   glm::dvec2 shear{0.0};
@@ -315,9 +320,10 @@ double triangleDistanceSquared(
   return away(a + ab * (vb / total) + ac * (vc / total));
 }
 
-double nearestDistance(
+Nearest nearestTriangle(
   const Tree& tree,
   const glm::dvec3& point,
+  uint32_t seed,
   std::vector<Pending>& heap
 ) {
   const auto farther = [](const Pending& a, const Pending& b) {
@@ -325,6 +331,13 @@ double nearestDistance(
   };
 
   double best = std::numeric_limits<double>::infinity();
+  uint32_t nearest = seed;
+
+  const double seeded = triangleDistanceSquared(tree.triangles[seed], point);
+
+  if (seeded < best) {
+    best = seeded;
+  }
 
   heap.clear();
   heap.push_back({boxDistanceSquared(tree.nodes[0], point), 0u});
@@ -347,6 +360,7 @@ double nearestDistance(
 
         if (candidate < best) {
           best = candidate;
+          nearest = i;
         }
       }
 
@@ -363,7 +377,7 @@ double nearestDistance(
     }
   }
 
-  return std::sqrt(best);
+  return {std::sqrt(best), nearest};
 }
 
 RayFrame rayFrame(const glm::dvec3& direction) {
@@ -573,6 +587,7 @@ SampledSdf bakeMesh(
   std::vector<Pending> heap;
   std::vector<uint32_t> stack;
   size_t index = 0u;
+  uint32_t seed = 0u;
 
   for (uint32_t z = 0; z < resolution.z; ++z) {
     for (uint32_t y = 0; y < resolution.y; ++y) {
@@ -581,10 +596,12 @@ SampledSdf bakeMesh(
           field.origin + field.voxelSize * glm::vec3(x, y, z)
         );
 
-        const double nearest = nearestDistance(tree, point, heap);
+        const Nearest nearest = nearestTriangle(tree, point, seed, heap);
+        seed = nearest.triangle;
 
         field.distances[index] = static_cast<float>(
-          enclosed(tree, point, frames, stack) ? -nearest : nearest
+          enclosed(tree, point, frames, stack) ? -nearest.distance
+                                               : nearest.distance
         );
 
         ++index;
