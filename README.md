@@ -240,6 +240,16 @@ const MeshFrame pose = meshFrame(world.dynamics.bodies.rigids[ref.index]);
   is excluded, and 2.2 ms when 11 pairs are excluded. At 2 cm everywhere they
   cost 3.4 to 4.2 ms. Built from box compounds they cost 0.23 to 0.34 ms
   (`[.][meshbodycost]`).
+- When either of two field bodies touches anything, their pair keeps every
+  point within the contact band (2 cm by default) plus both bodies' whole
+  travel in the step, turning included, so fast parts that move together get
+  many contacts. A character of rounded parts turning half round at up to
+  about 25 rad/s stores up to 5,300 contacts, at most 4 of them pushing, when
+  arms and hands collide with legs: its slowest step costs about 7.7 ms on
+  one worker (6.1 ms on eight) and its mean 2.9 ms. With only head against
+  arm and hand collision it stores up to 1,900 and its slowest step costs
+  3.6 ms (`[.][turncost]`). The solver skips contacts that cannot close in a
+  substep; finding and storing each one still costs about 1 µs.
 - Field bodies meet boxes both ways. The body's points push on boxes and
   compound children, and the outer edges and corners of a box push on the
   field.
