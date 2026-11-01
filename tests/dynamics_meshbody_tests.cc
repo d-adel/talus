@@ -110,6 +110,65 @@ bool sameBits(const glm::dquat& a, const glm::dquat& b) {
          && sameBits(a.w, b.w);
 }
 
+std::vector<glm::dvec2> facePoints(
+  const RigidBody& body,
+  uint32_t axis,
+  double level,
+  double tolerance
+) {
+  std::vector<glm::dvec2> points;
+
+  for (const glm::dvec3& sample : body.samples) {
+    const glm::dvec3 point = meshPoint(body, sample);
+
+    if (std::abs(point[axis] - level) <= tolerance) {
+      points.emplace_back(point[(axis + 1u) % 3u], point[(axis + 2u) % 3u]);
+    }
+  }
+
+  return points;
+}
+
+double faceGap(
+  std::vector<glm::dvec2> points,
+  const glm::dvec2& low,
+  const glm::dvec2& high,
+  double step
+) {
+  const auto alongU = [](const glm::dvec2& a, const glm::dvec2& b) {
+    return a.x < b.x;
+  };
+  const glm::uvec2 counts(glm::ceil((high - low) / step) + glm::dvec2(1.0));
+  double farthest = 0.0;
+
+  std::sort(points.begin(), points.end(), alongU);
+
+  for (uint32_t i = 0u; i != counts.x; ++i) {
+    for (uint32_t j = 0u; j != counts.y; ++j) {
+      const glm::dvec2 at = glm::min(low + step * glm::dvec2(i, j), high);
+      const auto split =
+        std::lower_bound(points.begin(), points.end(), at, alongU);
+      double nearest = std::numeric_limits<double>::infinity();
+
+      for (auto point = split;
+           point != points.end() && point->x - at.x < nearest;
+           ++point) {
+        nearest = std::min(nearest, glm::length(*point - at));
+      }
+
+      for (auto point = split;
+           point != points.begin() && at.x - (point - 1)->x < nearest;) {
+        --point;
+        nearest = std::min(nearest, glm::length(*point - at));
+      }
+
+      farthest = std::max(farthest, nearest);
+    }
+  }
+
+  return std::numbers::sqrt2 * farthest + step;
+}
+
 }
 
 TEST_CASE(
@@ -356,6 +415,58 @@ TEST_CASE(
     CHECK(sideZ > 0.6);
     CHECK(glm::length(body.velocity) < 0.01);
   }
+}
+
+TEST_CASE(
+  "a thin plate gets contact points on both large faces",
+  "[dynamics][meshbody]"
+) {
+  const glm::vec3 half(0.3f, 0.006f, 0.3f);
+  const Mesh plate = meshfixture::box(-half, half);
+  const Threads threads;
+  const MeshShapeSettings settings;
+  const MeshShape shape =
+    meshShape(plate.vertices, plate.indices, settings, threads.workers);
+  const double voxel = largest(shape.field->voxelSize);
+  const glm::dvec2 inner(static_cast<double>(half.z) - voxel);
+
+  for (const double side : {-1.0, 1.0}) {
+    const std::vector<glm::dvec2> points = facePoints(
+      shape.body,
+      1u,
+      side * static_cast<double>(half.y),
+      0.25 * static_cast<double>(half.y)
+    );
+    const double gap = faceGap(points, -inner, inner, 0.002);
+
+    CAPTURE(side, points.size(), gap);
+    CHECK(!points.empty());
+    CHECK(gap <= 1.3 * settings.spacing);
+  }
+}
+
+TEST_CASE("a long beam keeps its contact spacing", "[dynamics][meshbody]") {
+  const glm::vec3 half(2.0f, 0.12f, 0.12f);
+  const Mesh beam = meshfixture::box(-half, half);
+  const Threads threads;
+  const MeshShapeSettings settings;
+  const MeshShape shape =
+    meshShape(beam.vertices, beam.indices, settings, threads.workers);
+  const double voxel = largest(shape.field->voxelSize);
+  const std::vector<glm::dvec2> points = facePoints(
+    shape.body,
+    1u,
+    static_cast<double>(half.y),
+    0.25 * static_cast<double>(half.y)
+  );
+  const glm::dvec2 inner(
+    static_cast<double>(half.z) - voxel,
+    static_cast<double>(half.x) - voxel
+  );
+  const double gap = faceGap(points, -inner, inner, 0.002);
+
+  CAPTURE(points.size(), gap);
+  CHECK(gap <= 1.3 * settings.spacing);
 }
 
 TEST_CASE("meshShape refuses bad settings", "[dynamics][meshbody]") {

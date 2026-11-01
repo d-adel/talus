@@ -202,6 +202,10 @@ const MeshFrame pose = meshFrame(world.dynamics.bodies.rigids[ref.index]);
   open mesh, a face with no area or an invalid setting.
 - `mass` sets the mass. The inertia is that of a uniform solid.
 - `spacing` is the target distance between contact points, 2 cm by default.
+  Every face gets points, including both faces of a thin plate. The largest
+  gap measured on flat faces at any angle is about 1.2 × `spacing`. A body has
+  about `area / spacing²` points, up to 1.3 times that on curved or tilted
+  faces. A small mesh uses a finer spacing and gets at least about 24.
   `voxel` is the field's lattice spacing. With 0, it is the mesh's thinnest
   extent / 12, at most 1 cm and at least 4 mm.
 - `addMeshBody` puts the mesh's own frame at the given pose and returns the
@@ -213,8 +217,13 @@ const MeshFrame pose = meshFrame(world.dynamics.bodies.rigids[ref.index]);
   uses it. Many bodies can share one shape.
 - Pass `Workers` from `resolveWorkers` to bake on several threads. The result
   is identical to a serial bake. Bake at load, not during play.
-- Cost grows with contact points: about `area / spacing²` per body. Each
-  touching point is its own contact.
+- Each touching point is its own contact. While two touching bodies slide or
+  push each other, contact bookkeeping for that pair grows with the square of
+  its contacts. A 1 m flat mesh body sliding on one box at 2 cm spacing has
+  about 2,900 contacts and costs 7.5 ms per step, 5.4 ms of it bookkeeping
+  (Ryzen 7 7840HS laptop, MSVC Release). At 30 to 90 contacts the bookkeeping
+  is a few microseconds, and at rest it is zero. Use a coarser `spacing` for
+  large flat bodies.
 - Field bodies meet boxes both ways. The body's points push on boxes and
   compound children, and the outer edges and corners of a box push on the
   field.
@@ -367,9 +376,8 @@ During a jump, set the pogo's `maxTension` to 0; restore it on landing.
   each step and visits every lattice island. Sleeping rigid bodies are not free
   there.
 - A sharp box edge that crosses a field body away from the box's corners and
-  edge midpoints can sink up to about half the point spacing into the field
-  face. Gaps between contact points reach about 2.5 cm at the default 2 cm
-  spacing, so the edge can sink about 13 mm.
+  edge midpoints sinks about half the point spacing into the field face: 10 mm
+  measured at the default 2 cm spacing.
 - Field bodies have no continuous collision against other moving bodies. A
   fast, thin part can pass through another moving body in one step.
 - Flush seams between separate box bodies bump a sliding field body by about
