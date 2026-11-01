@@ -108,6 +108,8 @@ float stepBound(
 glm::uvec3 brickCounts(const SampledSdf& field);
 bool brickHoldsSurface(const SampledSdf& field, uint32_t brick);
 
+void finishBricks(SampledSdf& field);
+
 WriteReport write(
   SampledSdf& field,
   const SampleBox& box,

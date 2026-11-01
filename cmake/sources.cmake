@@ -60,6 +60,7 @@ set(TALUS_SOURCES
     src/talus/field/analytic/analytic.cc
     src/talus/field/crossings/crossings.cc
     src/talus/field/deform/deform.cc
+    src/talus/field/meshsdf/meshsdf.cc
     src/talus/field/primitive.cc
     src/talus/field/raycast/raycast.cc
     src/talus/field/redistance/redistance.cc

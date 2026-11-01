@@ -369,21 +369,7 @@ SampledSdf bake(
     }
   }
 
-  const glm::uvec3 bricks = brickCounts(field);
-
-  field.brickLipschitz.resize(
-    static_cast<size_t>(bricks.x) * bricks.y * bricks.z
-  );
-
-  field.brickMinimum.resize(
-    static_cast<size_t>(bricks.x) * bricks.y * bricks.z
-  );
-
-  field.brickMaximum.resize(
-    static_cast<size_t>(bricks.x) * bricks.y * bricks.z
-  );
-
-  rebuildBricks(field, glm::uvec3(0u), cellCounts(field) - glm::uvec3(1u));
+  finishBricks(field);
 
   return field;
 }
@@ -553,6 +539,17 @@ glm::uvec3 brickCounts(const SampledSdf& field) {
 
 bool brickHoldsSurface(const SampledSdf& field, uint32_t brick) {
   return field.brickMinimum[brick] <= 0.0f && field.brickMaximum[brick] >= 0.0f;
+}
+
+void finishBricks(SampledSdf& field) {
+  const glm::uvec3 bricks = brickCounts(field);
+  const size_t count = static_cast<size_t>(bricks.x) * bricks.y * bricks.z;
+
+  field.brickLipschitz.resize(count);
+  field.brickMinimum.resize(count);
+  field.brickMaximum.resize(count);
+
+  rebuildBricks(field, glm::uvec3(0u), cellCounts(field) - glm::uvec3(1u));
 }
 
 BrickRange brickRange(const SampledSdf& field, const SampleBox& box) {
