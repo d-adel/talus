@@ -1309,14 +1309,18 @@ void prepareJointRows(
   std::span<const State> states,
   std::span<const uint32_t> stateOf,
   Real h,
-  std::vector<JointRow<Real>>& rows
+  std::vector<JointRow<Real>>& rows,
+  const std::span<const uint32_t>* picked = nullptr
 ) {
   const std::span<const Joint> all = joints.all();
   const Real hertzCap = Real(0.25) / h;
+  const uint32_t count =
+    static_cast<uint32_t>(picked != nullptr ? picked->size() : all.size());
 
   rows.clear();
 
-  for (uint32_t index = 0u; index != all.size(); ++index) {
+  for (uint32_t entry = 0u; entry != count; ++entry) {
+    const uint32_t index = picked != nullptr ? (*picked)[entry] : entry;
     const Joint& joint = all[index];
     const JointFrame frameA = joint.def.kind == JointKind::Spring
                                 ? jointSpringFrame(joint.def)

@@ -5,10 +5,12 @@
 
 #include <talus/dynamics/bodyset/bodyset.h>
 #include <talus/dynamics/compound/compound.h>
+#include <talus/dynamics/edits/edits.h>
 #include <talus/dynamics/joints/jointedits.h>
 #include <talus/dynamics/meshbody/meshbody.h>
 #include <talus/dynamics/pipeline/pipeline.h>
 #include <talus/dynamics/scheduler/scheduler.h>
+#include <talus/dynamics/softstep/simdwidth.h>
 #include <talus/dynamics/tiers/tiers.h>
 #include <talus/field/sampledsdf/sampledsdf.h>
 
@@ -527,6 +529,139 @@ StoredCensus storedCensus(const World& world) {
 
   return census;
 }
+
+struct GroupRun {
+  uint64_t state = 0u;
+  uint32_t fewestGroups = 0xFFFFFFFFu;
+  double armPushed = 0.0;
+};
+
+GroupRun runSeparateCharacters(uint32_t workers, uint32_t width) {
+  constexpr double swayMetres = 0.03;
+  constexpr double swayHertz = 0.5;
+  constexpr double barReach = 0.03;
+  constexpr double barHertz = 0.5;
+  constexpr double crateHalf = 0.08;
+  const PartSpacing coarse{0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04};
+  const std::vector<std::array<uint32_t, 2>> filters(
+    characterFilters.begin(),
+    characterFilters.end()
+  );
+  const std::array<PlacedPart, 12> layout = characterLayout();
+  World world;
+  std::vector<Character> characters;
+
+  world.workerCount = workers;
+  world.simdWidth = width;
+  (void)addBoxFloor(world, glm::dvec3(25.0, 0.5, 25.0));
+
+  for (uint32_t index = 0u; index != 4u; ++index) {
+    characters.push_back(addCharacter(
+      world,
+      glm::dvec3(-3.0, 0.0, -4.5 + 3.0 * static_cast<double>(index)),
+      index % 2u == 0u ? nullptr : &coarse,
+      filters
+    ));
+  }
+
+  for (const double x : {3.0, 3.845}) {
+    characters.push_back(
+      addCharacter(world, glm::dvec3(x, 0.0, 0.0), nullptr, filters)
+    );
+  }
+
+  (void)addBoxBody(
+    world,
+    glm::dvec3(crateHalf),
+    1.0,
+    glm::dvec3(
+      -3.0,
+      layout[1].centre.y + partShapes[head].half.y + crateHalf + 0.002,
+      -4.5
+    )
+  );
+
+  for (uint32_t index = 0u; index != 3u; ++index) {
+    (void)addBoxBody(
+      world,
+      glm::dvec3(0.1),
+      2.0,
+      glm::dvec3(0.0, 0.1 + 0.2 * static_cast<double>(index), 3.0)
+    );
+  }
+
+  CompoundChild bouncy;
+
+  bouncy.half = glm::dvec3(crateHalf);
+  bouncy.density = 1.0 / (8.0 * crateHalf * crateHalf * crateHalf);
+  (void)addCompoundBody(
+    world.bodies,
+    std::vector<CompoundChild>{bouncy},
+    glm::dvec3(
+      -3.0,
+      layout[1].centre.y + partShapes[head].half.y + crateHalf + 0.3,
+      4.5
+    ),
+    noTurn,
+    glm::dvec3(0.0),
+    0.5,
+    0.6,
+    false
+  );
+
+  const glm::dvec3 barHalf(0.03, 0.03, 1.8);
+  const glm::dvec3 barRest(
+    -3.0 + layout[10].centre.x + partShapes[arm].half.x + barHalf.x + 0.005,
+    layout[10].centre.y,
+    0.0
+  );
+  const uint32_t bar = addAnchoredBox(world, barHalf, barRest);
+  const double armStart = bodyOf(world, characters[2].parts[10]).position.x;
+  GroupRun run;
+
+  for (uint32_t frame = 0u; frame != 120u; ++frame) {
+    const double time = static_cast<double>(frame + 1u) / 60.0;
+    const double swing = 2.0 * std::numbers::pi * barHertz;
+    const glm::dvec3 sway(
+      swayMetres * std::sin(2.0 * std::numbers::pi * swayHertz * time),
+      0.0,
+      0.0
+    );
+
+    for (const Character& character : characters) {
+      REQUIRE(setSpringTarget(
+        world,
+        character.holder,
+        {character.rest + sway, character.turn}
+      ));
+    }
+
+    REQUIRE(setRigidPose(
+      world,
+      bar,
+      barRest - glm::dvec3(barReach * std::sin(swing * time), 0.0, 0.0),
+      noTurn
+    ));
+    REQUIRE(setVelocity(
+      world,
+      bar,
+      glm::dvec3(-barReach * swing * std::cos(swing * time), 0.0, 0.0)
+    ));
+
+    const StepReport report = step(world);
+
+    REQUIRE_FALSE(report.nonFinite);
+    run.fewestGroups = std::min(run.fewestGroups, report.jointGroups);
+    run.armPushed = std::max(
+      run.armPushed,
+      armStart - bodyOf(world, characters[2].parts[10]).position.x
+    );
+  }
+
+  run.state = stateHash(world);
+
+  return run;
+}
 }
 
 TEST_CASE("fill cost of a mesh slab sliding on a box", "[.][fillcost]") {
@@ -956,6 +1091,168 @@ TEST_CASE("step cost of a mesh character turning on a kerb", "[.][turncost]") {
         workers,
         2.0 * std::atan2(torso.rotation.y, torso.rotation.w),
         torso.position.y,
+        static_cast<unsigned long long>(stateHash(world))
+      );
+    }
+  }
+}
+
+TEST_CASE(
+  "separate jointed characters solve the same on any worker count and width",
+  "[dynamics][joints]"
+) {
+  const GroupRun serial = runSeparateCharacters(1u, 1u);
+
+  CHECK(serial.fewestGroups == 1u);
+  CHECK(serial.armPushed > 0.01);
+
+  for (const uint32_t width : {1u, 4u, 8u}) {
+    const GroupRun threaded = runSeparateCharacters(
+      8u,
+      width == 8u && !talus::dynamics::hasAvx2() ? 4u : width
+    );
+
+    CAPTURE(width);
+    CHECK(threaded.fewestGroups >= 5u);
+    CHECK(serial.state == threaded.state);
+  }
+
+  CHECK(serial.state == runSeparateCharacters(1u, 8u).state);
+}
+
+TEST_CASE("separate jointed characters state hash", "[.][grouphash]") {
+  for (const uint32_t workers : {1u, 8u}) {
+    const GroupRun run = runSeparateCharacters(workers, 0u);
+
+    std::printf(
+      "grouphash workers %u groups %u arm_mm %.2f state %016llx\n",
+      workers,
+      run.fewestGroups,
+      1000.0 * run.armPushed,
+      static_cast<unsigned long long>(run.state)
+    );
+  }
+}
+
+TEST_CASE("step cost of many separate jointed groups", "[.][groupcost]") {
+  constexpr uint32_t warmupSteps = 30u;
+  constexpr uint32_t measuredSteps = 90u;
+
+  struct Run {
+    const char* name = "";
+    uint32_t count = 0u;
+    bool mesh = false;
+    bool pendulum = false;
+    bool row = false;
+  };
+
+  const PartSpacing coarse{0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04};
+  const std::vector<std::array<uint32_t, 2>> filters(
+    characterFilters.begin(),
+    characterFilters.end()
+  );
+  const std::array<Run, 5> runs{
+    Run{"boxcharacter", 8u, false, false, false},
+    Run{"boxcharacter", 64u, false, false, false},
+    Run{"meshcharacter", 8u, true, false, false},
+    Run{"pendulum", 512u, false, true, false},
+    Run{"meshrow", 8u, true, false, true}
+  };
+
+  for (const Run& run : runs) {
+    for (const uint32_t workers : {1u, 8u}) {
+      World world;
+      std::vector<Character> characters;
+      const uint32_t side = static_cast<uint32_t>(
+        std::ceil(std::sqrt(static_cast<double>(run.count)))
+      );
+
+      world.workerCount = workers;
+      (void)addBoxFloor(world, glm::dvec3(60.0, 0.5, 60.0));
+
+      for (uint32_t index = 0u; index != run.count; ++index) {
+        const double pitch = run.pendulum ? 1.5 : 3.0;
+        const glm::dvec3 at =
+          run.row ? glm::dvec3(
+                      index == 0u ? -6.0 : 0.845 * static_cast<double>(index),
+                      0.0,
+                      0.0
+                    )
+                  : glm::dvec3(
+                      pitch * (static_cast<double>(index % side) - 0.5 * side),
+                      0.0,
+                      pitch * (static_cast<double>(index / side) - 0.5 * side)
+                    );
+
+        if (!run.pendulum) {
+          characters.push_back(
+            addCharacter(world, at, run.mesh ? &coarse : nullptr, filters)
+          );
+          continue;
+        }
+
+        uint32_t parent = noBody;
+        glm::dvec3 pivot = at + glm::dvec3(0.0, 2.0, 0.0);
+
+        for (uint32_t link = 0u; link != 2u; ++link) {
+          const glm::dvec3 centre = pivot + glm::dvec3(0.3, 0.0, 0.0);
+          const uint32_t id =
+            addBoxBody(world, glm::dvec3(0.25, 0.05, 0.05), 2.0, centre);
+          JointDef def;
+
+          def.kind = JointKind::Ball;
+          def.bodyA = parent;
+          def.bodyB = id;
+          def.frameA.position =
+            parent == noBody ? pivot : pivot - bodyOf(world, parent).position;
+          def.frameB.position = pivot - centre;
+          REQUIRE(addJoint(world, def) != 0u);
+          parent = id;
+          pivot = centre + glm::dvec3(0.3, 0.0, 0.0);
+        }
+      }
+
+      Timings timings;
+      uint32_t groups = 0u;
+
+      for (uint32_t frame = 0u; frame != warmupSteps + measuredSteps; ++frame) {
+        const double time = static_cast<double>(frame + 1u) / 60.0;
+        const glm::dvec3 sway(
+          0.03 * std::sin(std::numbers::pi * time),
+          0.0,
+          0.0
+        );
+
+        for (const Character& character : characters) {
+          REQUIRE(setSpringTarget(
+            world,
+            character.holder,
+            {character.rest + sway, character.turn}
+          ));
+        }
+
+        const StepReport report = step(world);
+
+        REQUIRE_FALSE(report.nonFinite);
+        groups = report.jointGroups;
+
+        if (frame >= warmupSteps) {
+          timings.add(report);
+        }
+      }
+
+      const Costs result = timings.mean();
+
+      std::printf(
+        "groupcost %s count %u workers %u groups %u contacts %.0f step_ms %.3f "
+        "solver_ms %.4f state %016llx\n",
+        run.name,
+        run.count,
+        workers,
+        groups,
+        result.contacts,
+        result.step,
+        result.solver,
         static_cast<unsigned long long>(stateHash(world))
       );
     }

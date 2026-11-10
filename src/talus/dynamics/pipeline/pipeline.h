@@ -67,6 +67,7 @@ struct StepReport {
   uint32_t widePairs = 0u;
   uint32_t jointRows = 0u;
   uint32_t limitPassRows = 0u;
+  uint32_t jointGroups = 0u;
   uint32_t promotions = 0u;
   uint32_t demotions = 0u;
   uint32_t thawed = 0u;
@@ -89,6 +90,11 @@ struct StepBuffers {
   std::optional<std::vector<uint32_t>> anchors;
 };
 
+struct SolveLane {
+  std::shared_ptr<SoftstepArena> arena;
+  std::vector<uint32_t> stateOf;
+};
+
 struct World {
   BodySet bodies;
   std::vector<Contact> contacts;
@@ -104,6 +110,7 @@ struct World {
   std::shared_ptr<Scheduler> scheduler;
   uint32_t simdWidth = 0u;
   std::shared_ptr<SoftstepArena> softstepArena;
+  std::vector<SolveLane> solveLanes;
   std::shared_ptr<StrainstepArena> strainstepArena;
   std::vector<Island> islands;
   std::vector<uint32_t> movers;

@@ -7,6 +7,7 @@
 #include <talus/dynamics/manifoldcache/manifoldcache.h>
 #include <talus/dynamics/scheduler/scheduler.h>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -30,6 +31,12 @@ struct SoftstepResult {
   uint32_t limitPassRows = 0u;
 };
 
+struct SoftstepScope {
+  std::array<std::span<const uint32_t>, colourCount> wide;
+  std::array<std::span<const uint32_t>, colourCount> other;
+  std::span<const uint32_t> joints;
+};
+
 [[nodiscard]] std::shared_ptr<SoftstepArena> makeSoftstepArena();
 
 SoftstepResult solveSoftstep(
@@ -48,6 +55,7 @@ SoftstepResult solveSoftstep(
   const IslandStore* islandStore = nullptr,
   std::span<const uint32_t> guests = {},
   bool partial = false,
-  bool jointed = false
+  bool jointed = false,
+  const SoftstepScope* scope = nullptr
 );
 }

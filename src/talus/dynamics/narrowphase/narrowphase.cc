@@ -2055,7 +2055,7 @@ PairEvents updateCachedPairs(
 
   const uint32_t walked = active != nullptr ? static_cast<uint32_t>(active->size()) : cache.size();
 
-  parallelFor(workers, walked, 16u, [&](uint32_t begin, uint32_t end, uint32_t worker) {
+  parallelFor(workers, walked, 1u, [&](uint32_t begin, uint32_t end, uint32_t worker) {
     PairClock clock{work != nullptr ? &tallies[worker] : nullptr};
 
     for (uint32_t entry = begin; entry != end; ++entry) {
