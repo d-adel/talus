@@ -249,7 +249,7 @@ const MeshFrame pose = meshFrame(world.dynamics.bodies.rigids[ref.index]);
   about 25 rad/s, with arms and hands colliding with legs, stores up to 5,300
   contacts and almost none of them push (0.1 per step on average). On the
   same Ryzen 7 7840HS laptop (MSVC Release) its slowest step costs about
-  7.8 ms on one worker and 6.2 ms on eight, and its mean 2.9 ms. With only
+  7.8 ms on one worker and 4.8 ms on eight, and its mean 2.9 ms. With only
   head against arm and hand collision it stores up to 1,900 and its slowest
   step costs 3.8 ms (`[.][turncost]`). The solver skips contacts that cannot
   push in a substep; finding and storing each one still costs about 1 µs.
