@@ -771,7 +771,8 @@ SoftstepResult solveSoftstep(
   const IslandStore* islandStore,
   std::span<const uint32_t> guests,
   bool partial,
-  bool jointed
+  bool jointed,
+  const SoftstepScope* scope
 ) {
   const uint32_t substeps = std::max(parameters.softstepSubsteps, 1u);
   const double step = parameters.dt / static_cast<double>(substeps);
@@ -857,6 +858,12 @@ SoftstepResult solveSoftstep(
     return (owned(pair.first) || owned(pair.second)) && held(pair.first)
            && held(pair.second);
   };
+  const auto wideOf = [&](uint32_t colour) {
+    return scope != nullptr ? scope->wide[colour] : cache.widePairs(colour);
+  };
+  const auto othersOf = [&](uint32_t colour) {
+    return scope != nullptr ? scope->other[colour] : cache.otherPairs(colour);
+  };
   const uint32_t batchWidth = width == 4u || width == 8u ? width : 0u;
   std::vector<uint32_t>& ordered = scratch.ordered;
   std::array<uint32_t, colourCount + 1u> colourStart{};
@@ -870,14 +877,14 @@ SoftstepResult solveSoftstep(
     colourStart[order] = static_cast<uint32_t>(ordered.size());
 
     if (batchWidth == 0u) {
-      for (const uint32_t slot : cache.widePairs(colour)) {
+      for (const uint32_t slot : wideOf(colour)) {
         if (active(slot)) {
           ordered.push_back(slot);
         }
       }
     }
 
-    for (const uint32_t slot : cache.otherPairs(colour)) {
+    for (const uint32_t slot : othersOf(colour)) {
       if (active(slot)) {
         ordered.push_back(slot);
       }
@@ -895,7 +902,7 @@ SoftstepResult solveSoftstep(
     for (uint32_t colour = 0u; colour != colourCount; ++colour) {
       wideBegin[colour] = static_cast<uint32_t>(wideSlots.size());
 
-      for (const uint32_t slot : cache.widePairs(colour)) {
+      for (const uint32_t slot : wideOf(colour)) {
         if (active(slot)) {
           wideSlots.push_back(slot);
         }
@@ -907,7 +914,7 @@ SoftstepResult solveSoftstep(
 
   const auto wideList = [&](uint32_t colour) {
     if (!partial) {
-      return cache.widePairs(colour);
+      return wideOf(colour);
     }
 
     return std::span<const uint32_t>(wideSlots).subspan(
@@ -1644,11 +1651,20 @@ SoftstepResult solveSoftstep(
     const uint32_t first = static_cast<uint32_t>(stages.size());
 
     for (uint32_t order = 1u; order != colourCount; ++order) {
-      (void)add(kind, itemStart[order], itemStart[order + 1u], 4u);
+      if (itemStart[order] != itemStart[order + 1u]) {
+        (void)add(kind, itemStart[order], itemStart[order + 1u], 4u);
+      }
     }
 
     return first;
   };
+  const bool serial = workers.count <= 1u;
+  uint32_t usedColours = 0u;
+
+  for (uint32_t order = 1u; order != colourCount; ++order) {
+    usedColours += itemStart[order] != itemStart[order + 1u] ? 1u : 0u;
+  }
+
   const uint32_t stateCount = static_cast<uint32_t>(states.size());
   const uint32_t gatherStage = add(Kind::Gather, 1u, stateCount, 32u);
   const uint32_t laneStage = add(Kind::Lanes, 0u, wideTotal, 64u);
@@ -1657,6 +1673,11 @@ SoftstepResult solveSoftstep(
   std::vector<std::array<uint32_t, 5>> substepStages(substeps);
 
   for (uint32_t substep = 0u; substep != substeps; ++substep) {
+    if (serial && substep != 0u) {
+      substepStages[substep] = substepStages[0];
+      continue;
+    }
+
     substepStages[substep][0] = add(Kind::Integrate, 1u, stateCount, 32u);
     substepStages[substep][1] = colours(Kind::WarmStart);
     substepStages[substep][2] = colours(Kind::Push);
@@ -1666,8 +1687,9 @@ SoftstepResult solveSoftstep(
 
   std::vector<uint32_t> restitutionStages(parameters.restitutionIterations);
 
-  for (uint32_t& first : restitutionStages) {
-    first = colours(Kind::Restitute);
+  for (size_t index = 0u; index != restitutionStages.size(); ++index) {
+    restitutionStages[index] =
+      serial && index != 0u ? restitutionStages[0] : colours(Kind::Restitute);
   }
 
   const uint32_t unpackStage = add(Kind::Unpack, 0u, batchCount, 4u);
@@ -1735,8 +1757,8 @@ SoftstepResult solveSoftstep(
   }, Claiming::Ranges);
   const uint32_t overflowEnd = constraintStart[1];
   const auto runColours = [&](uint32_t first) {
-    for (uint32_t order = 1u; order != colourCount; ++order) {
-      runner.execute(first + order - 1u);
+    for (uint32_t index = 0u; index != usedColours; ++index) {
+      runner.execute(first + index);
     }
   };
 
@@ -1776,7 +1798,8 @@ SoftstepResult solveSoftstep(
         states,
         stateOf,
         h,
-        jointRows
+        jointRows,
+        scope != nullptr ? &scope->joints : nullptr
       );
       jointTime += jointClock.lap();
     }

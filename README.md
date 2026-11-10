@@ -313,6 +313,14 @@ const uint32_t joint = addJoint(world.dynamics, elbow);
   Other islands use `softstepSubsteps` (4). A jointed body that rests on a pile
   makes the whole pile step at 16 while they touch. The count is per frame, so
   a 30 Hz host needs 32 for the same joint behaviour.
+- With more than one worker, jointed islands that are apart are solved as
+  separate tasks, so separate characters use separate threads. Bodies that
+  touch or are joined share a task, and when one island holds more than half
+  of the jointed bodies all of them are solved together. The split does not
+  change results. On a Ryzen 7 7840HS laptop (MSVC Release, eight workers)
+  eight separate characters of twelve mesh parts step in about 1.0 ms and 512
+  separate two-link pendulums in about 0.8 ms; solved together they took
+  2.0 ms and 3.6 ms (`[.][groupcost]`).
 - `removeBody` and `removeBodies` delete the body's joints and wake the other
   ends. A joint end cannot `promote` to a lattice until the joint is removed.
 - When destruction splits a body, each joint end moves to the piece that holds

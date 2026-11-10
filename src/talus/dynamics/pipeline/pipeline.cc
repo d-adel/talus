@@ -14,6 +14,7 @@
 #include <talus/dynamics/strainstep/strainstep.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <cmath>
@@ -377,6 +378,326 @@ void addTouching(SoftstepTouching& total, const SoftstepTouching& part) {
     std::unique(total.hits.begin(), total.hits.end()),
     total.hits.end()
   );
+}
+
+constexpr uint32_t guestGroup = 0xFFFFFFFFu;
+constexpr uint32_t groupLists = 2u * colourCount;
+
+struct SolveGroups {
+  std::vector<uint32_t> bodyStart;
+  std::vector<uint32_t> bodies;
+  std::vector<uint32_t> slotStart;
+  std::vector<uint32_t> slots;
+  std::vector<uint32_t> jointStart;
+  std::vector<uint32_t> joints;
+  std::vector<uint32_t> guestStart;
+  std::vector<uint32_t> guests;
+
+  [[nodiscard]] uint32_t count() const {
+    return static_cast<uint32_t>(bodyStart.size()) - 1u;
+  }
+};
+
+std::span<const uint32_t> listOf(
+  std::span<const uint32_t> start,
+  std::span<const uint32_t> values,
+  uint32_t key
+) {
+  return values.subspan(start[key], start[key + 1u] - start[key]);
+}
+
+void bucket(
+  std::span<const std::array<uint32_t, 2>> keyed,
+  uint32_t keys,
+  std::vector<uint32_t>& start,
+  std::vector<uint32_t>& values
+) {
+  start.assign(keys + 1u, 0u);
+
+  for (const std::array<uint32_t, 2>& entry : keyed) {
+    start[entry[0] + 1u] += 1u;
+  }
+
+  for (uint32_t key = 0u; key != keys; ++key) {
+    start[key + 1u] += start[key];
+  }
+
+  std::vector<uint32_t> next(start.begin(), start.end() - 1);
+
+  values.resize(keyed.size());
+
+  for (const std::array<uint32_t, 2>& entry : keyed) {
+    values[next[entry[0]]++] = entry[1];
+  }
+}
+
+bool splitJointed(
+  const World& world,
+  std::span<const Island* const> islands,
+  std::span<const uint8_t> jointed,
+  std::span<const uint32_t> guests,
+  uint32_t heavy,
+  uint32_t most,
+  SolveGroups& groups
+) {
+  const BodySet& bodies = world.bodies;
+  const ManifoldCache& cache = world.manifolds;
+  const uint32_t share = (heavy + most - 1u) / most;
+  std::vector<uint32_t> groupOf(bodies.rigids.size(), 0u);
+  uint32_t open = 0u;
+
+  for (const Island* island : islands) {
+    for (const BodyRef& ref : island->bodies) {
+      if (ref.side == Side::Rigid && jointed[ref.index] != 0u
+          && bodies.rigids[ref.index].mass > 0.0) {
+        groups.bodies.push_back(ref.index);
+        groupOf[ref.index] =
+          static_cast<uint32_t>(groups.bodyStart.size()) + 1u;
+      }
+    }
+
+    if (groups.bodies.size() - open >= share) {
+      groups.bodyStart.push_back(open);
+      open = static_cast<uint32_t>(groups.bodies.size());
+    }
+  }
+
+  if (groups.bodies.size() != open) {
+    groups.bodyStart.push_back(open);
+  }
+
+  groups.bodyStart.push_back(static_cast<uint32_t>(groups.bodies.size()));
+
+  uint32_t largest = 0u;
+
+  for (uint32_t group = 0u; group != groups.count(); ++group) {
+    largest =
+      std::max(largest, groups.bodyStart[group + 1u] - groups.bodyStart[group]);
+  }
+
+  if (groups.count() < 2u || 2u * largest > heavy) {
+    return false;
+  }
+
+  for (const uint32_t index : guests) {
+    groupOf[index] = guestGroup;
+  }
+
+  const auto heavyGroup = [](uint32_t group) {
+    return group != 0u && group != guestGroup;
+  };
+  const auto groupAt = [&](const BodyRef& ref) {
+    return ref.side == Side::Rigid ? groupOf[ref.index] : 0u;
+  };
+  std::vector<std::array<uint32_t, 2>> slotKeys;
+  std::vector<std::array<uint32_t, 2>> jointKeys;
+  std::vector<std::array<uint32_t, 2>> guestKeys;
+  bool crossed = false;
+
+  for (uint32_t colour = 0u; colour != colourCount; ++colour) {
+    uint32_t list = 2u * colour;
+
+    for (const std::span<const uint32_t> slots :
+         {cache.widePairs(colour), cache.otherPairs(colour)}) {
+      for (const uint32_t slot : slots) {
+        const CachedBodyPair& pair = cache.at(slot);
+        const uint32_t first = groupAt(pair.first);
+        const uint32_t second = groupAt(pair.second);
+        const uint32_t group = heavyGroup(first)    ? first
+                               : heavyGroup(second) ? second
+                                                    : 0u;
+
+        if (group == 0u) {
+          continue;
+        }
+
+        crossed =
+          crossed
+          || (heavyGroup(first) && heavyGroup(second) && first != second);
+        slotKeys.push_back({(group - 1u) * groupLists + list, slot});
+
+        if (first == guestGroup) {
+          guestKeys.push_back({group - 1u, pair.first.index});
+        }
+
+        if (second == guestGroup) {
+          guestKeys.push_back({group - 1u, pair.second.index});
+        }
+      }
+
+      list += 1u;
+    }
+  }
+
+  const std::span<const Joint> all = world.joints.all();
+
+  for (uint32_t index = 0u; index != all.size(); ++index) {
+    uint32_t group = 0u;
+    uint32_t guest = noBody;
+
+    for (const uint32_t id : {all[index].def.bodyA, all[index].def.bodyB}) {
+      if (id == noBody) {
+        continue;
+      }
+
+      const BodyRef ref = world.islandStore.refOf(id);
+
+      if (ref.side != Side::Rigid || ref.index >= bodies.rigids.size()
+          || bodies.rigids[ref.index].id != id) {
+        continue;
+      }
+
+      const uint32_t found = groupOf[ref.index];
+
+      if (heavyGroup(found)) {
+        crossed = crossed || (group != 0u && group != found);
+        group = found;
+      } else if (found == guestGroup) {
+        guest = ref.index;
+      }
+    }
+
+    if (group == 0u) {
+      continue;
+    }
+
+    jointKeys.push_back({group - 1u, index});
+
+    if (guest != noBody) {
+      guestKeys.push_back({group - 1u, guest});
+    }
+  }
+
+  if (crossed) {
+    return false;
+  }
+
+  std::sort(guestKeys.begin(), guestKeys.end());
+  guestKeys.erase(
+    std::unique(guestKeys.begin(), guestKeys.end()),
+    guestKeys.end()
+  );
+  bucket(slotKeys, groups.count() * groupLists, groups.slotStart, groups.slots);
+  bucket(jointKeys, groups.count(), groups.jointStart, groups.joints);
+  bucket(guestKeys, groups.count(), groups.guestStart, groups.guests);
+
+  return true;
+}
+
+SoftstepResult solveGroups(
+  World& world,
+  const SolveGroups& groups,
+  const IntegrationParameters& parameters,
+  const Workers& workers,
+  uint32_t simdWidth,
+  StepProfile& profile,
+  SoftstepTouching& touching
+) {
+  struct Work {
+    StepProfile profile;
+    SoftstepTouching touching;
+    SoftstepResult result;
+  };
+
+  const uint32_t lanes = std::max(workers.count, 1u);
+  std::vector<Work> works(lanes);
+  Stopwatch clock;
+
+  if (world.solveLanes.size() < lanes) {
+    world.solveLanes.resize(lanes);
+  }
+
+  parallelFor(
+    workers,
+    groups.count(),
+    1u,
+    [&](uint32_t begin, uint32_t end, uint32_t worker) {
+      SolveLane& lane = world.solveLanes[worker];
+      Work& work = works[worker];
+      StepProfile spent;
+      SoftstepTouching touched;
+
+      if (!lane.arena) {
+        lane.arena = makeSoftstepArena();
+      }
+
+      for (uint32_t group = begin; group != end; ++group) {
+        SoftstepScope scope;
+
+        for (uint32_t colour = 0u; colour != colourCount; ++colour) {
+          const uint32_t list = group * groupLists + 2u * colour;
+
+          scope.wide[colour] = listOf(groups.slotStart, groups.slots, list);
+          scope.other[colour] =
+            listOf(groups.slotStart, groups.slots, list + 1u);
+        }
+
+        scope.joints = listOf(groups.jointStart, groups.joints, group);
+
+        const SoftstepResult result = solveSoftstep(
+          world.bodies,
+          world.manifolds,
+          listOf(groups.bodyStart, groups.bodies, group),
+          parameters,
+          lane.stateOf,
+          Workers{},
+          simdWidth,
+          lane.arena.get(),
+          &spent,
+          &touched,
+          nullptr,
+          &world.joints,
+          &world.islandStore,
+          listOf(groups.guestStart, groups.guests, group),
+          true,
+          true,
+          &scope
+        );
+
+        addSoftstepWork(work.profile, spent);
+        work.touching.points += touched.points;
+        work.touching.active += touched.active;
+        work.touching.hits.insert(
+          work.touching.hits.end(),
+          touched.hits.begin(),
+          touched.hits.end()
+        );
+        work.result.widePairs += result.widePairs;
+        work.result.substeps = result.substeps;
+        work.result.jointRows += result.jointRows;
+        work.result.limitPassRows += result.limitPassRows;
+      }
+    }
+  );
+
+  const double elapsed = clock.lap();
+  SoftstepResult total;
+  StepProfile summed;
+
+  touching = SoftstepTouching{};
+
+  for (const Work& work : works) {
+    addSoftstepWork(summed, work.profile);
+    addTouching(touching, work.touching);
+    total.widePairs += work.result.widePairs;
+    total.substeps = std::max(total.substeps, work.result.substeps);
+    total.jointRows += work.result.jointRows;
+    total.limitPassRows += work.result.limitPassRows;
+  }
+
+  const double busy =
+    summed.gather + summed.prepare + summed.substeps + summed.storeBack;
+  const double share = busy > 0.0 ? elapsed / busy : 0.0;
+
+  profile.gather = share * summed.gather;
+  profile.prepare = share * summed.prepare;
+  profile.substeps = share * summed.substeps;
+  profile.integrate = share * summed.integrate;
+  profile.restitute = share * summed.restitute;
+  profile.storeBack = share * summed.storeBack;
+  profile.joints = share * summed.joints;
+
+  return total;
 }
 
 bool listFits(const AwakeList& awake, const BodySet& bodies, double band) {
@@ -768,24 +1089,46 @@ StepReport step(World& world) {
 
     jointedParameters.softstepSubsteps = parameters.jointSubsteps;
 
-    const SoftstepResult jointedRun = solveSoftstep(
-      bodies,
-      world.manifolds,
-      jointedSet,
-      jointedParameters,
-      stateOf,
-      workers,
-      simdWidth,
-      world.softstepArena.get(),
-      &jointedProfile,
-      &jointedTouching,
-      nullptr,
-      &world.joints,
-      &world.islandStore,
-      guests,
-      true,
-      true
-    );
+    SolveGroups groups;
+    const bool split = workers.count > 1u
+                       && splitJointed(
+                         world,
+                         rigidIslands,
+                         jointed,
+                         guests,
+                         static_cast<uint32_t>(jointedSet.size()),
+                         4u * workers.count,
+                         groups
+                       );
+    const SoftstepResult jointedRun = split ? solveGroups(
+                                                world,
+                                                groups,
+                                                jointedParameters,
+                                                workers,
+                                                simdWidth,
+                                                jointedProfile,
+                                                jointedTouching
+                                              )
+                                            : solveSoftstep(
+                                                bodies,
+                                                world.manifolds,
+                                                jointedSet,
+                                                jointedParameters,
+                                                stateOf,
+                                                workers,
+                                                simdWidth,
+                                                world.softstepArena.get(),
+                                                &jointedProfile,
+                                                &jointedTouching,
+                                                nullptr,
+                                                &world.joints,
+                                                &world.islandStore,
+                                                guests,
+                                                true,
+                                                true
+                                              );
+
+    report.jointGroups = split ? groups.count() : 1u;
 
     report.widePairs += jointedRun.widePairs;
     report.jointSubsteps = jointedRun.substeps;
